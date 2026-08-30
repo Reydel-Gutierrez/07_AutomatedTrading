@@ -1,0 +1,47 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-30",
+  "description": "Localhost web dashboard. Reads existing state through Python modules. May write only human approval decisions. APPROVED does not place an order. Never bind publicly until Cloudflare Tunnel + Access are configured.",
+  "host": "127.0.0.1",
+  "port": 3100,
+  "bind_localhost_only": true,
+  "allow_public_bind": false,
+  "public_exposure": false,
+  "environment": "PAPER",
+  "live_order_placement_enabled": false,
+  "allow_paper_packet_decisions": true,
+  "allow_demo_packet_decisions": false,
+  "allow_stale_packet_decisions": false,
+  "env": {
+    "port": ["DASHBOARD_PORT", "AGENTIC_DASHBOARD_PORT"],
+    "host": ["DASHBOARD_HOST", "AGENTIC_DASHBOARD_HOST"],
+    "allow_public_bind": "DASHBOARD_ALLOW_PUBLIC_BIND",
+    "environment": "DASHBOARD_ENVIRONMENT",
+    "allow_paper_packet_decisions": "DASHBOARD_ALLOW_PAPER_PACKET_DECISIONS",
+    "allow_demo_packet_decisions": "DASHBOARD_ALLOW_DEMO_PACKET_DECISIONS",
+    "allow_stale_packet_decisions": "DASHBOARD_ALLOW_STALE_PACKET_DECISIONS"
+  },
+  "writes_allowed": ["approve_packet", "reject_packet"],
+  "writes_forbidden": [
+    "place_equity_order",
+    "cancel_equity_order",
+    "review_equity_order",
+    "any_deposit_withdrawal_transfer",
+    "change_hard_risk_limits",
+    "rewrite_account_rules",
+    "rewrite_portfolio_policy"
+  ],
+  "cloudflare": {
+    "tunnel_enabled": false,
+    "access_enabled": false,
+    "tunnel_hostname": null,
+    "access_aud": null,
+    "trusted_proxy_ips": [],
+    "origin": "http://127.0.0.1:3100",
+    "notes": "Later: keep this process bound to 127.0.0.1:3100, point a Cloudflare Tunnel at that origin, and put Cloudflare Access in front. Do not bind 0.0.0.0 and do not expose the dashboard directly to the internet."
+  },
+  "raspberry_pi": {
+    "intended_runtime": true,
+    "notes": "Same localhost bind. Use systemd + optional Cloudflare Tunnel; do not port-forward the origin."
+  }
+}

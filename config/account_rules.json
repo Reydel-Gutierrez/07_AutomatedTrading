@@ -1,0 +1,207 @@
+{
+  "version": "4.1.0",
+  "updated_at": "2026-08-29",
+  "architecture": {
+    "document": "ARCHITECTURE.md",
+    "policy_document": "PORTFOLIO_POLICY.md",
+    "policy_config": "config/portfolio_policy.json",
+    "pipeline_config": "config/pipeline.json",
+    "thesis_schema": "config/thesis_schema.json",
+    "layers": {
+      "investment_intelligence": "advisory",
+      "deterministic_risk_control": "hard_veto",
+      "execution_control": "gated_off"
+    }
+  },
+  "account": {
+    "nickname": "Agentic",
+    "account_number": "549688554",
+    "rhs_account_number": "549688554",
+    "brokerage_account_type": "individual",
+    "brokerage_trading_type": "limited_margin",
+    "exclusive_use": true,
+    "never_trade_other_accounts": true,
+    "last_observed": {
+      "as_of": "2026-08-29",
+      "nav_usd": 500.0,
+      "buying_power_usd": 500.0,
+      "cash_usd": 500.0,
+      "open_positions": 0,
+      "role": "observed_snapshot_not_a_policy_constraint"
+    }
+  },
+  "execution": {
+    "state": "HUMAN_APPROVAL",
+    "available_states": ["RESEARCH_ONLY", "HUMAN_APPROVAL", "AUTO_EXECUTION"],
+    "mode": "HUMAN_APPROVAL",
+    "auto_execution": false,
+    "require_human_approval": true,
+    "live_trade_actions_allowed": false,
+    "allowed_modes": ["HUMAN_APPROVAL", "AUTO_EXECUTION"],
+    "mode_switch_requires_explicit_human_change": true,
+    "halted_drawdown_forces_auto_execution_false": true,
+    "agent_may_not_autonomously_reactivate_execution": true,
+    "market_hours": "regular_hours_only",
+    "pipeline_stop_before": "execution_controller",
+    "current_terminal_stage": "robinhood_order_review",
+    "paper_pipeline_through": [
+      "market_data",
+      "market_regime_analysis",
+      "market_sector_research",
+      "candidate_discovery",
+      "security_research",
+      "investment_thesis",
+      "opportunity_ranking",
+      "current_portfolio_analysis",
+      "portfolio_allocation_decision",
+      "deterministic_risk_validation",
+      "order_plan",
+      "paper_fill",
+      "human_approval",
+      "robinhood_order_review"
+    ],
+    "live_only_steps": [
+      "confirm_agentic_account",
+      "check_buying_power",
+      "check_existing_positions",
+      "check_tradability",
+      "validate_framework_and_risk",
+      "require_explicit_human_approval",
+      "place_equity_order"
+    ]
+  },
+  "capital_boundary": {
+    "permanent": true,
+    "agent_must_never_transfer_money": true,
+    "agent_must_never": [
+      "transfer_between_robinhood_accounts",
+      "initiate_deposits",
+      "initiate_withdrawals",
+      "move_money_into_agentic_account",
+      "move_money_out_of_agentic_account"
+    ],
+    "even_if_mcp_later_exposes_tools": true
+  },
+  "allowed": {
+    "asset_classes": ["us_equities", "us_etfs"],
+    "direction": "long_only",
+    "order_sides": ["buy", "sell_to_close"],
+    "order_types": ["market", "limit"],
+    "sessions": ["regular_hours"]
+  },
+  "prohibited": {
+    "options": true,
+    "crypto": true,
+    "futures": true,
+    "event_contracts": true,
+    "margin_borrowing": true,
+    "short_selling": true,
+    "leveraged_etfs": true,
+    "trading_outside_regular_market_hours": true,
+    "autonomous_execution": true,
+    "averaging_down": false,
+    "duplicate_symbols_as_separate_logical_positions": true,
+    "overriding_risk_limits": true,
+    "capital_transfers": true,
+    "loosening_hard_concentration_ceilings": true
+  },
+  "definitions": {
+    "leveraged_etf_absolute_leverage_gt": 1.0,
+    "regular_market_hours": {
+      "timezone": "America/New_York",
+      "open": "09:30",
+      "close": "16:00",
+      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+    }
+  },
+  "risk": {
+    "source_of_truth": "config/portfolio_policy.json",
+    "never_exceed_available_buying_power": true,
+    "never_override_risk_limits": true,
+    "dollar_and_count_caps": "SUPERSEDED",
+    "nav_percent_policy_is_active_now": true
+  },
+  "investment_engine": {
+    "policy": "PORTFOLIO_INVESTMENT_POLICY_V1",
+    "valid_decisions": [
+      "BUY",
+      "ADD",
+      "SELL",
+      "REDUCE",
+      "HOLD",
+      "WATCH",
+      "REJECT",
+      "NO_ACTION"
+    ],
+    "decision_aliases": { "EXIT": "SELL" },
+    "no_action_always_valid": true,
+    "hardcoded_universe_forbidden": true,
+    "single_indicator_insufficient": true,
+    "never_force_deployment_to_hit_sleeve_targets": true
+  },
+  "robinhood_mcp": {
+    "allowed_now": {
+      "read_only": true,
+      "order_review": true,
+      "order_execution": false,
+      "order_cancel": false,
+      "order_modify": false,
+      "capital_transfer": false
+    },
+    "investment_read_only_tools": [
+      "get_equity_quotes",
+      "get_equity_historicals",
+      "get_equity_technical_indicators",
+      "get_equity_fundamentals",
+      "get_financials",
+      "get_earnings_calendar",
+      "get_earnings_results",
+      "get_equity_news",
+      "get_sec_filing",
+      "get_sec_filing_facts",
+      "get_sec_filing_facts_catalog",
+      "get_sec_filing_index",
+      "get_index_quotes",
+      "get_index_historicals",
+      "get_indexes",
+      "get_scans",
+      "run_scan",
+      "get_scanner_filter_specs",
+      "search",
+      "get_watchlists",
+      "get_watchlist_items",
+      "get_equity_positions",
+      "get_portfolio",
+      "get_equity_orders",
+      "get_realized_pnl",
+      "get_pnl_trade_history",
+      "get_accounts",
+      "get_equity_tradability"
+    ],
+    "stock_tools_when_live_enabled": {
+      "review": "review_equity_order",
+      "place": "place_equity_order",
+      "cancel": "cancel_equity_order"
+    },
+    "forbidden_now": [
+      "place_equity_order",
+      "cancel_equity_order"
+    ],
+    "never_call_for_this_system": [
+      "place_option_order",
+      "review_option_order",
+      "cancel_option_order",
+      "exercise_option",
+      "cancel_option_exercise",
+      "place_crypto_order",
+      "preview_crypto_order",
+      "cancel_crypto_order"
+    ],
+    "never_call_if_exposed_in_future": [
+      "any_deposit_tool",
+      "any_withdrawal_tool",
+      "any_inter_account_transfer_tool",
+      "any_ach_or_wire_tool"
+    ]
+  }
+}

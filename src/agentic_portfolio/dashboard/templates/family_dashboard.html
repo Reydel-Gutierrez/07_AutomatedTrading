@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}{{ view.name }} · Agentic Portfolio{% endblock %}
+{% block content %}
+<nav class="page-tabs" role="tablist" aria-label="Dashboard sections">
+  <button type="button" class="on" data-tab="overview" role="tab" aria-selected="true">Overview</button>
+  <button type="button" data-tab="discovery" role="tab" aria-selected="false">Discovery</button>
+</nav>
+
+<section class="tab-panel" id="tab-overview" data-panel="overview">
+<section class="kpis">
+  <article class="kpi">
+    <h2>Name</h2>
+    <p class="figure">{{ view.name }}</p>
+    <p class="meta">{{ paper_book_label }} · no live order placement</p>
+  </article>
+  <article class="kpi">
+    <h2>Starting investment</h2>
+    <p class="figure">{{ view.starting_display }}</p>
+    <p class="meta">Assigned dollars · not a separate book</p>
+  </article>
+  <article class="kpi">
+    <h2>Current value</h2>
+    <p class="figure">{{ view.current_value_display }}</p>
+    <p class="meta">Tracks paper portfolio return from assignment baseline</p>
+  </article>
+  <article class="kpi">
+    <h2>Gain / loss</h2>
+    <p class="figure gain {{ 'pos' if view.gain_loss and view.gain_loss > 0 else 'neg' if view.gain_loss and view.gain_loss < 0 else '' }}">{{ view.gain_loss_display }}</p>
+    <p class="meta">Return {{ view.return_display }}</p>
+  </article>
+</section>
+
+<section class="grid-2">
+  <article class="card">
+    <h2>Portfolio performance</h2>
+    <p class="meta">{{ paper_book_label }} · your assigned dollars only</p>
+    {% if view.chart %}
+      <svg class="chart" viewBox="0 0 {{ view.chart.width }} {{ view.chart.height }}" role="img" aria-label="Assigned value over time">
+        <polyline fill="none" stroke="#4f6f52" stroke-width="2" points="{{ view.chart.polyline }}"></polyline>
+      </svg>
+      <p class="meta">{{ view.chart.start_display }} → {{ view.chart.end_display }}</p>
+    {% else %}
+      <p class="empty">Not enough stored snapshots to draw a chart yet.</p>
+    {% endif %}
+  </article>
+  <article class="card">
+    <h2>SPY comparison</h2>
+    <p class="meta">{{ paper_book_label }}</p>
+    {% if view.spy.observed %}
+      <p>{{ view.spy.note }}</p>
+      {% if view.spy.return_display %}<p class="figure-sm">SPY {{ view.spy.return_display }}</p>{% endif %}
+      {% if view.spy.price %}<p class="figure-sm">{{ view.spy.price }}</p>{% endif %}
+    {% else %}
+      <p class="empty">{{ view.spy.note }}</p>
+    {% endif %}
+  </article>
+</section>
+
+<section class="grid-2">
+  <article class="card chart-card">
+    <h2>Portfolio allocation</h2>
+    <p class="meta">Percent of the shared paper book · dollar NAV is not shown</p>
+    <div class="alloc-wrap">
+      <div class="chart-frame donut">
+        <canvas id="allocation-chart" aria-label="Allocation donut"></canvas>
+      </div>
+      <ul class="legend stacked">
+        {% for row in view.allocation_chart.slices|sort(attribute='pct', reverse=true) %}
+        <li title="{{ row.key }}"><span class="swatch s-{{ row.key|lower }}"></span>{{ row.label }} <strong>{{ row.display }}</strong></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </article>
+  <article class="card">
+    <h2>Position allocation</h2>
+    <p class="meta">Percent only · not dollar NAV</p>
+    <table>
+      <thead><tr><th>Symbol</th><th>%</th></tr></thead>
+      <tbody>
+        {% for p in view.allocation.positions %}
+        <tr><td title="{{ p.sleeve or '' }}">{{ p.symbol }}</td><td>{{ p.allocation_display }}</td></tr>
+        {% else %}
+        <tr><td colspan="2" class="empty">No paper positions.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </article>
+</section>
+</section>
+
+<section class="tab-panel" id="tab-discovery" data-panel="discovery" hidden>
+  <article class="card">
+    <div class="card-head">
+      <h2>Candidate discovery</h2>
+      <a class="text-link" href="{{ url_for('discovery_page') }}">View all candidates</a>
+    </div>
+    <p class="meta">Stored discovery results · this dashboard does not run discovery</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Symbol</th><th>Score</th><th>Priority</th><th>Sleeve</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for c in view.candidates %}
+          <tr>
+            <td class="symbol" title="{{ c.symbol }}">{{ c.symbol }}</td>
+            <td>{{ c.score_display }}</td>
+            <td title="{{ c.priority }}"><span class="pill pri-{{ c.priority }}">{{ c.priority_label }}</span></td>
+            <td title="{{ c.provisional_sleeve }}">{{ c.sleeve_label }}</td>
+            <td title="{{ c.research_status or c.status }}">{{ c.research_status_label if c.research_status else c.status_label }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="empty">No stored candidates.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</section>
+<script id="allocation-data" type="application/json">{{ view.allocation_chart | tojson }}</script>
+{% endblock %}
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+{% endblock %}

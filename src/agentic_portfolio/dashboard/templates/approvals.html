@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block title %}Approvals · Agentic Portfolio{% endblock %}
+{% block content %}
+<p class="lede"><span class="book-tag paper">{{ view.book_label }}</span> Human packets for paper OrderPlans. <strong>APPROVE still does not place an order.</strong> Expired, superseded, demo, and paper packets cannot be decided unless explicitly enabled.</p>
+
+<section class="card">
+  <h2>Pending</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Symbol</th><th>Action</th><th>Status</th><th>Current</th><th>Desired</th><th>Notional</th><th>Book</th><th></th></tr></thead>
+      <tbody>
+        {% for p in view.pending %}
+        <tr>
+          <td><a href="{{ url_for('approval_detail_page', approval_id=p.approval_id) }}">{{ p.symbol }}</a></td>
+          <td>{{ p.action }}</td>
+          <td><span class="pill">{{ p.status }}</span></td>
+          <td>{{ p.current_allocation_display }}</td>
+          <td>{{ p.desired_allocation_display }}</td>
+          <td>{{ p.order_notional_display }}</td>
+          <td>{{ p.book_label }}{% if not p.can_decide and p.decision_block_reason %} · blocked{% endif %}</td>
+          <td class="decide-cell">
+            {% if p.can_decide %}
+            <form class="decide compact" method="post" action="{{ url_for('approve_packet', approval_id=p.approval_id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn approve" type="submit">APPROVE</button>
+            </form>
+            <form class="decide compact" method="post" action="{{ url_for('reject_packet', approval_id=p.approval_id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button class="btn reject" type="submit">REJECT</button>
+            </form>
+            {% endif %}
+            <a class="btn quiet" href="{{ url_for('approval_detail_page', approval_id=p.approval_id) }}">Open</a>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="empty">No pending packets.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card stale-block">
+  <h2>Expired / superseded</h2>
+  <p class="meta">These packets are no longer decidable. Shown so they are not mistaken for live approvals.</p>
+  <div class="table-wrap">
+    <table class="muted">
+      <thead><tr><th>Symbol</th><th>Action</th><th>Status</th><th>Reasons</th><th></th></tr></thead>
+      <tbody>
+        {% for p in view.stale %}
+        <tr class="stale-row">
+          <td><a href="{{ url_for('approval_detail_page', approval_id=p.approval_id) }}">{{ p.symbol }}</a></td>
+          <td>{{ p.action }}</td>
+          <td><span class="pill stale">{{ p.status }}</span></td>
+          <td>{{ (p.expiry_reasons or [])|join(', ') or p.superseded_by or '—' }}</td>
+          <td><a href="{{ url_for('approval_detail_page', approval_id=p.approval_id) }}">View</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">None.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Decided</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Symbol</th><th>Action</th><th>Status</th><th>Notional</th><th>Decided</th><th></th></tr></thead>
+      <tbody>
+        {% for p in view.other %}
+        <tr>
+          <td><a href="{{ url_for('approval_detail_page', approval_id=p.approval_id) }}">{{ p.symbol }}</a></td>
+          <td>{{ p.action }}</td>
+          <td><span class="pill {{ p.status }}">{{ p.status }}</span></td>
+          <td>{{ p.order_notional_display }}</td>
+          <td>{{ p.decided_at or '—' }}</td>
+          <td><a href="{{ url_for('approval_detail_page', approval_id=p.approval_id) }}">View</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">None.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

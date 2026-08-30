@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Login · Agentic Portfolio{% endblock %}
+{% block content %}
+<section class="card login-box">
+  <h2>Sign in</h2>
+  <p class="meta">{{ paper_book_label }} · {{ live_account_label }} · no live order placement</p>
+  <form class="auth-form" method="post" action="{{ url_for('login_post') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label for="username">Username or email</label>
+    <input id="username" name="username" type="text" autocomplete="username" required>
+    <label for="password">Password</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+    <button class="btn" type="submit">Sign in</button>
+  </form>
+</section>
+{% endblock %}

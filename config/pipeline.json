@@ -1,0 +1,308 @@
+{
+  "version": "2.8.0",
+  "updated_at": "2026-08-30",
+  "description": "Pipeline for the single NAV-% policy. Candidate Discovery, Deep Research, Investment Thesis, Portfolio Decision, Position Monitoring, paper Execution Controller (OrderPlan), paper fill + blotter, Human Approval Packet, and Robinhood review-only are implemented. Stops after robinhood_order_review. review_equity_order is informational/preflight only. No place/cancel. No capital transfers.",
+  "policy": "config/portfolio_policy.json",
+  "hard_stop_after": "robinhood_order_review",
+  "hard_stop_before": "execution_controller",
+  "valid_decisions": [
+    "BUY",
+    "ADD",
+    "SELL",
+    "REDUCE",
+    "HOLD",
+    "WATCH",
+    "REJECT",
+    "NO_ACTION"
+  ],
+  "decision_aliases": {
+    "EXIT": "SELL"
+  },
+  "no_action_always_valid": true,
+  "never_force_sleeve_targets": true,
+  "layers": {
+    "investment_intelligence": "advisory",
+    "deterministic_risk_control": "hard_veto",
+    "execution_control": "gated_off"
+  },
+    "components": [
+        "research",
+        "classification_evidence_adapter",
+        "sleeve_registry",
+        "thesis_registry",
+        "candidate_discovery",
+        "investment_decision",
+        "portfolio_construction",
+        "risk",
+        "execution",
+        "human_approval",
+        "robinhood_order_review",
+        "monitoring",
+        "journaling"
+      ],
+  "stages": [
+    {
+      "id": "market_data",
+      "component": "research",
+      "mcp_read_only": true,
+      "enabled": true
+    },
+    {
+      "id": "market_regime_analysis",
+      "component": "research",
+      "enabled": true
+    },
+    {
+      "id": "market_sector_research",
+      "component": "research",
+      "enabled": true
+    },
+    {
+      "id": "candidate_discovery",
+      "component": "candidate_discovery",
+      "enabled": true,
+      "implemented": true,
+      "config": "config/discovery.json",
+      "mcp_read_only": true,
+      "creates_active_theses": false,
+      "creates_buy_actions": false,
+      "notes": "Surfaces research candidates only. Does not buy. Does not create ACTIVE sleeve assignments. Same-sector/sleeve crowding uses OVERLAP_PRIORITY_PENALTY / DEFERRED_DUE_TO_RESEARCH_QUEUE_OVERLAP, not a max-N reject. Path is Candidate → ResearchReport → InvestmentThesis → PortfolioDecision → ProposedAction → RiskGate."
+    },
+    {
+      "id": "security_research",
+      "component": "research",
+      "enabled": true,
+      "implemented": true,
+      "config": "config/research.json",
+      "mcp_read_only": true,
+      "creates_active_theses": false,
+      "creates_buy_actions": false,
+      "includes": ["verifiable_security_classification", "fail_closed_if_unclassified", "classification_evidence_adapter", "evidence_cache", "research_evidence_packet", "research_reasoner", "research_report"],
+      "notes": "Deep Research produces a ResearchReport before any thesis. Python collects facts and derived metrics. AI interprets. Path is Candidate → ResearchReport → InvestmentThesis → PortfolioDecision → ProposedAction → RiskGate. A favorable report is not a trade."
+    },
+    {
+      "id": "sleeve_thesis_registry",
+      "component": "investment_decision",
+      "enabled": true,
+      "notes": "Persisted sleeve + thesis. Not candidate discovery. No silent sleeve changes."
+    },
+    {
+      "id": "investment_thesis",
+      "component": "investment_decision",
+      "schema": "config/thesis_schema.json",
+      "enabled": true,
+      "implemented": true,
+      "config": "config/decision.json",
+      "creates_active_theses": false,
+      "creates_buy_actions": true,
+      "notes": "AI forms a DRAFT InvestmentThesis from a ResearchReport. Status stays DRAFT until a future real execution. No broker stop orders."
+    },
+    {
+      "id": "opportunity_ranking",
+      "component": "investment_decision",
+      "enabled": true
+    },
+    {
+      "id": "current_portfolio_analysis",
+      "component": "portfolio_construction",
+      "mcp_read_only": true,
+      "enabled": true,
+      "includes": [
+        "current_nav",
+        "start_of_day_nav",
+        "daily_portfolio_return",
+        "daily_risk_halt",
+        "sleeve_weights",
+        "cash",
+        "high_water_mark",
+        "drawdown_state",
+        "spy_benchmark",
+        "concentration_by_security_class_and_sleeve",
+        "holdings_count_observed",
+        "open_orders",
+        "realized_unrealized_pnl"
+      ]
+    },
+    {
+      "id": "portfolio_allocation_decision",
+      "component": "portfolio_construction",
+      "enabled": true,
+      "implemented": true,
+      "config": "config/decision.json",
+      "notes": "Portfolio-level AI call compares researched names vs cash and SPY. NO_ACTION is valid. Python converts a valid decision into ProposedAction and sends it to the existing Risk Gate."
+    },
+    {
+      "id": "deterministic_risk_validation",
+      "component": "risk",
+      "config": [
+        "config/portfolio_policy.json"
+      ],
+      "account_identity": "config/account_rules.json",
+      "ai_may_override": false,
+      "agent_may_tighten_only": true,
+      "enabled": true
+    },
+    {
+      "id": "order_plan",
+      "component": "execution",
+      "broker_call": false,
+      "enabled": true,
+      "implemented": true,
+      "config": "config/execution.json",
+      "notes": "Paper Execution Controller. Converts a Risk-Gate-approved ProposedAction into an OrderPlan. BUY/ADD/REDUCE/SELL only. HOLD/WATCH/REJECT/NO_ACTION create no plan. Status remains PAPER_ONLY / BLOCKED_FROM_LIVE. Does not invent stop orders. Does not call review/place/cancel."
+    },
+    {
+      "id": "paper_fill",
+      "component": "execution",
+      "broker_call": false,
+      "enabled": true,
+      "implemented": true,
+      "config": "config/paper_fill.json",
+      "notes": "Paper fill + blotter reconciliation. Simulates fills for PAPER_ONLY OrderPlans against an isolated paper book. Deterministic market fill at eligible quote/reference price. Updates paper cash/quantity/average cost/P&L/NAV. Does not call review/place/cancel. Does not move money. Does not modify live thesis/account state."
+    },
+    {
+      "id": "human_approval",
+      "component": "human_approval",
+      "broker_call": false,
+      "enabled": true,
+      "implemented": true,
+      "config": "config/approval.json",
+      "notes": "Human Approval Packet. Packages a Risk-Gate-approved paper OrderPlan for a human to accept or reject. APPROVED does not place or cancel a live order. Packets expire or are superseded when quotes/thesis/research go stale, the book or risk state changes, or a newer decision replaces them."
+    },
+    {
+      "id": "robinhood_order_review",
+      "component": "execution",
+      "mcp_tool": "review_equity_order",
+      "enabled": true,
+      "implemented": true,
+      "broker_call": true,
+      "places_order": false,
+      "config": "config/review.json",
+      "notes": "Review-only bridge. Takes a still-valid APPROVED ApprovalPacket, revalidates quote/portfolio/thesis/risk, re-checks Risk Gate, and calls review_equity_order. Persists ReviewResult. REVIEW_ACCEPTED does not execute. Does not call place or cancel. Current terminal stage."
+    },
+    {
+      "id": "execution_controller",
+      "component": "execution",
+      "mcp_tool": "place_equity_order",
+      "enabled": false,
+      "forbidden_until_live": true
+    },
+    {
+      "id": "position_monitoring",
+      "component": "monitoring",
+      "mcp_read_only": true,
+      "enabled": true,
+      "implemented": true,
+      "config": "config/monitoring.json",
+      "notes": "Evaluates existing positions. Python detects facts/triggers and persists state. AI reassesses the thesis. Meaningful triggers reuse Research refresh, Portfolio Decision, and Risk Gate. HOLD/ADD/REDUCE/SELL/NO_ACTION. Exit conditions are not broker stop orders. No execution tools."
+    },
+    {
+      "id": "decision_journal",
+      "component": "journaling",
+      "enabled": true
+    },
+    {
+      "id": "future_review",
+      "component": "journaling",
+      "enabled": true
+    }
+  ],
+  "candidate_discovery_sources": [
+    "robinhood_search",
+    "robinhood_existing_scans_run_only",
+    "market_movers_watchlists_read",
+    "quotes",
+    "historicals",
+    "technical_indicators",
+    "fundamentals",
+    "financials",
+    "earnings_calendar",
+    "news",
+    "sec_filings",
+    "indexes",
+    "watchlists_read",
+    "tradability",
+    "portfolio_positions_read",
+    "price_books"
+  ],
+  "candidate_discovery_forbidden": [
+    "review_equity_order",
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ],
+  "deep_research_forbidden": [
+    "review_equity_order",
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ],
+  "thesis_decision_forbidden": [
+    "review_equity_order",
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ],
+  "position_monitoring_forbidden": [
+    "review_equity_order",
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ],
+  "execution_controller_forbidden": [
+    "review_equity_order",
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ],
+  "paper_fill_forbidden": [
+    "review_equity_order",
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ],
+  "human_approval_forbidden": [
+    "review_equity_order",
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ],
+  "robinhood_order_review_forbidden": [
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ],
+  "forbidden_mcp_now": [
+    "place_equity_order",
+    "cancel_equity_order",
+    "place_option_order",
+    "review_option_order",
+    "cancel_option_order",
+    "exercise_option",
+    "cancel_option_exercise",
+    "place_crypto_order",
+    "preview_crypto_order",
+    "cancel_crypto_order"
+  ],
+  "never_call_if_exposed_in_future": [
+    "any_deposit_tool",
+    "any_withdrawal_tool",
+    "any_inter_account_transfer_tool"
+  ]
+}

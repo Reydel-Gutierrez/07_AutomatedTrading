@@ -1,0 +1,261 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-29",
+  "description": "Candidate Discovery configuration. Heuristic weights pending empirical validation. Discovery finds research candidates; it does not buy.",
+  "weights_are_transparent_heuristics": true,
+  "do_not_treat_as_backtested": true,
+  "scoring_coverage": {
+    "missing_factors_are_not_zeros": true,
+    "haircut_base": 0.55,
+    "haircut_coverage_weight": 0.45,
+    "notes": "Unobserved sleeve factors are omitted from the average. Incomplete coverage lowers the score; it does not invent a 0."
+  },
+  "share_price_has_zero_positive_score": true,
+  "no_candidates_is_valid": true,
+  "does_not_create_active_theses": true,
+  "does_not_create_buy_actions": true,
+  "universe": {
+    "asset_classes": ["us_equities", "us_etfs"],
+    "exclude_options": true,
+    "exclude_crypto": true,
+    "exclude_shorts": true,
+    "exclude_leveraged_inverse": true,
+    "do_not_exclude_on_low_nominal_price": true,
+    "fail_closed_if_identity_missing": true
+  },
+  "ttl_hours": {
+    "CORE_GROWTH": 336,
+    "OPPORTUNISTIC": 120,
+    "TACTICAL": 8,
+    "SPECULATIVE": 72
+  },
+  "scoring": {
+    "CORE_GROWTH": {
+      "weights": {
+        "quality": 0.25,
+        "growth": 0.20,
+        "balance_sheet": 0.15,
+        "valuation": 0.15,
+        "durability": 0.15,
+        "liquidity": 0.10
+      },
+      "reject_below": 45,
+      "shortlist_at": 55,
+      "promote_at": 62
+    },
+    "OPPORTUNISTIC": {
+      "weights": {
+        "dislocation": 0.25,
+        "catalyst": 0.15,
+        "valuation_reset": 0.15,
+        "fundamental_resilience": 0.20,
+        "recovery": 0.15,
+        "liquidity": 0.10
+      },
+      "reject_below": 40,
+      "shortlist_at": 55,
+      "promote_at": 62
+    },
+    "TACTICAL": {
+      "weights": {
+        "trend": 0.25,
+        "momentum": 0.20,
+        "volume": 0.15,
+        "technical_structure": 0.20,
+        "event_timing": 0.10,
+        "liquidity": 0.10
+      },
+      "reject_below": 50,
+      "shortlist_at": 58,
+      "promote_at": 65
+    },
+    "SPECULATIVE": {
+      "weights": {
+        "asymmetric_upside": 0.25,
+        "catalyst": 0.20,
+        "optionality": 0.15,
+        "survival": 0.20,
+        "liquidity": 0.20
+      },
+      "reject_below": 45,
+      "shortlist_at": 60,
+      "promote_at": 68,
+      "liquidity_is_penalty_if_weak": true
+    }
+  },
+  "factor_signal_map": {
+    "quality": [
+      {"signal_type": "QUALITY"},
+      {"signal_type": "FUNDAMENTAL", "name": "profitability"}
+    ],
+    "growth": [
+      {"signal_type": "FUNDAMENTAL", "name": "revenue_growth"},
+      {"signal_type": "FUNDAMENTAL", "name": "earnings_growth"},
+      {"signal_type": "FUNDAMENTAL", "name": "margins_trend"}
+    ],
+    "balance_sheet": [
+      {"signal_type": "FUNDAMENTAL", "name": "balance_sheet"},
+      {"signal_type": "FUNDAMENTAL", "name": "cash_generation"},
+      {"signal_type": "RISK_FLAG", "name": "going_concern"},
+      {"signal_type": "RISK_FLAG", "name": "dilution"}
+    ],
+    "valuation": [
+      {"signal_type": "VALUATION"}
+    ],
+    "durability": [
+      {"signal_type": "QUALITY", "name": "competitive_position"},
+      {"signal_type": "QUALITY", "name": "diversified_fund"},
+      {"signal_type": "SECTOR", "name": "secular_tailwind"}
+    ],
+    "liquidity": [
+      {"signal_type": "LIQUIDITY"}
+    ],
+    "dislocation": [
+      {"signal_type": "PRICE_ACTION", "name": "selloff"},
+      {"signal_type": "PRICE_ACTION", "name": "drawdown_from_high"},
+      {"signal_type": "VALUATION", "name": "valuation_reset"}
+    ],
+    "catalyst": [
+      {"signal_type": "CATALYST"},
+      {"signal_type": "EARNINGS"},
+      {"signal_type": "NEWS"},
+      {"signal_type": "SEC_FILING"}
+    ],
+    "valuation_reset": [
+      {"signal_type": "VALUATION"}
+    ],
+    "fundamental_resilience": [
+      {"signal_type": "QUALITY"},
+      {"signal_type": "FUNDAMENTAL", "name": "profitability"},
+      {"signal_type": "FUNDAMENTAL", "name": "revenue_growth"},
+      {"signal_type": "FUNDAMENTAL", "name": "margins_trend"}
+    ],
+    "recovery": [
+      {"signal_type": "PRICE_ACTION", "name": "bounce"},
+      {"signal_type": "MOMENTUM", "name": "post_dislocation_confirmation"},
+      {"signal_type": "RELATIVE_STRENGTH"}
+    ],
+    "trend": [
+      {"signal_type": "PRICE_ACTION", "name": "trend"},
+      {"signal_type": "PRICE_ACTION", "name": "sma_alignment"}
+    ],
+    "momentum": [
+      {"signal_type": "MOMENTUM"}
+    ],
+    "volume": [
+      {"signal_type": "VOLUME"}
+    ],
+    "technical_structure": [
+      {"signal_type": "PRICE_ACTION", "name": "breakout"},
+      {"signal_type": "PRICE_ACTION", "name": "pullback"},
+      {"signal_type": "PRICE_ACTION", "name": "support_resistance"},
+      {"signal_type": "VOLATILITY"}
+    ],
+    "event_timing": [
+      {"signal_type": "CATALYST"},
+      {"signal_type": "EARNINGS"}
+    ],
+    "asymmetric_upside": [
+      {"signal_type": "QUALITY", "name": "asymmetric_upside"},
+      {"signal_type": "FUNDAMENTAL", "name": "high_growth_uncertainty"}
+    ],
+    "optionality": [
+      {"signal_type": "CATALYST", "name": "binary_or_pipeline"},
+      {"signal_type": "QUALITY", "name": "optionality"}
+    ],
+    "survival": [
+      {"signal_type": "FUNDAMENTAL", "name": "profitability"},
+      {"signal_type": "FUNDAMENTAL", "name": "balance_sheet"},
+      {"signal_type": "RISK_FLAG", "name": "going_concern"},
+      {"signal_type": "RISK_FLAG", "name": "dilution"}
+    ]
+  },
+  "zero_score_signal_names": [
+    "share_price",
+    "nominal_price",
+    "penny_stock",
+    "low_price"
+  ],
+  "rejection": {
+    "max_bid_ask_spread_pct": 0.08,
+    "unusable_dollar_volume": 50000,
+    "speculative_min_dollar_volume": 1000000,
+    "speculative_max_spread_pct": 0.05,
+    "collapsing_revenue_drop": -0.25,
+    "collapsing_margin_drop": 0.05,
+    "going_concern_rejects": true,
+    "non_tradable_rejects": true,
+    "leveraged_inverse_rejects": true,
+    "stale_data_rejects": true,
+    "missing_identity_rejects": true
+  },
+  "priority": {
+    "urgent_research_score": 80,
+    "high_score": 65,
+    "medium_score": 50,
+    "sector_overlap_penalty_above_pct": 0.20,
+    "sector_overlap_priority_notch": 1,
+    "core_underweight_boost_if_below_pct": 0.25,
+    "overlap_priority_penalty": true,
+    "no_max_per_sector_per_sleeve": true,
+    "research_queue_overlap": {
+      "never_reject_on_count": true,
+      "apply_priority_penalty": true,
+      "defer_non_leaders": true,
+      "keep_deferred_in_queue": true,
+      "flag": "DEFERRED_DUE_TO_RESEARCH_QUEUE_OVERLAP",
+      "notes": "Crowded sector/sleeve groups stay researchable. Rank-1 keeps full priority; peers are deferred, not dropped. Large-universe triage is a future AI Research step — do not add a max-N candidate cap."
+    },
+    "risk_reduction_suppress_sleeves": ["TACTICAL", "SPECULATIVE"],
+    "defensive_sectors": ["CONSUMER_STAPLES", "UTILITIES", "HEALTH_CARE"],
+    "halted_action_flag": "ACTION_CURRENTLY_BLOCKED_BY_RISK_STATE"
+  },
+  "research_areas": {
+    "CORE_GROWTH": [
+      "quality_and_durability",
+      "growth_sustainability",
+      "balance_sheet_and_cash",
+      "valuation_vs_quality",
+      "competitive_position"
+    ],
+    "OPPORTUNISTIC": [
+      "temporary_price_dislocation_vs_fundamental_deterioration",
+      "catalyst_path",
+      "valuation_reset",
+      "recovery_evidence",
+      "downside_if_wrong"
+    ],
+    "TACTICAL": [
+      "trend_integrity",
+      "volume_confirmation",
+      "invalidation_level",
+      "event_timing",
+      "horizon_fit"
+    ],
+    "SPECULATIVE": [
+      "asymmetric_payoff",
+      "survival_and_dilution",
+      "catalyst_probability",
+      "liquidity",
+      "max_3pct_nav_fit"
+    ]
+  },
+  "channels": {
+    "CORE_QUALITY_DISCOVERY": {
+      "sleeve": "CORE_GROWTH",
+      "purpose": "Surface long-term compounding candidates worth deep research."
+    },
+    "OPPORTUNISTIC_DISLOCATION_DISCOVERY": {
+      "sleeve": "OPPORTUNISTIC",
+      "purpose": "Surface possible price/value divergences. Do not conclude dislocation vs deterioration."
+    },
+    "TACTICAL_SETUP_DISCOVERY": {
+      "sleeve": "TACTICAL",
+      "purpose": "Surface short-duration setups. NO_CANDIDATES is valid."
+    },
+    "SPECULATIVE_ASYMMETRY_DISCOVERY": {
+      "sleeve": "SPECULATIVE",
+      "purpose": "Surface high-uncertainty asymmetric situations. Low price is not a thesis."
+    }
+  }
+}

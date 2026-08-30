@@ -1,0 +1,2 @@
+# Persist HWM / SOD NAV between sessions. Not secrets.
+# The AI must not reset this file to escape a drawdown.

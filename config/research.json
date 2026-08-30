@@ -1,0 +1,127 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-30",
+  "description": "Deep Research configuration. Python collects facts and derived metrics. AI interprets. Research does not buy, size, or write ACTIVE theses.",
+  "does_not_create_active_theses": true,
+  "does_not_create_buy_actions": true,
+  "does_not_create_proposed_actions": true,
+  "ai_may_not_rewrite_observed_facts": true,
+  "ai_may_not_override_classification": true,
+  "ai_may_not_alter_nav_or_positions": true,
+  "ai_may_not_modify_risk_limits": true,
+  "high_discovery_score_does_not_force_advance": true,
+  "no_universal_valuation_thresholds": true,
+  "no_universal_growth_thresholds": true,
+  "freshness_hours": {
+    "CORE_GROWTH": 336,
+    "OPPORTUNISTIC": 72,
+    "TACTICAL": 8,
+    "SPECULATIVE": 48
+  },
+  "refresh_triggers": {
+    "earnings_event": true,
+    "major_news": true,
+    "material_filing": true,
+    "regime_change": true,
+    "price_move_pct": {
+      "CORE_GROWTH": 0.12,
+      "OPPORTUNISTIC": 0.08,
+      "TACTICAL": 0.04,
+      "SPECULATIVE": 0.10
+    }
+  },
+  "confidence": {
+    "levels": ["LOW", "MEDIUM", "HIGH"],
+    "conflicting_evidence_caps_at": "MEDIUM",
+    "incomplete_evidence_caps_at": "LOW"
+  },
+  "subject_kinds": ["NEW_CANDIDATE", "EXISTING_POSITION_REVIEW"],
+  "conclusions": ["ADVANCE_TO_THESIS", "KEEP_WATCHING", "REJECT", "NEED_MORE_DATA"],
+  "dislocation_verdicts": [
+    "LIKELY_DISLOCATION",
+    "MIXED",
+    "LIKELY_DETERIORATION",
+    "INSUFFICIENT_EVIDENCE"
+  ],
+  "sleeve_research_questions": {
+    "CORE_GROWTH": [
+      "Is this a genuinely strong long-term business or fund?",
+      "What could compound value over years?",
+      "Is the balance sheet appropriate?",
+      "Is growth durable?",
+      "What is the competitive position?",
+      "Is valuation reasonable relative to quality and expected growth?",
+      "What could permanently impair the thesis?",
+      "Is this superior to broad-market exposure?"
+    ],
+    "OPPORTUNISTIC": [
+      "Why has the market repriced this security?",
+      "Is the price decline temporary or deserved?",
+      "Has intrinsic earning power materially deteriorated?",
+      "What could cause re-rating?",
+      "What evidence would demonstrate recovery?",
+      "What is the downside if the market is correct?",
+      "Is this better than simply buying a stronger company?"
+    ],
+    "TACTICAL": [
+      "What is the specific setup?",
+      "Why does the opportunity exist now?",
+      "What timeframe is relevant?",
+      "What confirms the setup?",
+      "What invalidates it?",
+      "What event or technical structure matters?",
+      "Is reward sufficient relative to likely downside?"
+    ],
+    "SPECULATIVE": [
+      "What creates asymmetric upside?",
+      "What is the probability of permanent capital impairment?",
+      "Can the company survive long enough for the thesis to work?",
+      "What is dilution risk?",
+      "What is financing and liquidity risk?",
+      "What specific catalyst changes value?",
+      "What happens if the catalyst fails?",
+      "Is the payoff distribution actually asymmetric?"
+    ]
+  },
+  "technical_weight": {
+    "CORE_GROWTH": "secondary_context",
+    "OPPORTUNISTIC": "supporting_context",
+    "TACTICAL": "primary_setup_context",
+    "SPECULATIVE": "secondary_to_survival_and_catalyst"
+  },
+  "comparison_dimensions": [
+    "business_quality",
+    "growth",
+    "valuation",
+    "financial_strength",
+    "catalyst",
+    "downside",
+    "evidence_quality",
+    "expected_horizon",
+    "portfolio_overlap",
+    "uncertainty"
+  ],
+  "read_tools": [
+    "get_equity_quotes",
+    "get_equity_historicals",
+    "get_equity_technical_indicators",
+    "get_equity_fundamentals",
+    "get_financials",
+    "get_earnings_calendar",
+    "get_earnings_results",
+    "get_equity_news",
+    "get_sec_filing",
+    "get_sec_filing_facts",
+    "get_sec_filing_facts_catalog",
+    "get_sec_filing_index",
+    "get_index_quotes",
+    "get_index_historicals",
+    "get_indexes",
+    "get_equity_tradability",
+    "get_equity_price_book",
+    "search",
+    "get_equity_positions",
+    "get_portfolio",
+    "get_accounts"
+  ]
+}

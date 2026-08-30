@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}{{ thesis.symbol }} thesis{% endblock %}
+{% block content %}
+<p class="crumb"><a href="{{ url_for('research_page') }}">Research</a> / {{ thesis.symbol }}</p>
+<section class="card">
+  <h2>{{ thesis.symbol }} · {{ thesis.status }} · {{ thesis.book_label or thesis.book }}</h2>
+  <p>{{ thesis.thesis_summary or '—' }}</p>
+  <p class="meta"><span class="book-tag {{ 'live' if thesis.book == 'live' else 'paper' }}">{{ thesis.book_label or thesis.book }}</span> · {{ thesis.sleeve }} · {{ thesis.decision or '—' }} · horizon {{ thesis.expected_horizon or '—' }} · {{ thesis.updated_at }}</p>
+</section>
+<section class="grid-3">
+  <article class="card"><h2>Bull</h2><p>{{ thesis.bull_case or '—' }}</p></article>
+  <article class="card"><h2>Base</h2><p>{{ thesis.base_case or '—' }}</p></article>
+  <article class="card"><h2>Bear</h2><p>{{ thesis.bear_case or '—' }}</p></article>
+</section>
+<section class="card">
+  <h2>Risks</h2>
+  <ul>{% for r in thesis.risks %}<li>{{ r }}</li>{% else %}<li class="empty">None recorded.</li>{% endfor %}</ul>
+</section>
+<section class="card">
+  <h2>Invalidation conditions</h2>
+  <ul>{% for r in thesis.invalidation_conditions %}<li>{{ r }}</li>{% else %}<li class="empty">None recorded.</li>{% endfor %}</ul>
+  {% if thesis.exit_policy %}
+  <p class="meta">thesis-based={{ thesis.exit_policy.thesis_based }} · broker stops={{ thesis.exit_policy.broker_stop_orders_created }} · {{ thesis.exit_policy.notes or '' }}</p>
+  {% endif %}
+</section>
+{% if report %}
+<p><a href="{{ url_for('report_detail_page', research_id=report.research_id) }}">Open linked ResearchReport</a></p>
+{% endif %}
+{% endblock %}

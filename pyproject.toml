@@ -1,0 +1,14 @@
+[project]
+name = "agentic-portfolio"
+version = "1.0.0"
+description = "Dynamic portfolio context and deterministic risk gate for Portfolio Investment Policy V1."
+requires-python = ">=3.11"
+readme = "README.md"
+dependencies = ["flask>=3.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]

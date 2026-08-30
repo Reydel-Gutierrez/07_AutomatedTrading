@@ -1,0 +1,46 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-30",
+  "description": "Robinhood review-only bridge. Submits an APPROVED still-valid ApprovalPacket to review_equity_order. Informational/preflight only. Does not place, cancel, or move money. REVIEW_ACCEPTED does not execute.",
+  "paper_only": false,
+  "review_only": true,
+  "live_trade_actions_allowed": false,
+  "auto_execution": false,
+  "require_human_approval": true,
+  "does_not_place_order": true,
+  "does_not_create_stop_orders": true,
+  "does_not_move_money": true,
+  "review_accepted_does_not_execute": true,
+  "allowed_mcp_tools": ["review_equity_order"],
+  "statuses": [
+    "REVIEW_READY",
+    "REVIEW_ACCEPTED",
+    "REVIEW_REJECTED",
+    "REVIEW_EXPIRED",
+    "REVIEW_FAILED"
+  ],
+  "success_statuses": ["REVIEW_READY", "REVIEW_ACCEPTED"],
+  "quote_max_age_seconds": 300,
+  "material_change": {
+    "nav_change_pct": 0.02,
+    "position_pct_change": 0.005,
+    "cash_pct_change": 0.02,
+    "holdings_count_change": 1,
+    "quantity_rel_tolerance": 0.01,
+    "quote_change_pct": 0.01
+  },
+  "review_vs_plan": {
+    "notional_rel_tolerance": 0.02,
+    "quantity_rel_tolerance": 0.01,
+    "price_rel_tolerance": 0.02
+  },
+  "market_hours": "regular_hours",
+  "quantity_decimal_places": 6,
+  "forbidden_tools": [
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ]
+}

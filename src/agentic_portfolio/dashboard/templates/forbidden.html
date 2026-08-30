@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Forbidden · Agentic Portfolio{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Not allowed</h2>
+  <p>This page is not available for your account.</p>
+  <p class="meta">{{ paper_book_label }} · {{ live_account_label }} · no live order placement</p>
+  <p><a href="{{ url_for('dashboard_page') }}">Back to dashboard</a></p>
+</section>
+{% endblock %}

@@ -1,0 +1,37 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-30",
+  "description": "Execution Controller. Converts a Risk-Gate-approved ProposedAction into a paper OrderPlan. No investment logic. No broker review/place/cancel. No stop orders. No money movement.",
+  "paper_only": true,
+  "live_trade_actions_allowed": false,
+  "auto_execution": false,
+  "require_human_approval": true,
+  "does_not_create_stop_orders": true,
+  "does_not_call_execution_tools": true,
+  "does_not_move_money": true,
+  "executable_actions": ["BUY", "ADD", "REDUCE", "SELL"],
+  "non_executable_actions": ["HOLD", "WATCH", "REJECT", "NO_ACTION"],
+  "allowed_execution_status": ["PAPER_ONLY", "BLOCKED_FROM_LIVE"],
+  "default_order_type": "market",
+  "default_time_in_force": "gfd",
+  "order_sides": {
+    "BUY": "buy",
+    "ADD": "buy",
+    "REDUCE": "sell_to_close",
+    "SELL": "sell_to_close"
+  },
+  "quote_max_age_seconds": 300,
+  "max_spread_pct": 0.02,
+  "max_slippage_pct": 0.01,
+  "quantity_notional_abs_tolerance": 0.01,
+  "quantity_notional_rel_tolerance": 1e-6,
+  "position_pct_tolerance": 0.001,
+  "forbidden_tools": [
+    "review_equity_order",
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ]
+}

@@ -1,0 +1,468 @@
+{
+  "version": "2.1.0",
+  "policy_id": "PORTFOLIO_INVESTMENT_POLICY_V1",
+  "updated_at": "2026-08-29",
+  "document": "PORTFOLIO_POLICY.md",
+  "status": "active_as_policy_not_as_broker_permission",
+  "sizing_basis": "percent_of_current_nav",
+  "nav_source": "dynamic_agentic_account",
+  "no_nav_specific_strategy": true,
+  "objective": {
+    "primary": "long_term_capital_growth",
+    "income_generation_is_objective": false,
+    "dividends_may_contribute_to_total_return": true,
+    "do_not_select_for_income": true
+  },
+  "calculations": {
+    "sleeve_allocation_pct": "sleeve_market_value / current_NAV",
+    "position_concentration_pct": "position_market_value / current_NAV",
+    "cash_allocation_pct": "cash / current_NAV",
+    "daily_portfolio_return": "(current_NAV - start_of_day_NAV) / start_of_day_NAV",
+    "drawdown": "(current_NAV / cash_flow_adjusted_HWM) - 1",
+    "cash_flow_adjusted_hwm": "See hwm.method. HWM is scaled by NAV_after/NAV_pre_flow so deposits/withdrawals are not treated as performance."
+  },
+  "cash": {
+    "valid_position": true,
+    "never_force_deployment": true,
+    "targets_are_not_mandates": true,
+    "consider_cash_yield_and_opportunity_cost": true
+  },
+  "position_count": {
+    "hard_maximum": null,
+    "is_execution_constraint": false,
+    "observable_and_reported": true
+  },
+  "sleeves": {
+    "CORE_GROWTH": {
+      "target_percent_of_nav": 50,
+      "target_is_mandate": false,
+      "purpose": "long_term_capital_compounding",
+      "benchmark": "SPY",
+      "arbitrary_time_based_exits": false,
+      "multi_year_hold_while_thesis_intact": true
+    },
+    "OPPORTUNISTIC": {
+      "target_percent_of_nav": 30,
+      "target_is_mandate": false,
+      "purpose": "excess_return_medium_risk",
+      "not_a_single_mechanical_strategy": true,
+      "price_decline_alone_insufficient": true,
+      "decline_classification_required": [
+        "TEMPORARY_PRICE_DISLOCATION",
+        "FUNDAMENTAL_BUSINESS_DETERIORATION"
+      ]
+    },
+    "TACTICAL": {
+      "target_percent_of_nav": 15,
+      "target_is_mandate": false,
+      "purpose": "shorter_duration_opportunities",
+      "day_trading_required": false,
+      "minimum_trades_required": 0,
+      "no_trade_valid": true,
+      "horizon_range": "intraday_regular_hours_to_several_weeks"
+    },
+    "SPECULATIVE": {
+      "target_percent_of_nav": 5,
+      "max_percent_of_nav": 5,
+      "target_is_mandate": false,
+      "max_is_hard_cap": true,
+      "purpose": "asymmetric_upside",
+      "max_single_position_percent_of_total_nav": 3,
+      "single_position_cap_applies_only_to_this_sleeve": true,
+      "low_price_is_not_a_thesis": true,
+      "may_consider_below_usd": [5, 2],
+      "sub_dollar_price_requires_independent_thesis": true
+    }
+  },
+  "concentration": {
+    "basis": "percent_of_total_portfolio_nav",
+    "ceilings_are_not_targets": true,
+    "never_size_up_only_because_unused_capacity": true,
+    "depends_on_security_class_and_sleeve": true,
+    "hard_max_percent_of_nav": {
+      "BROAD_MARKET_INDEX_ETF": 40,
+      "OTHER_DIVERSIFIED_ETF": 25,
+      "CORE_GROWTH_INDIVIDUAL_EQUITY": 20,
+      "OPPORTUNISTIC_INDIVIDUAL_EQUITY": 15,
+      "TACTICAL_INDIVIDUAL_EQUITY": 10,
+      "SPECULATIVE_INDIVIDUAL_SECURITY": 3,
+      "SPECULATIVE_SLEEVE_TOTAL": 5
+    },
+    "lookup": [
+      {
+        "security_class": "BROAD_MARKET_INDEX_ETF",
+        "sleeve": null,
+        "max_percent_of_nav": 40
+      },
+      {
+        "security_class": "OTHER_DIVERSIFIED_ETF",
+        "sleeve": null,
+        "max_percent_of_nav": 25
+      },
+      {
+        "security_class": "INDIVIDUAL_EQUITY",
+        "sleeve": "CORE_GROWTH",
+        "max_percent_of_nav": 20
+      },
+      {
+        "security_class": "INDIVIDUAL_EQUITY",
+        "sleeve": "OPPORTUNISTIC",
+        "max_percent_of_nav": 15
+      },
+      {
+        "security_class": "INDIVIDUAL_EQUITY",
+        "sleeve": "TACTICAL",
+        "max_percent_of_nav": 10
+      },
+      {
+        "security_class": null,
+        "sleeve": "SPECULATIVE",
+        "max_percent_of_nav": 3,
+        "notes": "Per-security Speculative cap regardless of class."
+      }
+    ],
+    "enhanced_review": {
+      "individual_security_gt_percent_of_nav": 10,
+      "flag": "ENHANCED_CONCENTRATION_REVIEW",
+      "does_not_by_itself_require_human_approval": true,
+      "hard_max_still_absolute": true
+    },
+    "high_concentration": {
+      "individual_equity_gt_percent_of_nav": 15,
+      "concentration_level": "HIGH",
+      "requires_stronger_justification": true
+    },
+    "passive_drift": {
+      "do_not_force_mechanical_liquidation": true,
+      "prohibit_further_risk_increasing_exposure": true,
+      "trigger_review": true,
+      "distinguish_from_proposed_action_breach": true
+    }
+  },
+  "sector_taxonomy": {
+    "canonical": "gics_11",
+    "timezone_note": "Sector identity is independent of session timezone.",
+    "canonical_sectors": [
+      "COMMUNICATION_SERVICES",
+      "CONSUMER_DISCRETIONARY",
+      "CONSUMER_STAPLES",
+      "ENERGY",
+      "FINANCIALS",
+      "HEALTH_CARE",
+      "INDUSTRIALS",
+      "INFORMATION_TECHNOLOGY",
+      "MATERIALS",
+      "REAL_ESTATE",
+      "UTILITIES",
+      "UNKNOWN"
+    ],
+    "external_labels_must_map_deterministically": true,
+    "ai_may_not_freely_reassign_to_pass_risk_rules": true,
+    "unmapped_is_unknown": true
+  },
+  "trading_session": {
+    "calendar_provider": "nyse_builtin_v1",
+    "timezone": "America/New_York",
+    "sod_anchor": "per_valid_trading_session_not_midnight",
+    "weekends_do_not_create_sessions": true,
+    "holidays_do_not_create_sessions": true,
+    "early_close_same_session_id": true,
+    "fail_safe_if_calendar_unavailable": true,
+    "do_not_reset_daily_risk_on_midnight_alone": true
+  },
+  "correlation": {
+    "status_values": ["AVAILABLE", "PARTIAL", "INSUFFICIENT_DATA"],
+    "hard_numeric_ceiling": null,
+    "reject_trade_on_correlation_alone": false,
+    "observables": ["pairwise", "sleeve_level", "sector_overlap", "common_factor_exposure"],
+    "future_hard_limit_requires_empirical_validation": true
+  },
+  "sector_concentration": {
+    "review_threshold_percent_of_nav": 30,
+    "hard_ceiling_percent_of_nav": 45,
+    "review_flag": "SECTOR_CONCENTRATION_REVIEW",
+    "agent_may_use_lower_internal_limit": true,
+    "agent_may_not_raise_hard_ceiling": true,
+    "passive_drift_above_ceiling": {
+      "prohibit_further_increase": true,
+      "trigger_review": true,
+      "mechanical_liquidation": false
+    }
+  },
+  "liquidity": {
+    "share_price_is_not_a_proxy": true,
+    "fail_closed_if_data_unavailable_for_new_risk": true,
+    "normal": {
+      "max_order_notional_fraction_of_adv": 0.01,
+      "adv_window_sessions": 20,
+      "adv_statistic": "median_daily_dollar_volume"
+    },
+    "speculative": {
+      "review_flag": "SPECULATIVE_LIQUIDITY_REVIEW",
+      "max_order_notional_fraction_of_adv": 0.02,
+      "require_review": true,
+      "evaluate": ["spread", "slippage", "volume_stability", "exitability", "event_risk"]
+    }
+  },
+  "hwm": {
+    "method": "cash_flow_adjusted",
+    "manual_reset_human_only": true,
+    "ai_may_not_reset_to_escape_drawdown": true,
+    "formula": {
+      "nav_pre_flow": "NAV_after - external_capital_flow",
+      "hwm_after_market": "max(prior_HWM, nav_pre_flow)",
+      "hwm_after_flow": "hwm_after_market * (NAV_after / nav_pre_flow) if nav_pre_flow > 0",
+      "drawdown": "(NAV_after / hwm_after_flow) - 1",
+      "performance_since_prior": "(nav_pre_flow / prior_NAV) - 1"
+    },
+    "external_flow_must_be_explicit": true,
+    "do_not_infer_deposits_to_rewrite_hwm": true
+  },
+  "security_classification": {
+    "classes": [
+      "BROAD_MARKET_INDEX_ETF",
+      "OTHER_DIVERSIFIED_ETF",
+      "INDIVIDUAL_EQUITY"
+    ],
+    "ai_assertion_insufficient": true,
+    "fail_closed_if_unreliable": true,
+    "fail_closed_rule": "If diversification cannot be proven, status=INSUFFICIENT_EVIDENCE. Do not grant 40%. Known ETF without broad-market proof → OTHER_DIVERSIFIED_ETF (25%). Unknown instrument → INDIVIDUAL_EQUITY + sleeve. Seed ticker list is supporting evidence only, never sufficient alone.",
+    "broad_market": {
+      "seed_tickers_supporting_only": ["SPY", "VOO", "IVV", "VTI", "ITOT", "SPTM", "SCHB", "VV"],
+      "seed_list_never_sufficient_alone": true,
+      "required_verified_etf": true,
+      "required_known_false": ["is_leveraged", "is_inverse", "is_thematic", "is_sector_or_industry_fund", "is_narrow_factor", "is_single_stock_fund"],
+      "broad_index_name_patterns": [
+        "s&p 500",
+        "s&p500",
+        "s&p 1500",
+        "s&p total market",
+        "crsp us total",
+        "crsp total",
+        "wilshire 5000",
+        "russell 3000",
+        "russell 1000",
+        "dow jones u.s. total stock market",
+        "total stock market",
+        "total us stock",
+        "broad large-cap"
+      ],
+      "min_constituent_count": 100,
+      "max_sector_weight_for_broad": 0.30,
+      "need_index_or_mandate_match_and_diversification_metric": true
+    },
+    "cannot_reclassify_concentrated_etf_as_broad_market_to_gain_40": true,
+    "leveraged_etfs_prohibited": true,
+    "retrieve": [
+      "get_equity_tradability",
+      "instrument_type_equity_vs_etf",
+      "get_equity_fundamentals",
+      "index_membership_when_available",
+      "legal_name_and_fund_structure"
+    ],
+    "validate": {
+      "BROAD_MARKET_INDEX_ETF": "ETF/fund AND broad market equity index (e.g. S&P 500, total US market) AND not sector/thematic/single-stock AND not leveraged",
+      "OTHER_DIVERSIFIED_ETF": "ETF/fund, diversified, not broad-market, not leveraged, not single-stock",
+      "INDIVIDUAL_EQUITY": "Single-company equity or anything failing ETF diversification tests including single-stock ETFs"
+    },
+    "embedded_sector_exposure": {
+      "do_not_fabricate_holdings_or_weights": true,
+      "status_when_missing": ["UNKNOWN", "PARTIAL"],
+      "broad_market_may_use_other_diversification_evidence": true
+    },
+    "cache": {
+      "key": "symbol",
+      "store": ["security_class", "evidence_refs", "as_of", "provenance"],
+      "field_ttls_are_not_uniform": true,
+      "force_refresh": [
+        "HIGH_CONCENTRATION_CAPACITY",
+        "STALE",
+        "CORPORATE_ACTION",
+        "CONFLICTING_OBSERVATIONS",
+        "MATERIAL_FUND_CHANGE",
+        "HUMAN_REQUEST",
+        "SESSION_START"
+      ]
+    },
+    "refresh": [
+      "session_start_for_held_names",
+      "before_buy_or_add_using_25_or_40_percent_bucket",
+      "on_split_ticker_change_or_fund_structure_news"
+    ]
+  },
+  "position_adds": {
+    "blanket_averaging_down_prohibition": false,
+    "increase_requires": ["INVESTMENT_THESIS_REVIEW", "RISK_REVIEW"],
+    "lower_price_alone_insufficient": true,
+    "never_add_only_to_reduce_average_cost": true,
+    "one_consolidated_position_per_symbol": true,
+    "multiple_tax_lots_allowed": true
+  },
+  "daily_risk_halt": {
+    "threshold_fraction_of_start_of_day_nav": 0.02,
+    "when": "daily_portfolio_return <= -0.02",
+    "flag": "DAILY_RISK_HALT",
+    "prohibit": ["risk_increasing_buy", "increase_existing_position"],
+    "allow": ["SELL", "REDUCE", "HOLD", "WATCH", "REJECT", "NO_ACTION", "analysis"],
+    "do_not_auto_liquidate_core": true,
+    "reset": "next_trading_session_unless_hwm_state_still_blocks_new_risk"
+  },
+  "drawdown": {
+    "measured_vs": "portfolio_high_water_mark",
+    "formula": "(current_NAV / cash_flow_adjusted_HWM) - 1",
+    "high_water_mark_reset": "human_approved_only",
+    "states": {
+      "NORMAL": {
+        "drawdown_gt_percent": -5,
+        "drawdown_lte_percent": 0,
+        "inclusive_note": "0% to less than -5%",
+        "behavior": {
+          "ordinary_policy": true,
+          "auto_liquidate": false
+        }
+      },
+      "WARNING": {
+        "at_percent": -5,
+        "behavior": {
+          "enhanced_portfolio_review": true,
+          "review": [
+            "concentration",
+            "sleeve_performance",
+            "losing_theses",
+            "market_regime",
+            "correlation",
+            "recent_agent_decisions"
+          ],
+          "auto_liquidate": false
+        }
+      },
+      "RISK_REDUCTION": {
+        "at_percent": -10,
+        "behavior": {
+          "prohibit_new_speculative_exposure": true,
+          "prohibit_new_tactical_exposure": true,
+          "allow_risk_reducing_sell_reduce": true,
+          "core_available_subject_to_risk_validation": true,
+          "opportunistic_requires_enhanced_risk_review": true,
+          "increase_willingness_to_hold_cash": true,
+          "auto_liquidate_core": false
+        }
+      },
+      "DEFENSIVE": {
+        "at_percent": -15,
+        "behavior": {
+          "prohibit_new_speculative_exposure": true,
+          "prohibit_new_tactical_exposure": true,
+          "opportunistic_adds_only_if_explicitly_risk_reducing": true,
+          "new_core_restricted_to_BROAD_MARKET_INDEX_ETF": true,
+          "allow_sell_reduce": true,
+          "favor_capital_preservation_and_cash": true,
+          "review_positions_individually": true,
+          "mechanical_liquidation": false
+        }
+      },
+      "HALTED": {
+        "at_percent": -20,
+        "behavior": {
+          "force_auto_execution_false": true,
+          "no_new_autonomous_risk": true,
+          "agent_may_not_autonomously_reactivate_execution": true,
+          "resume_requires_human_strategy_review": true,
+          "resume_requires_explicit_human_authorization": true,
+          "risk_reducing_actions_follow_execution_controller_halted_policy": true,
+          "do_not_invent_automatic_liquidation": true,
+          "may_recommend_sell_reduce_hold_no_action": true,
+          "may_not_autonomously_execute_any_order": true,
+          "live_sell_or_reduce_requires_explicit_human_authorization": true,
+          "leaving_halted_requires_human_strategy_review_and_authorization": true
+        }
+      }
+    }
+  },
+  "hard_risk_immutability": {
+    "agent_may_be_more_conservative": true,
+    "agent_may_never_loosen_hard_ceilings": true,
+    "loosening_requires_explicit_human_policy_authorization": true,
+    "may_not_autonomously": [
+      "exceed_40_broad_market_etf",
+      "exceed_25_other_diversified_etf",
+      "exceed_20_core_individual_equity",
+      "exceed_15_opportunistic_individual_equity",
+      "exceed_10_tactical_individual_equity",
+      "exceed_3_speculative_individual",
+      "exceed_5_speculative_sleeve",
+      "weaken_drawdown_protections",
+      "bypass_daily_risk_halt",
+      "bypass_security_classification",
+      "disable_deterministic_risk_gates",
+      "raise_sector_45_ceiling",
+      "loosen_liquidity_fractions"
+    ]
+  },
+  "execution": {
+    "auto_execution": false,
+    "live_trade_actions_allowed": false,
+    "require_human_approval": true,
+    "risk_gate_must_never_call": [
+      "review_equity_order",
+      "place_equity_order",
+      "cancel_equity_order"
+    ]
+  },
+  "benchmark": {
+    "portfolio_benchmark_symbol": "SPY",
+    "track": [
+      "portfolio_total_return",
+      "spy_total_return_same_period",
+      "excess_return",
+      "maximum_drawdown",
+      "high_water_mark",
+      "cash_allocation_percent",
+      "sleeve_performance",
+      "realized_pnl",
+      "unrealized_pnl",
+      "volatility_when_enough_observations"
+    ]
+  },
+  "capital_boundary": {
+    "permanent": true,
+    "agent_must_never_transfer_money": true,
+    "system_may_only_recommend": "CAPITAL_INCREASE_RECOMMENDED"
+  },
+  "promotion_review": {
+    "automatic_fixed_increase_sequence": false,
+    "recommendation_type": "CAPITAL_INCREASE_RECOMMENDED",
+    "evaluate": [
+      "performance_versus_spy",
+      "maximum_drawdown",
+      "opportunity_quality",
+      "strategy_consistency",
+      "risk_behavior",
+      "execution_quality",
+      "elapsed_track_record"
+    ]
+  },
+  "execution_states": {
+    "available": ["RESEARCH_ONLY", "HUMAN_APPROVAL", "AUTO_EXECUTION"],
+    "do_not_change_investment_philosophy_with_nav": true,
+    "current": "HUMAN_APPROVAL"
+  },
+  "decisions": [
+    "BUY",
+    "SELL",
+    "REDUCE",
+    "HOLD",
+    "WATCH",
+    "REJECT",
+    "NO_ACTION"
+  ],
+  "decision_aliases": { "EXIT": "SELL" },
+  "no_action_always_valid": true,
+  "observability": {
+    "dashboard": {
+      "build_now": false,
+      "local_only": true,
+      "forbidden_widgets": ["money_transfer"]
+    }
+  }
+}

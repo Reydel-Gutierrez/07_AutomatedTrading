@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>{% block title %}Agentic Portfolio{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body class="{{ 'app' if current_user else 'gate' }}">
+  {% if current_user %}
+  <aside class="sidebar" aria-label="Main">
+    <div class="side-user">
+      <span class="avatar">{{ user_initials }}</span>
+      <div class="side-user-copy">
+        <strong>{{ current_user.name }}</strong>
+        <span>{{ current_user.role }}</span>
+      </div>
+    </div>
+    <nav class="side-nav">
+      {% if is_admin %}
+      <a href="{{ url_for('dashboard_page') }}" class="{{ 'on' if page == 'dashboard' else '' }}" data-short="Da">Dashboard</a>
+      <a href="{{ url_for('discovery_page') }}" class="{{ 'on' if page == 'discovery' else '' }}" data-short="Di">Discovery <span class="badge new">NEW</span></a>
+      <a href="{{ url_for('approvals_page') }}" class="{{ 'on' if page == 'approvals' else '' }}" data-short="Ap">Approvals{% if pending_count %}<span class="badge count">{{ pending_count }}</span>{% endif %}</a>
+      <a href="{{ url_for('research_page') }}" class="{{ 'on' if page == 'research' else '' }}" data-short="Re">Research</a>
+      <a href="{{ url_for('orders_page') }}" class="{{ 'on' if page == 'orders' else '' }}" data-short="Or">Orders</a>
+      <a href="{{ url_for('dashboard_page') }}#positions" data-short="Po">Positions</a>
+      <a href="{{ url_for('journal_page') }}" class="{{ 'on' if page == 'journal' else '' }}" data-short="Jo">Journal</a>
+      <a href="{{ url_for('family_page') }}" class="{{ 'on' if page == 'users' else '' }}" data-short="Us">Users</a>
+      <a href="{{ url_for('system_page') }}" class="{{ 'on' if page == 'system' else '' }}" data-short="Sy">System</a>
+      {% elif is_user %}
+      <a href="{{ url_for('dashboard_page') }}" class="{{ 'on' if page == 'dashboard' else '' }}" data-short="Da">Dashboard</a>
+      <a href="{{ url_for('discovery_page') }}" class="{{ 'on' if page == 'discovery' else '' }}" data-short="Di">Discovery</a>
+      {% endif %}
+    </nav>
+    <div class="side-foot">
+      <a href="{{ url_for('password_page') }}" class="{{ 'on' if page == 'password' else '' }}" data-short="Pw">Change password</a>
+      <button type="button" class="collapse" id="sidebar-toggle" aria-label="Collapse sidebar">‹</button>
+    </div>
+  </aside>
+  {% endif %}
+
+  <div class="workspace">
+    <header class="top">
+      <div class="brand-block">
+        <a class="brand" href="{{ url_for('dashboard_page') }}">Agentic Portfolio</a>
+        <span class="env-chip {{ environment }}">{{ environment }}</span>
+      </div>
+      <div class="status-copy env-banner {{ environment }}" role="status">{{ environment_banner }} · {{ no_live_placement_banner }}{% if autonomous_disabled %} · AUTONOMOUS TRADING DISABLED · approve does not place an order · no live place/cancel{% endif %}</div>
+      <div class="top-right">
+        {% if current_user %}
+        <span class="who">{{ current_user.name }} ({{ current_user.role }})</span>
+        <a class="signout btn quiet" href="{{ url_for('logout') }}">Sign Out</a>
+        {% endif %}
+      </div>
+    </header>
+
+    <div class="plane-bar">
+      <span class="book-tag paper">{{ paper_book_label }}</span>
+      <span class="book-tag live">{{ live_account_label }}</span>
+    </div>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="flash-wrap">
+          {% for msg in messages %}
+            <div class="flash">{{ msg }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+  <script src="{{ url_for('static', filename='shell.js') }}"></script>
+  {% block extra_js %}{% endblock %}
+</body>
+</html>

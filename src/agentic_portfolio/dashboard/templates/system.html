@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}System · Agentic Portfolio{% endblock %}
+{% block content %}
+<div class="halt-banner">AUTONOMOUS TRADING DISABLED</div>
+<p class="lede"><span class="book-tag paper">{{ view.paper_book_label }}</span> <span class="book-tag live">{{ view.live_account_label }}</span> {{ view.execution.state }} · auto_execution={{ view.execution.auto_execution }} · live_trade_actions_allowed={{ view.execution.live_trade_actions_allowed }} · require_human_approval={{ view.execution.require_human_approval }} · terminal {{ view.execution.current_terminal_stage }} · live_order_placement_enabled={{ view.live_order_placement_enabled }}</p>
+
+<section class="health-grid" aria-label="Dashboard health">
+  {% for h in view.health %}
+  <article class="health-item {{ h.status }}">
+    <h2>{{ h.name }}</h2>
+    <p class="figure-sm">{{ h.status }}</p>
+    <p class="meta">{{ h.detail }}</p>
+  </article>
+  {% endfor %}
+</section>
+
+<section class="grid-2">
+  <article class="card">
+    <h2>Execution flags</h2>
+    <dl class="facts">
+      <dt>State</dt><dd>{{ view.execution.state }}</dd>
+      <dt>auto_execution</dt><dd>{{ view.execution.auto_execution }}</dd>
+      <dt>live_trade_actions_allowed</dt><dd>{{ view.execution.live_trade_actions_allowed }}</dd>
+      <dt>require_human_approval</dt><dd>{{ view.execution.require_human_approval }}</dd>
+      <dt>Approved places order?</dt><dd>no</dd>
+    </dl>
+  </article>
+  <article class="card">
+    <h2>Risk state</h2>
+    <p><span class="pill {{ view.paper_context.risk_state }}">{{ view.paper_context.risk_state or '—' }}</span> on {{ view.paper_book_label }}</p>
+    <p class="meta">{{ view.live_account_label }} HWM {{ view.hwm.risk_state if view.hwm else '—' }} · drawdown {{ view.hwm.drawdown if view.hwm else '—' }} · NAV {{ view.hwm.nav if view.hwm else '—' }}</p>
+    <p class="meta">Hard risk limits are read-only from this dashboard. Policy version {{ view.policy_version }}.</p>
+  </article>
+</section>
+
+<section class="card">
+  <h2>Data freshness</h2>
+  <table>
+    <thead><tr><th>Source</th><th>Present</th><th>Updated</th><th>Detail</th></tr></thead>
+    <tbody>
+      {% for f in view.freshness %}
+      <tr>
+        <td>{{ f.label }}</td>
+        <td>{{ 'yes' if f.present else 'no' }}</td>
+        <td>{{ f.updated_at or '—' }}</td>
+        <td>{{ f.detail or '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Service status</h2>
+  <table>
+    <thead><tr><th>Service</th><th>OK</th><th>Count</th></tr></thead>
+    <tbody>
+      {% for s in view.services %}
+      <tr><td>{{ s.name }}</td><td>{{ 'yes' if s.ok else 'no' }}</td><td>{{ s.count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="card">
+  <h2>Bind / Cloudflare later</h2>
+  <p>Listening target {{ bind.host }}:{{ bind.port }}. Public exposure {{ bind.public_exposure }}.</p>
+  <p class="meta">{{ bind.cloudflare.notes }}</p>
+  <p class="meta">Tunnel enabled={{ bind.cloudflare.tunnel_enabled }} · Access enabled={{ bind.cloudflare.access_enabled }} · origin {{ bind.cloudflare.origin }}</p>
+  <p class="meta">Writes allowed: {{ view.writes_allowed|join(', ') }}. Place/cancel/transfers/limit changes are refused.</p>
+</section>
+{% endblock %}

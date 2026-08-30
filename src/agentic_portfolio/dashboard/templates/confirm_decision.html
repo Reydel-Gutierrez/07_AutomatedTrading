@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Confirm {{ intent }} · {{ packet.symbol }}{% endblock %}
+{% block content %}
+<p class="crumb"><a href="{{ url_for('approval_detail_page', approval_id=packet.approval_id) }}">{{ packet.symbol }}</a> / confirm</p>
+
+<div class="halt-banner placement-banner">{{ no_live_placement_banner }} · this still does not place an order</div>
+<p class="lede"><span class="book-tag paper">{{ packet.book_label or paper_book_label }}</span> Confirm <strong>{{ intent }}</strong> for {{ packet.symbol }} {{ packet.action }}. Packet kind {{ packet.packet_kind }}.</p>
+
+<section class="kpis">
+  <article class="kpi"><h2>Symbol</h2><p class="figure">{{ packet.symbol }}</p><p class="meta">{{ packet.sleeve or '—' }}</p></article>
+  <article class="kpi"><h2>Action</h2><p class="figure">{{ packet.action }}</p><p class="meta"><span class="pill {{ packet.status }}">{{ packet.status }}</span></p></article>
+  <article class="kpi"><h2>Notional</h2><p class="figure">{{ packet.order_notional_display }}</p><p class="meta">qty {{ packet.order_quantity }} @ {{ packet.current_price }}</p></article>
+  <article class="kpi"><h2>Book</h2><p class="figure-sm">{{ packet.book_label or paper_book_label }}</p><p class="meta">not {{ live_account_label }}</p></article>
+</section>
+
+<section class="card">
+  <h2>Confirm human decision</h2>
+  <p>Persisting {{ intent }} writes the approval packet only. Live order placement stays disabled.</p>
+  {% if note %}<p class="meta">Note: {{ note }}</p>{% endif %}
+  <form class="decide" method="post" action="{{ url_for('approve_packet' if intent == 'APPROVED' else 'reject_packet', approval_id=packet.approval_id) }}" onsubmit="return confirm('{{ intent }} {{ packet.symbol }}? This still does not place an order.');">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="confirm" value="1">
+    <input type="hidden" name="note" value="{{ note }}">
+    <button class="btn {{ 'approve' if intent == 'APPROVED' else 'reject' }}" type="submit">Confirm {{ intent }}</button>
+    <a class="btn reject" href="{{ url_for('approval_detail_page', approval_id=packet.approval_id) }}">Cancel</a>
+  </form>
+</section>
+{% endblock %}

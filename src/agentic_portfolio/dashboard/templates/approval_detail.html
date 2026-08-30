@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ packet.symbol }} {{ packet.action }} · Approval{% endblock %}
+{% block content %}
+<p class="crumb"><a href="{{ url_for('approvals_page') }}">Approvals</a> / {{ packet.symbol }}</p>
+<p class="lede"><span class="book-tag paper">{{ packet.book_label or paper_book_label }}</span> not {{ live_account_label }}.</p>
+
+{% if packet.stale %}
+<div class="halt-banner warn-banner">This packet is {{ packet.status }}. It cannot be approved or rejected.{% if packet.expiry_reasons %} Reasons: {{ packet.expiry_reasons|join(', ') }}.{% endif %}{% if packet.superseded_by %} Superseded by {{ packet.superseded_by }}.{% endif %}</div>
+{% endif %}
+
+<section class="kpis">
+  <article class="kpi"><h2>Symbol</h2><p class="figure">{{ packet.symbol }}</p><p class="meta">{{ packet.sleeve or '—' }} · {{ packet.sector or '—' }}</p></article>
+  <article class="kpi"><h2>Action</h2><p class="figure">{{ packet.action }}</p><p class="meta"><span class="pill {{ packet.status }}">{{ packet.status }}</span></p></article>
+  <article class="kpi"><h2>Notional</h2><p class="figure">{{ packet.order_notional_display }}</p><p class="meta">qty {{ packet.order_quantity }} @ {{ packet.current_price }}</p></article>
+  <article class="kpi"><h2>Allocation</h2><p class="figure">{{ packet.current_allocation_display }} → {{ packet.desired_allocation_display }}</p><p class="meta">risk {{ packet.risk_gate_verdict or '—' }}</p></article>
+</section>
+
+<section class="card decision-card" id="decisions">
+  <h2>Human decision</h2>
+  <p class="lede"><span class="book-tag paper">{{ packet.book_label or paper_book_label }}</span> <strong>Approving still does not place an order.</strong> No broker submit. Live execution stays blocked. Packet kind {{ packet.packet_kind }}.</p>
+  {% if packet.can_decide %}
+  <form class="decide" method="post" action="{{ url_for('approve_packet', approval_id=packet.approval_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Note <input type="text" name="note" placeholder="optional"></label>
+    <button class="btn approve" type="submit">APPROVE</button>
+  </form>
+  <form class="decide" method="post" action="{{ url_for('reject_packet', approval_id=packet.approval_id) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Note <input type="text" name="note" placeholder="optional"></label>
+    <button class="btn reject" type="submit">REJECT</button>
+  </form>
+  <p class="meta">First submit opens a confirmation page. Nothing is persisted until you confirm.</p>
+  {% else %}
+  <p class="empty">No APPROVE / REJECT actions. Status is {{ packet.status }}{% if packet.decision_block_reason %} · {{ packet.decision_block_reason }}{% endif %}{% if packet.human_note %} · note: {{ packet.human_note }}{% endif %}.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Trade explanation</h2>
+  <p>{{ packet.thesis_summary or '—' }}</p>
+  <dl class="facts">
+    <dt>Why now</dt><dd>{{ packet.why_now or '—' }}</dd>
+    <dt>Why not cash</dt><dd>{{ packet.why_not_cash or '—' }}</dd>
+    <dt>Why not SPY</dt><dd>{{ packet.why_not_spy or '—' }}</dd>
+    <dt>Horizon</dt><dd>{{ packet.expected_horizon or '—' }}</dd>
+    <dt>Portfolio effect</dt><dd>{{ packet.portfolio_effect or '—' }}</dd>
+    <dt>Sector / concentration</dt><dd>{{ packet.sector_concentration_effect or '—' }}</dd>
+    <dt>Monitoring</dt><dd>{{ packet.monitoring_state or '—' }}</dd>
+    <dt>Enhanced review</dt><dd>{{ packet.enhanced_review_requirements|join(', ') or 'none' }}</dd>
+  </dl>
+</section>
+
+<section class="grid-3">
+  <article class="card"><h2>Bull</h2><p>{{ packet.bull_case or '—' }}</p></article>
+  <article class="card"><h2>Base</h2><p>{{ packet.base_case or '—' }}</p></article>
+  <article class="card"><h2>Bear</h2><p>{{ packet.bear_case or '—' }}</p></article>
+</section>
+
+<section class="card">
+  <h2>Risks and invalidation</h2>
+  <ul>
+    {% for r in packet.key_risks %}<li>{{ r }}</li>{% else %}<li class="empty">No key risks recorded.</li>{% endfor %}
+  </ul>
+  <p><strong>Invalidation / exit:</strong> {{ packet.invalidation_exit_policy or '—' }}</p>
+  <p class="meta">Thesis-based exit is not a broker stop order.</p>
+</section>
+
+<section class="card">
+  <h2>Order plan</h2>
+  <p>{{ packet.order_plan_summary.side }} {{ packet.order_plan_summary.order_type }} {{ packet.order_plan_summary.time_in_force }} · status {{ packet.order_plan_summary.execution_status }} · live blocked={{ packet.order_plan_summary.live_execution_blocked }} · broker_submitted={{ packet.order_plan_summary.broker_submitted }} · stops={{ packet.order_plan_summary.stop_orders_created }}</p>
+  <p class="meta">order_plan={{ packet.evidence_refs.order_plan_id }} · thesis={{ packet.evidence_refs.thesis_id }} · research={{ packet.evidence_refs.research_id }} · decision={{ packet.evidence_refs.source_decision_id }}</p>
+</section>
+
+<details class="card">
+  <summary>Full packet text</summary>
+  <pre>{{ packet.explanation }}</pre>
+</details>
+{% endblock %}

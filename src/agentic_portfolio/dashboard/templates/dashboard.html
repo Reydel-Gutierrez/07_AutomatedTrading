@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Agentic Portfolio{% endblock %}
+{% block content %}
+{% if view.kpis %}
+<section class="kpis kpis-hero" aria-label="Portfolio snapshot">
+  <article class="kpi">
+    <h2>Portfolio Value</h2>
+    <p class="figure {{ '' if view.kpis.portfolio_value.available else 'unavailable' }}">{{ view.kpis.portfolio_value.display }}</p>
+    <p class="meta">{{ view.paper_book_label }}{% if view.updated_at %} · {{ view.updated_at[:16].replace('T', ' ') }}{% endif %}</p>
+  </article>
+  <article class="kpi">
+    <h2>Cash</h2>
+    <p class="figure {{ '' if view.cash_display != '—' else 'unavailable' }}">{{ view.cash_display }}</p>
+    <p class="meta">{{ view.cash_pct_display }} of portfolio</p>
+    <div class="bar" aria-hidden="true"><span style="width: {{ ((view.cash_pct or 0) * 100)|round(1) }}%"></span></div>
+  </article>
+  <article class="kpi">
+    <h2>Today's P/L</h2>
+    <p class="figure {{ '' if view.kpis.today_pnl.available else 'unavailable' }}">{{ view.kpis.today_pnl.display }}</p>
+    <p class="meta">vs start of session</p>
+  </article>
+  <article class="kpi">
+    <h2>Total Return</h2>
+    <p class="figure {{ '' if view.kpis.total_return.available else 'unavailable' }}">{{ view.kpis.total_return.display }}</p>
+    <p class="meta">{% if view.kpis.total_return.available %}Observed snapshot history{% else %}Not enough data{% endif %}</p>
+  </article>
+  <article class="kpi">
+    <h2>SPY Return</h2>
+    <p class="figure {{ '' if view.kpis.spy_return.available else 'unavailable' }}">{{ view.kpis.spy_return.display }}</p>
+    <p class="meta">{% if view.kpis.spy_return.available %}Same period · not fabricated{% else %}Not enough data{% endif %}</p>
+  </article>
+  <article class="kpi">
+    <h2>Risk State</h2>
+    <p class="figure {{ '' if view.kpis.risk_state.available else 'unavailable' }}">
+      {% if view.kpis.risk_state.available %}
+        <span class="pill {{ view.risk_state }}">{{ view.kpis.risk_state.display }}</span>
+      {% else %}
+        {{ view.kpis.risk_state.display }}
+      {% endif %}
+    </p>
+    <p class="meta">Daily halt: {{ 'No' if not view.daily_risk_halt else 'Yes' }}</p>
+  </article>
+  <article class="kpi">
+    <h2>Excess vs SPY</h2>
+    <p class="figure {{ '' if view.kpis.excess_return.available else 'unavailable' }}">{{ view.kpis.excess_return.display }}</p>
+    <p class="meta">Portfolio minus SPY</p>
+  </article>
+  <article class="kpi">
+    <h2>Drawdown</h2>
+    <p class="figure {{ '' if view.kpis.drawdown.available else 'unavailable' }}">{{ view.kpis.drawdown.display }}</p>
+    <p class="meta">HWM {{ view.hwm_display }}</p>
+  </article>
+</section>
+
+<section class="decision-band" id="decisions" aria-label="Human decision">
+  <article class="card decision-card">
+    <div class="card-head">
+      <h2>Human decision{% if view.approvals.pending_count %} <span class="badge count">{{ view.approvals.pending_count }}</span>{% endif %}</h2>
+      <a class="text-link" href="{{ url_for('approvals_page') }}">View all approvals</a>
+    </div>
+    <p class="meta">{{ view.paper_book_label }} packets. Approving still does not place an order.</p>
+    <div class="table-wrap">
+      <table class="decision-table">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Action</th>
+            <th>Qty</th>
+            <th>Price</th>
+            <th>Est. Value</th>
+            <th>Allocation</th>
+            <th>Created</th>
+            <th>Decide</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in view.approvals.pending %}
+          <tr>
+            <td class="symbol"><a href="{{ url_for('approval_detail_page', approval_id=p.approval_id) }}">{{ p.symbol }}</a></td>
+            <td><span class="pill act-{{ p.action }}">{{ p.action }}</span></td>
+            <td>{{ p.order_quantity if p.order_quantity is not none else '—' }}</td>
+            <td>{{ p.current_price if p.current_price is not none else '—' }}</td>
+            <td>{{ p.order_notional_display }}</td>
+            <td>{{ p.current_allocation_display }} → {{ p.desired_allocation_display }}</td>
+            <td class="meta">{{ (p.created_at or '')[:16].replace('T', ' ') }}</td>
+            <td class="decide-cell">
+              {% if p.can_decide %}
+              <form class="decide compact" method="post" action="{{ url_for('approve_packet', approval_id=p.approval_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn approve" type="submit">APPROVE</button>
+              </form>
+              <form class="decide compact" method="post" action="{{ url_for('reject_packet', approval_id=p.approval_id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="btn reject" type="submit">REJECT</button>
+              </form>
+              {% else %}
+              <span class="meta">{{ p.decision_block_reason or 'Not decidable' }}</span>
+              {% endif %}
+              <a class="text-link" href="{{ url_for('approval_detail_page', approval_id=p.approval_id) }}">Open</a>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" class="empty">No pending packets.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</section>
+
+<section class="mid-grid">
+  <article class="card chart-card">
+    <h2>Portfolio allocation</h2>
+    <p class="meta">{{ view.paper_book_label }}</p>
+    <div class="alloc-wrap">
+      <div class="chart-frame donut">
+        <canvas id="allocation-chart" aria-label="Allocation donut"></canvas>
+      </div>
+      <ul class="legend stacked">
+        {% for row in view.allocation_chart.slices|sort(attribute='pct', reverse=true) %}
+        <li><span class="swatch s-{{ row.key|lower }}"></span>{{ row.label }} <strong>{{ row.display }}</strong></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </article>
+  <article class="card chart-card">
+    <div class="card-head">
+      <div>
+        <h2>Portfolio performance</h2>
+        <p class="meta">Portfolio ({{ view.paper_book_label }}) vs SPY</p>
+      </div>
+      <div class="ranges" role="group" aria-label="Time range">
+        <button type="button" data-range="1M">1M</button>
+        <button type="button" data-range="3M">3M</button>
+        <button type="button" data-range="6M">6M</button>
+        <button type="button" data-range="YTD">YTD</button>
+        <button type="button" data-range="1Y">1Y</button>
+        <button type="button" data-range="ALL" class="on">ALL</button>
+      </div>
+    </div>
+    {% if view.performance.ready %}
+      <div class="chart-frame">
+        <canvas id="performance-chart" aria-label="Performance line chart"></canvas>
+      </div>
+    {% else %}
+      <p class="empty collecting">{{ view.performance.message }}</p>
+    {% endif %}
+  </article>
+  <article class="card">
+    <div class="card-head">
+      <h2>AI activity</h2>
+      <a class="text-link" href="{{ url_for('journal_page') }}">View all activity</a>
+    </div>
+    {% for item in view.activity[:6] %}
+      <div class="activity-row">
+        <span class="kind k-{{ item.kind }}">{{ item.label }}</span>
+        <a href="{{ item.href }}">{{ item.title }}</a>
+        <span class="meta">{{ (item.meta or '')[:16].replace('T', ' ') }}</span>
+      </div>
+    {% else %}
+      <p class="empty">No recent activity stored.</p>
+    {% endfor %}
+  </article>
+</section>
+
+<section class="bottom-grid">
+  <article class="card wide" id="positions">
+    <div class="card-head">
+      <h2>Top positions</h2>
+      <p class="meta">{{ view.paper_book_label }} · not {{ view.live_account_label }}</p>
+    </div>
+    <div class="table-wrap">
+      <table class="positions">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Company</th>
+            <th>Sleeve</th>
+            <th>Qty</th>
+            <th>Price</th>
+            <th>Market Value</th>
+            <th>Portfolio %</th>
+            <th>Unrealized P/L</th>
+            <th>Thesis</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in view.positions %}
+          <tr>
+            <td class="symbol" title="{{ p.symbol }}">{{ p.symbol }}</td>
+            <td>{{ p.company or '—' }}</td>
+            <td title="{{ p.sleeve }}"><span class="pill sleeve-{{ p.sleeve }}">{{ p.sleeve_label }}</span></td>
+            <td>{{ p.quantity_display }}</td>
+            <td>{{ p.price_display }}</td>
+            <td>{{ p.market_value_display }}</td>
+            <td>{{ p.allocation_display }}</td>
+            <td class="gain {{ 'pos' if p.unrealized_pnl and p.unrealized_pnl > 0 else 'neg' if p.unrealized_pnl and p.unrealized_pnl < 0 else '' }}">{{ p.unrealized_display }}</td>
+            <td>{% if p.thesis_status %}<span class="pill">{{ p.thesis_status_label }}</span>{% else %}—{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="9" class="empty">No paper positions.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+  <article class="card">
+    <div class="card-head">
+      <h2>Candidate discovery</h2>
+      <a class="text-link" href="{{ url_for('discovery_page') }}">View all candidates</a>
+    </div>
+    <p class="meta">Stored discovery results · this dashboard does not run discovery</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Symbol</th><th>Score</th><th>Priority</th><th>Sleeve</th><th>Status</th></tr></thead>
+        <tbody>
+          {% for c in view.top_candidates %}
+          <tr>
+            <td class="symbol" title="{{ c.symbol }}">{{ c.symbol }}</td>
+            <td>{{ c.score_display }}</td>
+            <td title="{{ c.priority }}"><span class="pill pri-{{ c.priority }}">{{ c.priority_label }}</span></td>
+            <td title="{{ c.provisional_sleeve }}">{{ c.sleeve_label }}</td>
+            <td title="{{ c.research_status or c.status }}">{{ c.research_status_label if c.research_status else c.status_label }}</td>
+          </tr>
+          {% else %}
+          <tr><td colspan="5" class="empty">No stored candidates.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </article>
+</section>
+
+<section class="bottom-grid single">
+  <article class="card">
+    <div class="card-head">
+      <h2>Alerts</h2>
+      <a class="text-link" href="{{ url_for('journal_page') }}">View all alerts</a>
+    </div>
+    {% for a in view.alerts[:6] %}
+      <div class="activity-row">
+        <span class="kind warn">{{ a.symbol }}</span>
+        <span>{{ a.state }} → {{ a.recommended_action }}</span>
+        <span class="meta">{{ (a.created_at or '')[:16].replace('T', ' ') }}</span>
+      </div>
+    {% else %}
+      <p class="empty">No non-healthy monitoring states on the latest run.</p>
+    {% endfor %}
+  </article>
+</section>
+<script id="allocation-data" type="application/json">{{ view.allocation_chart | tojson }}</script>
+<script id="performance-data" type="application/json">{{ view.performance | tojson }}</script>
+{% else %}
+<p class="empty">Dashboard snapshot is not available yet.</p>
+{% endif %}
+{% endblock %}
+{% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+<script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+{% endblock %}

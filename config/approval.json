@@ -1,0 +1,39 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-30",
+  "description": "Human Approval Packet. Packages a Risk-Gate-approved paper OrderPlan for a human to accept or reject. APPROVED does not place, review, or cancel a live order. No money movement.",
+  "paper_only": true,
+  "live_trade_actions_allowed": false,
+  "auto_execution": false,
+  "require_human_approval": true,
+  "approved_does_not_place_order": true,
+  "does_not_create_stop_orders": true,
+  "does_not_call_execution_tools": true,
+  "does_not_move_money": true,
+  "statuses": [
+    "PENDING_HUMAN_APPROVAL",
+    "APPROVED",
+    "REJECTED",
+    "EXPIRED",
+    "SUPERSEDED"
+  ],
+  "terminal_statuses": ["REJECTED", "EXPIRED", "SUPERSEDED"],
+  "open_statuses": ["PENDING_HUMAN_APPROVAL", "APPROVED"],
+  "quote_max_age_seconds": 300,
+  "material_change": {
+    "nav_change_pct": 0.02,
+    "position_pct_change": 0.005,
+    "cash_pct_change": 0.02,
+    "holdings_count_change": 1,
+    "quantity_rel_tolerance": 0.01
+  },
+  "research_stale_statuses": ["STALE", "RESEARCH_STALE", "EXPIRED"],
+  "forbidden_tools": [
+    "review_equity_order",
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ]
+}

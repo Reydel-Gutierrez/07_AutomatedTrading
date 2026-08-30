@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Discovery · Agentic Portfolio{% endblock %}
+{% block content %}
+<section class="card">
+  <div class="card-head">
+    <h2>Candidate discovery</h2>
+    <span class="count">{{ view.count }}</span>
+  </div>
+  <p class="meta">{{ view.book_label }} · {{ view.note }}</p>
+  <div class="table-wrap">
+    <table class="discovery">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Score</th>
+          <th>Priority</th>
+          <th>Sources</th>
+          <th>Sleeve</th>
+          <th>Sector</th>
+          <th>Class</th>
+          <th>Status</th>
+          <th>Signals / reasons</th>
+          <th>Risks / events</th>
+          <th>Research</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in view.candidates %}
+        <tr>
+          <td class="symbol" title="{{ c.symbol }}">{{ c.symbol }}</td>
+          <td>{{ c.score_display }}</td>
+          <td title="{{ c.priority }}">{{ c.priority_label }}</td>
+          <td class="wrap">{{ c.sources_display[:3]|join(', ') }}</td>
+          <td title="{{ c.provisional_sleeve }}">{{ c.sleeve_label }}</td>
+          <td title="{{ c.sector or '' }}">{{ c.sector_label }}</td>
+          <td title="{{ c.security_class or '' }}">{{ c.class_label }}</td>
+          <td title="{{ c.status }}">{{ c.status_label }}</td>
+          <td class="wrap">{{ (c.signal_labels or c.reason_labels)[:3]|join('; ') }}</td>
+          <td class="wrap">{{ ((c.risk_labels or []) + (c.event_labels or []))[:3]|join('; ') or '—' }}</td>
+          <td title="{{ c.research_status or '' }}">{{ c.research_status_label }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="11" class="empty">No stored discovery candidates.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

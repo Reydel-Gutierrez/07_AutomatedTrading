@@ -1,0 +1,51 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-30",
+  "description": "Position monitoring + thesis reassessment. Python collects facts, detects triggers, persists state, and enforces hard safety. AI interprets new evidence. Reuses Research, Thesis, Portfolio Decision, Risk Gate, and freshness. No stock-picking rule engine. No broker stops. No execution tools.",
+  "does_not_create_broker_stop_orders": true,
+  "does_not_call_execution_tools": true,
+  "does_not_activate_theses": true,
+  "price_move_alone_does_not_invalidate_core": true,
+  "exit_condition_is_not_a_broker_stop": true,
+  "no_action_always_valid": true,
+  "valid_states": [
+    "HEALTHY",
+    "REVIEW_REQUIRED",
+    "RESEARCH_REFRESH_REQUIRED",
+    "THESIS_WEAKENED",
+    "THESIS_INVALIDATED",
+    "EXIT_CONDITION_TRIGGERED"
+  ],
+  "valid_actions": ["HOLD", "ADD", "REDUCE", "SELL", "NO_ACTION"],
+  "sleeve_behavior": {
+    "CORE_GROWTH": {
+      "invalidation": "thesis_fundamental",
+      "price_move_invalidates": false,
+      "price_move_effect": "REVIEW_OR_REFRESH"
+    },
+    "OPPORTUNISTIC": {
+      "invalidation": "recovery_vs_structural_deterioration",
+      "requires_dislocation_assessment": true
+    },
+    "TACTICAL": {
+      "invalidation": "predefined_price_or_technical",
+      "must_detect_predefined_invalidation": true
+    },
+    "SPECULATIVE": {
+      "invalidation": "predefined_risk_or_catalyst",
+      "must_detect_predefined_invalidation": true
+    }
+  },
+  "material_forms": ["8-K", "10-Q", "10-K", "6-K", "20-F"],
+  "earnings_lookback_days": 5,
+  "news_lookback_days": 3,
+  "filing_lookback_days": 7,
+  "forbidden_tools": [
+    "review_equity_order",
+    "place_equity_order",
+    "cancel_equity_order",
+    "create_scan",
+    "watchlist_writes",
+    "any_deposit_withdrawal_transfer"
+  ]
+}

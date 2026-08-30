@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Research · Agentic Portfolio{% endblock %}
+{% block content %}
+<p class="lede"><span class="book-tag paper">{{ view.book_label }}</span> research and theses. Live-registry rows are labeled {{ view.live_account_label }}.</p>
+<section class="card">
+  <h2>Candidates</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Symbol</th><th>Sleeve</th><th>Score</th><th>Priority</th><th>Status</th><th>Reasons</th></tr></thead>
+      <tbody>
+        {% for c in view.candidates %}
+        <tr>
+          <td>{{ c.symbol }}</td>
+          <td>{{ c.provisional_sleeve }}</td>
+          <td>{{ '%.2f'|format(c.discovery_score or 0) }}</td>
+          <td>{{ c.priority }}</td>
+          <td>{{ c.status }}</td>
+          <td>{{ (c.reasons or [])[:2]|join('; ') }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">No candidates.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Research reports</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Symbol</th><th>Conclusion</th><th>Freshness</th><th>Confidence</th><th></th></tr></thead>
+      <tbody>
+        {% for r in view.reports %}
+        <tr>
+          <td>{{ r.symbol }}</td>
+          <td>{{ r.research_conclusion or r.research_status }}</td>
+          <td>{{ r.freshness }}</td>
+          <td>{{ r.confidence }}</td>
+          <td><a href="{{ url_for('report_detail_page', research_id=r.research_id) }}">Open</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No reports.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
+  <h2>Active / draft theses</h2>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Symbol</th><th>Status</th><th>Sleeve</th><th>Book</th><th>Decision</th><th></th></tr></thead>
+      <tbody>
+        {% for t in view.theses %}
+        <tr>
+          <td>{{ t.symbol }}</td>
+          <td><span class="pill">{{ t.status }}</span></td>
+          <td>{{ t.sleeve }}</td>
+          <td>{{ t.book_label or t.book }}</td>
+          <td>{{ t.decision or '—' }}</td>
+          <td><a href="{{ url_for('thesis_detail_page', thesis_id=t.thesis_id) }}">Open</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">No theses.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

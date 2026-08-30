@@ -1,0 +1,218 @@
+{
+  "version": "2.1.0",
+  "updated_at": "2026-08-30",
+  "description": "Thesis + portfolio-decision contract. Size as percent of current NAV. Security class must cite evidence, not AI assertion only. Theses stay DRAFT until a future real execution. No broker stop orders.",
+  "required": [
+    "symbol",
+    "sleeve",
+    "security_class",
+    "decision",
+    "timestamp",
+    "portfolio_nav",
+    "allocation_before",
+    "allocation_after_proposed",
+    "current_price",
+    "market_context",
+    "sector_context",
+    "bull_thesis",
+    "base_thesis",
+    "bear_thesis",
+    "catalysts",
+    "risks",
+    "fundamental_observations",
+    "technical_observations",
+    "news_observations",
+    "upcoming_events",
+    "earnings_risk",
+    "expected_investment_horizon",
+    "why_preferable_to_cash",
+    "invalidation_criteria",
+    "review_triggers",
+    "why_position_should_exist",
+    "exit_policy",
+    "decision_justification",
+    "suggested_allocation",
+    "confidence_level",
+    "supporting_mcp_data",
+    "facts",
+    "interpretation"
+  ],
+  "properties": {
+    "symbol": { "type": "string" },
+    "sleeve": {
+      "type": "string",
+      "enum": ["CORE_GROWTH", "OPPORTUNISTIC", "TACTICAL", "SPECULATIVE"]
+    },
+    "security_class": {
+      "type": "string",
+      "enum": ["BROAD_MARKET_INDEX_ETF", "OTHER_DIVERSIFIED_ETF", "INDIVIDUAL_EQUITY"]
+    },
+    "security_class_evidence": {
+      "type": "object",
+      "properties": {
+        "sources": { "type": "array", "items": { "type": "string" } },
+        "validated": { "type": "boolean" },
+        "fail_closed": { "type": "boolean" },
+        "as_of": { "type": "string" }
+      }
+    },
+    "concentration_level": {
+      "type": ["string", "null"],
+      "enum": ["HIGH", null]
+    },
+    "enhanced_concentration_review": { "type": ["object", "null"] },
+    "decision": {
+      "type": "string",
+      "enum": ["BUY", "ADD", "SELL", "REDUCE", "HOLD", "WATCH", "REJECT", "NO_ACTION"]
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "portfolio_nav": { "type": "number" },
+    "allocation_before": {
+      "type": "object",
+      "properties": {
+        "cash_percent_of_nav": { "type": "number" },
+        "sleeve_percent_of_nav": { "type": "number" },
+        "name_percent_of_nav": { "type": "number" }
+      }
+    },
+    "allocation_after_proposed": {
+      "type": "object",
+      "properties": {
+        "cash_percent_of_nav": { "type": "number" },
+        "sleeve_percent_of_nav": { "type": "number" },
+        "name_percent_of_nav": { "type": "number" }
+      }
+    },
+    "current_price": { "type": "number" },
+    "market_context": { "type": "string" },
+    "sector_context": { "type": "string" },
+    "bull_thesis": { "type": "string" },
+    "base_thesis": { "type": "string" },
+    "bear_thesis": { "type": "string" },
+    "catalysts": { "type": "array", "items": { "type": "string" } },
+    "risks": { "type": "array", "items": { "type": "string" } },
+    "fundamental_observations": { "type": "string" },
+    "technical_observations": { "type": "string" },
+    "news_observations": { "type": "string" },
+    "upcoming_events": { "type": "array", "items": { "type": "string" } },
+    "earnings_risk": { "type": "string" },
+    "expected_investment_horizon": { "type": "string" },
+    "why_preferable_to_cash": { "type": "string" },
+    "invalidation_criteria": { "type": "array", "items": { "type": "string" } },
+    "review_triggers": { "type": "array", "items": { "type": "string" } },
+    "why_position_should_exist": { "type": "string" },
+    "exit_policy": {
+      "type": "object",
+      "description": "How the position would later be exited. Never creates broker stop orders.",
+      "properties": {
+        "thesis_based": { "type": "boolean" },
+        "mandatory_fixed_stop_loss": { "type": "boolean" },
+        "price_invalidation": { "type": ["string", "null"] },
+        "event_invalidation": { "type": ["string", "null"] },
+        "technical_invalidation": { "type": ["string", "null"] },
+        "risk_invalidation": { "type": ["string", "null"] },
+        "broker_stop_orders_created": { "type": "boolean", "const": false },
+        "notes": { "type": ["string", "null"] }
+      }
+    },
+    "decision_justification": {
+      "type": "string",
+      "description": "Why this improves the portfolio vs alternatives and cash."
+    },
+    "decline_classification": {
+      "type": ["string", "null"],
+      "enum": [
+        "TEMPORARY_PRICE_DISLOCATION",
+        "FUNDAMENTAL_BUSINESS_DETERIORATION",
+        null
+      ]
+    },
+    "suggested_allocation": {
+      "type": "object",
+      "properties": {
+        "percent_of_nav": { "type": "number" },
+        "notional_usd": { "type": "number" },
+        "notes": { "type": "string" }
+      }
+    },
+    "confidence_level": {
+      "type": "string",
+      "enum": ["low", "medium", "high"]
+    },
+    "thesis_id": { "type": "string" },
+    "thesis_status": {
+      "type": "string",
+      "enum": [
+        "DRAFT",
+        "ACTIVE",
+        "STRENGTHENED",
+        "UNCHANGED",
+        "WEAKENED",
+        "INVALIDATED",
+        "CLOSED",
+        "REJECTED"
+      ]
+    },
+    "review_history": {
+      "type": "array",
+      "items": { "type": "object" }
+    },
+    "supporting_mcp_data": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["tool", "used_for"],
+        "properties": {
+          "tool": { "type": "string" },
+          "used_for": { "type": "string" },
+          "retrieved_at": { "type": "string" }
+        }
+      }
+    },
+    "facts": {
+      "type": "array",
+      "description": "MCP-retrieved facts only.",
+      "items": { "type": "string" }
+    },
+    "interpretation": {
+      "type": "string",
+      "description": "Agent reasoning. Do not mix unlabeled into facts."
+    },
+    "portfolio_context": {
+      "type": "object",
+      "properties": {
+        "holdings": { "type": "array" },
+        "cash_usd": { "type": "number" },
+        "buying_power_usd": { "type": "number" },
+        "sleeve_weights_percent": { "type": "object" },
+        "high_water_mark": { "type": "number" },
+        "current_nav": { "type": "number" },
+        "start_of_day_nav": { "type": "number" },
+        "daily_portfolio_return": { "type": "number" },
+        "daily_risk_halt": { "type": "boolean" },
+        "drawdown_percent": { "type": "number" },
+        "holdings_count_observed": { "type": "number" },
+        "risk_state": {
+          "type": "string",
+          "enum": ["NORMAL", "WARNING", "RISK_REDUCTION", "DEFENSIVE", "HALTED"]
+        },
+        "open_orders": { "type": "array" },
+        "recent_realized_pnl_usd": { "type": "number" },
+        "unrealized_pnl_usd": { "type": "number" },
+        "concentration_notes": { "type": "string" },
+        "overlap_notes": { "type": "string" },
+        "why_this_improves_the_portfolio": { "type": "string" }
+      }
+    },
+    "risk_validation": {
+      "type": "object",
+      "properties": {
+        "passed": { "type": "boolean" },
+        "failed_rule_ids": { "type": "array", "items": { "type": "string" } },
+        "policy_limits_passed": { "type": "boolean" },
+        "daily_risk_halt_ok": { "type": "boolean" },
+        "classification_validated": { "type": "boolean" }
+      }
+    }
+  }
+}
