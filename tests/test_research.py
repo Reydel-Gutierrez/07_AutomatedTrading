@@ -473,6 +473,7 @@ def test_research_persistence_and_history(tmp_path):
     hist = store.by_symbol("QUAL")
     assert len(hist) == 2
     assert store.by_candidate("cand-QUAL")
+    assert first.report.completed_at.startswith("2026-08-30")
     assert store.by_date("2026-08-30")
     with pytest.raises(FileExistsError):
         store.save(first.report)

@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Approvals · Agentic Portfolio{% endblock %}
 {% block content %}
-<p class="lede"><span class="book-tag paper">{{ view.book_label }}</span> Human packets for paper OrderPlans. <strong>APPROVE still does not place an order.</strong> Expired, superseded, demo, and paper packets cannot be decided unless explicitly enabled.</p>
+<p class="lede"><span class="book-tag {{ 'live' if environment == 'LIVE' else 'paper' }}">{{ view.book_label }}</span> Human packets. Paper packets are not LIVE decisions. <strong>APPROVE still does not place an order.</strong></p>
 
 <section class="card">
   <h2>Pending</h2>

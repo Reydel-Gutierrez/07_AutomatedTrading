@@ -64,6 +64,7 @@ def _snap(**kwargs) -> SecuritySnapshot:
     kwargs.setdefault("name", "Test Co")
     kwargs.setdefault("liquidity", _liq())
     kwargs.setdefault("sources", ["test"])
+    kwargs.setdefault("data_origin", "test")
     return SecuritySnapshot(**kwargs)
 
 
@@ -82,7 +83,8 @@ def _run(snaps, context, *, persist=False, **kwargs):
 def _quality_core(symbol="QUAL"):
     return _snap(
         symbol=symbol,
-        sources=["fundamentals", "financials"],
+        sources=["fundamentals", "financials", "test"],
+        data_origin="test",
         current_price=85.0,
         market_cap=8.0e10,
         pe_ratio=22.0,

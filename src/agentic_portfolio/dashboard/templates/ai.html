@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}AI · Agentic Portfolio{% endblock %}
+{% block content %}
+<div class="halt-banner">AI IS ADVISORY · LIVE ORDER PLACEMENT DISABLED</div>
+<p class="lede"><span class="book-tag {{ 'live' if view.book_kind == 'live' else 'paper' }}">{{ view.active_book_label }}</span> <span class="pill {{ view.budget_mode }}">{{ view.budget_mode }}</span> · {{ view.note }}</p>
+
+<section class="kpis" aria-label="AI budget">
+  <article class="kpi">
+    <h2>Monthly cap</h2>
+    <p class="figure">{{ view.cap_display }}</p>
+    <p class="meta">Hard stop at $10. Restart cannot reset this ledger.</p>
+  </article>
+  <article class="kpi">
+    <h2>Spent</h2>
+    <p class="figure">{{ view.spent_display }}</p>
+    <p class="meta">{{ view.pct_used }}% used · {{ view.calls_month }} calls this month</p>
+    <div class="bar" aria-hidden="true"><span style="width: {{ [view.pct_used, 100]|min }}%"></span></div>
+  </article>
+  <article class="kpi">
+    <h2>Remaining</h2>
+    <p class="figure">{{ view.remaining_display }}</p>
+    <p class="meta">{{ view.calls_today }} calls today</p>
+  </article>
+  <article class="kpi">
+    <h2>Invariants</h2>
+    <p class="meta">LIVE_AI_ALLOWED={{ view.LIVE_AI_ALLOWED }}</p>
+    <p class="meta">LIVE_PROPOSALS_ALLOWED={{ view.LIVE_PROPOSALS_ALLOWED }}</p>
+    <p class="meta">LIVE_ORDER_PLACEMENT={{ view.LIVE_ORDER_PLACEMENT }}</p>
+  </article>
+</section>
+
+<section class="grid-2">
+  <article class="card">
+    <h2>Provider / model roles</h2>
+    <dl class="facts">
+      {% for name, spec in view.roles.items() %}
+      <dt>{{ name }}</dt><dd>{{ spec.provider }} · {{ spec.model }}</dd>
+      {% endfor %}
+    </dl>
+    <p class="meta">Availability:
+      {% for name, ok in view.providers.items() %}
+      {{ name }}={{ 'yes' if ok else 'no' }}{% if not loop.last %} · {% endif %}
+      {% endfor %}
+    </p>
+  </article>
+  <article class="card">
+    <h2>Spend by provider / model</h2>
+    {% if view.spend_by_provider %}
+    <ul class="plain">
+      {% for name, amount in view.spend_by_provider.items() %}
+      <li>{{ name }} ${{ '%.4f'|format(amount) }}</li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="empty">No billed AI calls this month.</p>
+    {% endif %}
+    {% if view.spend_by_model %}
+    <p class="meta">
+      {% for name, amount in view.spend_by_model.items() %}
+      {{ name }} ${{ '%.4f'|format(amount) }}{% if not loop.last %} · {% endif %}
+      {% endfor %}
+    </p>
+    {% endif %}
+  </article>
+</section>
+
+<section class="card">
+  <div class="card-head">
+    <h2>{{ view.runtime_mode }} AI activity</h2>
+    <a class="text-link" href="{{ url_for('ai_activity_page') }}">Candidate discovery / AI activity</a>
+  </div>
+  <p class="meta">{{ view.screenings }} screens · {{ view.proposals }} proposals on this book. {{ view.isolation_note }}</p>
+  <p class="meta">Cursor is the development agent. The Raspberry Pi application is the autonomous production runtime. AI providers are reasoning services. Risk Gate is deterministic authority. The broker is the account source of truth.</p>
+</section>
+{% endblock %}

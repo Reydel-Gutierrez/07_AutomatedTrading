@@ -32,7 +32,15 @@ Discovery finds things to research. Research determines whether the opportunity 
 
 ## Daily startup (read-only)
 
-Confirm Agentic account. `get_portfolio` → **current NAV** (not a budget). Positions, orders, P&L. SPY. Compute HWM, drawdown state, `DAILY_RISK_HALT` if SOD NAV known. Optional read-only discovery run (`PYTHONPATH=src python scripts/run_live_readonly_discovery.py`). Optional small-subset research run (`PYTHONPATH=src python scripts/run_live_readonly_research.py`). Optional paper thesis/decision run (`PYTHONPATH=src python scripts/run_paper_thesis_decision.py`). Optional paper position-monitor run (`PYTHONPATH=src python scripts/run_paper_position_monitor.py`). Optional paper execution run (`PYTHONPATH=src python scripts/run_paper_execution.py`). Optional paper fill run (`PYTHONPATH=src python scripts/run_paper_fill.py`). Optional paper approval run (`PYTHONPATH=src python scripts/run_paper_approval.py`). Optional review-only run (`PYTHONPATH=src python scripts/run_paper_review.py`). Journal snapshot. No place/cancel.
+Confirm Agentic account. `PYTHONPATH=src python scripts/run_live_launch_check.py` fetches `get_portfolio` / `get_equity_positions` → **current NAV** (not a budget), persists `state/live_book`, and fails closed if paper state leaks. Positions, orders, P/L. SPY. Compute HWM, drawdown state, `DAILY_RISK_HALT` if SOD NAV known. Optional read-only discovery run (`PYTHONPATH=src python scripts/run_live_readonly_discovery.py`). Optional small-subset research run (`PYTHONPATH=src python scripts/run_live_readonly_research.py`). Optional paper thesis/decision run (`PYTHONPATH=src python scripts/run_paper_thesis_decision.py`). Optional paper position-monitor run (`PYTHONPATH=src python scripts/run_paper_position_monitor.py`). Optional paper execution run (`PYTHONPATH=src python scripts/run_paper_execution.py`). Optional paper fill run (`PYTHONPATH=src python scripts/run_paper_fill.py`). Optional paper approval run (`PYTHONPATH=src python scripts/run_paper_approval.py`). Optional review-only run (`PYTHONPATH=src python scripts/run_paper_review.py`). Journal snapshot. No place/cancel.
+
+LIVE dashboard: `DASHBOARD_ENVIRONMENT=LIVE PYTHONPATH=src python scripts/run_dashboard.py`. Family NAV tracks the LIVE snapshot. Paper book remains for tests/dev only.
+
+Proposal-only LIVE AI check: `PYTHONPATH=src python scripts/run_live_ai_check.py`. Uses the confirmed Agentic snapshot. Does not place. Default is a scripted provider so the $10 monthly cap is not consumed; `--use-real-ai` is opt-in.
+
+The Raspberry Pi scheduler (`scripts/run_scheduler.py`) is an internal orchestrator inside the 24/7 Agent Runtime (`scripts/run_service.py`). The process never exits after one cycle. PREMARKET / MARKET HOURS / POSTMARKET / OVERNIGHT / WEEKEND / HOLIDAY jobs run according to session phase. Duplicate jobs are skipped. AI is not called on every tick.
+
+$10/month AI cap: `config/ai.json` + persisted `state/ai_budget/`. $0–$8 normal, $8+ conserving, $9.50+ critical reassessment only, $10 blocks all external AI until next calendar month. Market monitoring, broker sync, Risk Gate, dashboard, watch conditions, and logs continue when AI is blocked.
 
 ## Drawdown / daily halt
 
@@ -48,4 +56,17 @@ Optional paper `CAPITAL_INCREASE_RECOMMENDED`. Never move money.
 
 ## Shutdown
 
-Leave auto-exec false. Snapshot NAV, HWM, sleeves, cash, halt flags.
+Leave auto-exec false. Snapshot NAV, HWM, sleeves, cash, halt flags. `python scripts/service_ctl.py stop` or `systemctl stop agentic-portfolio`.
+
+## 24/7 production service
+
+Complete local application (dashboard + runtime, no PowerShell after start):
+
+```
+$env:PYTHONPATH = "src"
+$env:AGENTIC_RUNTIME_MODE = "LIVE"
+$env:DASHBOARD_ENVIRONMENT = "LIVE"
+python scripts/run_service.py
+```
+
+Dashboard: `http://127.0.0.1:3100`. APPROVE does not place an order. Pi systemd unit: `deploy/systemd/agentic-portfolio.service`.

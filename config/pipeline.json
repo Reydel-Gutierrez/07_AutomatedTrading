@@ -1,10 +1,18 @@
 {
-  "version": "2.8.0",
+  "version": "2.9.0",
   "updated_at": "2026-08-30",
-  "description": "Pipeline for the single NAV-% policy. Candidate Discovery, Deep Research, Investment Thesis, Portfolio Decision, Position Monitoring, paper Execution Controller (OrderPlan), paper fill + blotter, Human Approval Packet, and Robinhood review-only are implemented. Stops after robinhood_order_review. review_equity_order is informational/preflight only. No place/cancel. No capital transfers.",
+  "description": "Pipeline for the single NAV-% policy. LIVE runtime uses the Agentic Robinhood account as the source of truth for NAV/cash/positions/HWM/dashboard/Risk Gate. PAPER book remains for tests/dev. Candidate Discovery, Deep Research, Investment Thesis, Portfolio Decision, Position Monitoring, paper Execution Controller (OrderPlan), paper fill + blotter, Human Approval Packet, and Robinhood review-only are implemented. Stops after robinhood_order_review. review_equity_order is informational/preflight only. No place/cancel. No capital transfers.",
   "policy": "config/portfolio_policy.json",
   "hard_stop_after": "robinhood_order_review",
   "hard_stop_before": "execution_controller",
+  "live_ai": {
+    "LIVE_AI_ALLOWED": true,
+    "LIVE_PROPOSALS_ALLOWED": true,
+    "LIVE_ORDER_PLACEMENT": false,
+    "config": "config/ai.json",
+    "monthly_budget_usd": 10.0,
+    "notes": "AI Gateway is the only module that may call OpenAI/Anthropic. Structured outputs only. LIVE AI may research and propose. It must not place or cancel."
+  },
   "valid_decisions": [
     "BUY",
     "ADD",
@@ -31,6 +39,8 @@
         "sleeve_registry",
         "thesis_registry",
         "candidate_discovery",
+        "ai_gateway",
+        "live_portfolio_snapshot",
         "investment_decision",
         "portfolio_construction",
         "risk",
@@ -66,7 +76,7 @@
       "mcp_read_only": true,
       "creates_active_theses": false,
       "creates_buy_actions": false,
-      "notes": "Surfaces research candidates only. Does not buy. Does not create ACTIVE sleeve assignments. Same-sector/sleeve crowding uses OVERLAP_PRIORITY_PENALTY / DEFERRED_DUE_TO_RESEARCH_QUEUE_OVERLAP, not a max-N reject. Path is Candidate → ResearchReport → InvestmentThesis → PortfolioDecision → ProposedAction → RiskGate."
+      "notes": "Surfaces research candidates only. Does not buy. Does not create ACTIVE sleeve assignments. Same-sector/sleeve crowding uses OVERLAP_PRIORITY_PENALTY / DEFERRED_DUE_TO_RESEARCH_QUEUE_OVERLAP, not a max-N reject. Path is Candidate → ResearchReport → InvestmentThesis → PortfolioDecision → ProposedAction → RiskGate. Production AI screening/research goes through the AI Gateway (config/ai.json) with a $10/month hard cap. LIVE AI may create proposals only; LIVE_ORDER_PLACEMENT remains false."
     },
     {
       "id": "security_research",
@@ -107,6 +117,9 @@
       "component": "portfolio_construction",
       "mcp_read_only": true,
       "enabled": true,
+      "implemented": true,
+      "config": "config/runtime.json",
+      "notes": "LIVE mode refreshes NAV/cash/buying power/positions from the Agentic Robinhood account, persists state/live_book, and feeds dashboard, family NAV, HWM, daily P/L, monitoring, and Risk Gate. PAPER mode keeps the isolated paper book for tests/dev. LIVE never falls back to paper $10,000 NAV. Live placement remains disabled.",
       "includes": [
         "current_nav",
         "start_of_day_nav",

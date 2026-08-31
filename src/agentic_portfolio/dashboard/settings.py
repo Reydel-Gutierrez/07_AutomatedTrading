@@ -7,12 +7,16 @@ from typing import Any, Mapping
 
 from agentic_portfolio.dashboard.safety import DashboardSafetyError, assert_localhost_bind
 from agentic_portfolio.policy import load_dashboard_config
+from agentic_portfolio.runtime import get_active_runtime
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 3100
 PAPER_BOOK_LABEL = "PAPER BOOK"
 LIVE_ACCOUNT_LABEL = "LIVE ACCOUNT (read-only)"
+LIVE_ACCOUNT_SHORT = "LIVE ACCOUNT"
+PAPER_BOOK_INACTIVE = "INACTIVE / TEST ENVIRONMENT"
 NO_LIVE_PLACEMENT_BANNER = "NO LIVE ORDER PLACEMENT ENABLED"
+LIVE_DATA_UNAVAILABLE = "LIVE DATA UNAVAILABLE"
 
 
 def _truthy(value: Any) -> bool:
@@ -92,19 +96,26 @@ def resolve_ui_flags(
     cfg = dict(config or load_dashboard_config())
     env = environ if environ is not None else os.environ
     env_names = cfg.get("env") or {}
-    env_key = env_names.get("environment") or "DASHBOARD_ENVIRONMENT"
     paper_key = env_names.get("allow_paper_packet_decisions") or "DASHBOARD_ALLOW_PAPER_PACKET_DECISIONS"
     demo_key = env_names.get("allow_demo_packet_decisions") or "DASHBOARD_ALLOW_DEMO_PACKET_DECISIONS"
     stale_key = env_names.get("allow_stale_packet_decisions") or "DASHBOARD_ALLOW_STALE_PACKET_DECISIONS"
-    raw_env = (_first_env(env, [env_key]) or str(cfg.get("environment") or "PAPER")).strip().upper()
-    environment = raw_env if raw_env in {"PAPER", "LIVE"} else "PAPER"
+    environment = get_active_runtime(environ=env, dashboard_config=cfg).value
+    live = environment == "LIVE"
     return {
         "environment": environment,
+        "active_runtime": environment,
         "environment_banner": f"{environment} ENVIRONMENT",
         "paper_book_label": PAPER_BOOK_LABEL,
         "live_account_label": LIVE_ACCOUNT_LABEL,
+        "live_account_short": LIVE_ACCOUNT_SHORT,
+        "active_book_label": LIVE_ACCOUNT_LABEL if live else PAPER_BOOK_LABEL,
+        "risk_book_label": LIVE_ACCOUNT_SHORT if live else PAPER_BOOK_LABEL,
+        "live_account_status": "ACTIVE" if live else "READ-ONLY",
+        "paper_book_status": PAPER_BOOK_INACTIVE if live else "ACTIVE",
+        "book_kind": "live" if live else "paper",
         "live_order_placement_enabled": False,
         "no_live_placement_banner": NO_LIVE_PLACEMENT_BANNER,
+        "live_data_unavailable_label": LIVE_DATA_UNAVAILABLE,
         "allow_paper_packet_decisions": _flag(env, paper_key, cfg, "allow_paper_packet_decisions", False),
         "allow_demo_packet_decisions": _flag(env, demo_key, cfg, "allow_demo_packet_decisions", False),
         "allow_stale_packet_decisions": _flag(env, stale_key, cfg, "allow_stale_packet_decisions", False),

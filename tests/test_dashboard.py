@@ -21,13 +21,18 @@ from agentic_portfolio.dashboard.settings import resolve_bind, resolve_ui_flags
 from agentic_portfolio.paths import project_root
 
 PENDING_ID = "55123138-6dbe-4554-a92b-de57b21f1873"
-PAGES = ["/", "/approvals", "/research", "/orders", "/journal", "/system"]
-API = ["/api/dashboard", "/api/approvals", "/api/research", "/api/orders", "/api/journal", "/api/system"]
+PAGES = ["/", "/approvals", "/research", "/orders", "/journal", "/system", "/ai", "/watchlist", "/notifications"]
+API = ["/api/dashboard", "/api/approvals", "/api/research", "/api/orders", "/api/journal", "/api/system", "/api/ai", "/api/watchlist", "/api/notifications", "/api/agent"]
 
 
 def _pending_raw() -> dict:
     path = project_root() / "state" / "approval_packets" / f"{PENDING_ID}.json"
-    return json.loads(path.read_text(encoding="utf-8"))
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["status"] = ApprovalStatus.PENDING_HUMAN_APPROVAL.value
+    payload["decided_at"] = None
+    payload["decided_by"] = None
+    payload["decision_note"] = None
+    return payload
 
 
 def _csrf(client) -> str:
@@ -101,20 +106,21 @@ def test_dashboard_reads_paper_book_not_invented_nav():
     assert [row["name"] for row in payload["health"]][-1] == "live placement disabled"
 
 
-def test_approvals_api_lists_pending_and_detail():
-    client = _client()
+def test_approvals_api_lists_pending_and_detail(tmp_path):
+    packet = _seed_packet(tmp_path)
+    client = _client(tmp_path)
     listing = client.get("/api/approvals").get_json()
     pending_ids = {p["approval_id"] for p in listing["pending"]}
-    assert PENDING_ID in pending_ids
-    detail = client.get(f"/api/approvals/{PENDING_ID}")
+    assert packet.approval_id in pending_ids
+    detail = client.get(f"/api/approvals/{packet.approval_id}")
     assert detail.status_code == 200
-    packet = detail.get_json()
-    assert packet["symbol"] == "ESTC"
-    assert packet["action"] == "SELL"
-    assert packet["can_decide"] is True
-    assert packet["approved_does_not_place_order"] is True
-    assert "Why now" in packet["explanation"] or packet["why_now"]
-    html = client.get(f"/approvals/{PENDING_ID}")
+    body = detail.get_json()
+    assert body["symbol"] == "ESTC"
+    assert body["action"] == "SELL"
+    assert body["can_decide"] is True
+    assert body["approved_does_not_place_order"] is True
+    assert "Why now" in body["explanation"] or body["why_now"]
+    html = client.get(f"/approvals/{packet.approval_id}")
     assert html.status_code == 200
     text = html.get_data(as_text=True)
     assert "APPROVE" in text
@@ -261,12 +267,14 @@ def test_research_orders_journal_system_payloads():
     assert "approve_packet" in system["writes_allowed"]
     health_names = [row["name"] for row in system["health"]]
     assert health_names == [
+        "agent runtime",
         "dashboard",
         "monitoring",
         "research",
         "decision",
         "risk gate",
         "review bridge",
+        "AI gateway",
         "live placement disabled",
     ]
     live_placement = next(row for row in system["health"] if row["id"] == "live_placement")
@@ -325,6 +333,25 @@ def test_paper_and_demo_packets_blocked_unless_enabled(tmp_path, monkeypatch):
     res = client.post(f"/api/approvals/{demo.approval_id}/reject", json=_decide_payload(client))
     assert res.status_code == 409
     assert "demo packet" in res.get_json()["error"]
+
+
+def test_live_fail_closed_survives_template_error(monkeypatch):
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    monkeypatch.setenv("DASHBOARD_ENVIRONMENT", "LIVE")
+    monkeypatch.setattr(
+        "agentic_portfolio.dashboard.app.dashboard_view",
+        lambda _state: (_ for _ in ()).throw(RuntimeError("forced")),
+    )
+    client = _client()
+    monkeypatch.setattr(
+        "agentic_portfolio.dashboard.app.render_template",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("template boom")),
+    )
+    res = client.get("/")
+    assert res.status_code == 500
+    body = res.get_data(as_text=True)
+    assert "LIVE DATA UNAVAILABLE" in body
+    assert "Internal Server Error" not in body
 
 
 def test_ui_flags_keep_localhost_and_paper_default():

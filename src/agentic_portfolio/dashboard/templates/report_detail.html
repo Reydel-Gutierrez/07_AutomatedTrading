@@ -5,7 +5,7 @@
 <section class="card">
   <h2>{{ report.symbol }} · {{ report.research_conclusion or report.research_status }}</h2>
   <p>{{ report.executive_summary or '—' }}</p>
-  <p class="meta"><span class="book-tag paper">{{ paper_book_label }}</span> freshness {{ report.freshness }} · confidence {{ report.confidence }} · sleeve {{ report.provisional_sleeve }}</p>
+  <p class="meta"><span class="book-tag {{ 'live' if environment == 'LIVE' else 'paper' }}">{{ live_account_label if environment == 'LIVE' else paper_book_label }}</span> freshness {{ report.freshness }} · confidence {{ report.confidence }} · sleeve {{ report.provisional_sleeve }}</p>
 </section>
 <section class="grid-3">
   <article class="card"><h2>Bull</h2><p>{{ (report.bull_case.summary if report.bull_case else None) or '—' }}</p></article>

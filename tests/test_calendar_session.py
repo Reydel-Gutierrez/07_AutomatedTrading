@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from agentic_portfolio.calendar import EASTERN, NyseEquityCalendar, is_new_session
+from agentic_portfolio.calendar import EASTERN, NyseEquityCalendar, is_new_session, is_regular_hours
 from agentic_portfolio.session import observe_nav_for_session
 from agentic_portfolio.state_store import load_hwm_state, save_hwm_state
 from tests.conftest import ctx
@@ -98,3 +98,30 @@ def test_naive_datetime_fails_safe(tmp_path):
     st = observe_nav_for_session(current_nav=500.0, now=naive, persist_path=tmp_path / "s.json")
     assert st.fail_safe is True
     assert st.sod_nav is None
+
+
+def test_latest_completed_session_weekend_is_friday():
+    cal = NyseEquityCalendar()
+    sunday = datetime(2026, 8, 30, 12, 0, tzinfo=EASTERN)
+    completed = cal.latest_completed_session(sunday)
+    assert completed is not None
+    assert completed.session_id == "2026-08-28"
+    friday_open = datetime(2026, 8, 28, 11, 0, tzinfo=EASTERN)
+    during = cal.latest_completed_session(friday_open)
+    assert completed is not None
+    assert during.session_id == "2026-08-27"
+    friday_close = datetime(2026, 8, 28, 16, 30, tzinfo=EASTERN)
+    after = cal.latest_completed_session(friday_close)
+    assert after.session_id == "2026-08-28"
+
+
+def test_regular_hours_excludes_weekend_and_after_hours():
+    cal = NyseEquityCalendar()
+    friday_rth = datetime(2026, 8, 28, 15, 59, tzinfo=EASTERN)
+    friday_close = datetime(2026, 8, 28, 16, 0, tzinfo=EASTERN)
+    sunday = datetime(2026, 8, 30, 16, 0, tzinfo=EASTERN)
+    premarket = datetime(2026, 8, 28, 8, 0, tzinfo=EASTERN)
+    assert is_regular_hours(friday_rth, cal) is True
+    assert is_regular_hours(friday_close, cal) is False
+    assert is_regular_hours(sunday, cal) is False
+    assert is_regular_hours(premarket, cal) is False

@@ -22,7 +22,7 @@
     "exclusive_use": true,
     "never_trade_other_accounts": true,
     "last_observed": {
-      "as_of": "2026-08-29",
+      "as_of": "2026-08-30",
       "nav_usd": 500.0,
       "buying_power_usd": 500.0,
       "cash_usd": 500.0,
@@ -62,6 +62,7 @@
     ],
     "live_only_steps": [
       "confirm_agentic_account",
+      "fetch_live_portfolio_snapshot",
       "check_buying_power",
       "check_existing_positions",
       "check_tradability",

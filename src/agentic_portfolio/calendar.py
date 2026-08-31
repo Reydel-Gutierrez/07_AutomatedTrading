@@ -261,6 +261,32 @@ class NyseEquityCalendar:
                 return None
         return None
 
+    def latest_completed_session(self, dt: datetime) -> TradingSession | None:
+        """Most recently finished regular session.
+
+        During an open session this is the prior trading day, not today.
+        After the close, on weekends, and on holidays it is the last
+        session that actually completed.
+        """
+        try:
+            et = self._as_et(dt)
+        except (ValueError, OverflowError):
+            return None
+        current = self.session_on(et.date())
+        if current is None:
+            return self.current_or_last_session(dt)
+        if et.time() >= current.close_time:
+            return current
+        d = current.session_date - timedelta(days=1)
+        for _ in range(15):
+            prior = self.session_on(d)
+            if prior is not None:
+                return prior
+            d = d - timedelta(days=1)
+            if d.year not in _SUPPORTED_YEARS:
+                return None
+        return None
+
     def next_session(self, dt: datetime) -> TradingSession | None:
         try:
             et = self._as_et(dt)
@@ -312,6 +338,21 @@ def is_new_session(
     if current.session_id != prior_session_id:
         return True, current, "new_trading_session"
     return False, current, "same_session"
+
+
+def is_regular_hours(dt: datetime, calendar: MarketCalendar | None = None) -> bool:
+    """True when `dt` falls inside an official NYSE regular session (not pre/post/weekend)."""
+    cal = calendar or NyseEquityCalendar()
+    try:
+        if dt.tzinfo is None:
+            return False
+        et = dt.astimezone(EASTERN)
+    except (ValueError, OverflowError, OSError):
+        return False
+    session = cal.session_for(dt)
+    if session is None:
+        return False
+    return REGULAR_OPEN <= et.time() < session.close_time
 
 
 def utc_now() -> datetime:

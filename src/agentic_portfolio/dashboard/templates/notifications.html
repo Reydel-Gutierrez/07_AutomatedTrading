@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Notifications · Agentic Portfolio{% endblock %}
+{% block content %}
+<p class="lede">Dashboard notifications. Email/push can be added later without changing trading logic. Unread {{ view.unread_count }}.</p>
+<section class="card">
+  <div class="card-head">
+    <h2>History</h2>
+    <form method="post" action="{{ url_for('notifications_read') }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button class="btn quiet" type="submit">Mark all read</button>
+    </form>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>When</th><th>Kind</th><th>Title</th><th>Body</th><th></th></tr></thead>
+      <tbody>
+        {% for n in view.rows %}
+        <tr>
+          <td class="meta">{{ (n.created_at or '')[:16].replace('T', ' ') }}</td>
+          <td><span class="pill">{{ n.kind }}</span></td>
+          <td>{{ n.title }}</td>
+          <td>{{ n.body }}</td>
+          <td>{% if not n.read %}unread{% else %}read{% endif %}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="empty">No notifications.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

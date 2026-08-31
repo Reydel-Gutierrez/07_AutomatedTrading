@@ -1,0 +1,165 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-30",
+  "description": "Provider-neutral AI gateway configuration. Model names live here, not in trading logic. Combined spend across every provider and model is capped at $10 USD per calendar month (America/New_York). AI is advisory only. LIVE order placement remains disabled.",
+  "invariants": {
+    "LIVE_AI_ALLOWED": true,
+    "LIVE_PROPOSALS_ALLOWED": true,
+    "LIVE_ORDER_PLACEMENT": false,
+    "ai_is_advisory_only": true,
+    "never_replace_broker_facts": true,
+    "structured_outputs_only": true
+  },
+  "budget": {
+    "currency": "USD",
+    "monthly_cap": 10.0,
+    "conservation_threshold": 8.0,
+    "critical_threshold": 9.5,
+    "hard_stop": 10.0,
+    "timezone": "America/New_York",
+    "reservation_ttl_seconds": 3600,
+    "ledger_dir": "state/ai_budget",
+    "modes": {
+      "NORMAL": {"min": 0.0, "max": 8.0},
+      "CONSERVING": {"min": 8.0, "max": 9.5},
+      "CRITICAL": {"min": 9.5, "max": 10.0},
+      "EXHAUSTED": {"min": 10.0, "max": null}
+    },
+    "critical_purposes": [
+      "portfolio_reassessment",
+      "existing_position_monitor",
+      "thesis_invalidation"
+    ],
+    "conserving_allowed_roles": ["screening"],
+    "conserving_skip_fallback": true,
+    "conserving_skip_escalation": true
+  },
+  "providers": {
+    "openai": {
+      "enabled": true,
+      "base_url": "https://api.openai.com/v1",
+      "endpoint": "/responses",
+      "api_key_env": "OPENAI_API_KEY",
+      "timeout_seconds": 90,
+      "notes": "Restricted production key. Adapter posts to /v1/responses only. Key is read exclusively from OPENAI_API_KEY."
+    },
+    "anthropic": {
+      "enabled": true,
+      "base_url": "https://api.anthropic.com/v1",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "version_header": "2023-06-01",
+      "timeout_seconds": 45
+    },
+    "scripted": {
+      "enabled": true,
+      "notes": "Tests and launch checks. Never used as a production network provider."
+    }
+  },
+  "roles": {
+    "screening": {
+      "provider": "openai",
+      "model": "gpt-5.6-luna",
+      "purpose": "cheap screening of quantitative shortlist",
+      "default_max_output_tokens": 1500,
+      "reasoning_effort": "low"
+    },
+    "research": {
+      "provider": "openai",
+      "model": "gpt-5.6-terra",
+      "purpose": "primary research and reasoning",
+      "default_max_output_tokens": 4000,
+      "reasoning_effort": "medium"
+    },
+    "escalation": {
+      "provider": "openai",
+      "model": "gpt-5.6-sol",
+      "purpose": "escalation when confidence is low or evidence conflicts",
+      "default_max_output_tokens": 4000,
+      "reasoning_effort": "medium"
+    },
+    "fallback": {
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-20250514",
+      "purpose": "optional Claude fallback / second opinion",
+      "default_max_output_tokens": 1600
+    }
+  },
+  "pricing_per_million": {
+    "gpt-5.6-luna": {"input": 0.20, "output": 1.20},
+    "gpt-5.6-terra": {"input": 2.00, "output": 12.00},
+    "gpt-5.6-sol": {"input": 4.00, "output": 20.00},
+    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
+    "claude-opus-4-20250514": {"input": 15.00, "output": 75.00},
+    "claude-3-5-haiku-latest": {"input": 0.80, "output": 4.00},
+    "scripted": {"input": 0.0, "output": 0.0},
+    "default": {"input": 4.00, "output": 20.00}
+  },
+  "pricing_source": {
+    "url": "https://developers.openai.com/api/docs/pricing",
+    "retrieved_at": "2026-08-30",
+    "notes": "Standard short-context uncached rates. GPT-5.6 Sol promotional pricing is listed as available at least through 2026-11-21. Prompts with more than 272K input tokens are billed at 2x input and 1.5x output for the full request. Cached input is cheaper; authorization uses uncached input + max_output_tokens as worst-case."
+  },
+  "pipeline": {
+    "max_eligibility_pass": 20,
+    "max_quantitative_shortlist": 8,
+    "max_ai_screen": 4,
+    "max_deep_research": 2,
+    "max_portfolio_decisions": 2,
+    "min_discovery_score": 55.0,
+    "min_screen_score": 60.0,
+    "min_research_confidence_for_buy": "MEDIUM",
+    "stale_snapshot_seconds": 3600,
+    "stale_snapshot_seconds_market_hours": 900,
+    "require_broker_facts": true,
+    "skip_ai_when_budget_exhausted": true,
+    "continue_without_ai": true,
+    "fact_freshness": {
+      "quote_seconds": 3600,
+      "quote_market_hours_seconds": 900,
+      "quote_closed_uses_last_session": true,
+      "liquidity_seconds": 21600,
+      "fundamentals_seconds": 604800,
+      "identity_seconds": 2592000,
+      "technicals_seconds": 21600,
+      "news_seconds": 86400
+    }
+  },
+  "scheduler": {
+    "timezone": "America/New_York",
+    "premarket": {
+      "enabled": true,
+      "weekday_only": true,
+      "time": "07:00",
+      "jobs": ["refresh_live_account", "refresh_candidate_universe", "run_candidate_discovery"]
+    },
+    "market_hours": {
+      "enabled": true,
+      "weekday_only": true,
+      "every_minutes": 15,
+      "window_start": "09:30",
+      "window_end": "16:00",
+      "jobs": ["refresh_account_positions", "monitor_existing_positions", "evaluate_reassessment_triggers"],
+      "ai_on_every_tick": false
+    },
+    "postmarket": {
+      "enabled": true,
+      "weekday_only": true,
+      "time": "16:15",
+      "jobs": ["reconcile_account", "record_daily_portfolio_state", "summarize_decisions"]
+    },
+    "overnight": {
+      "enabled": true,
+      "every_minutes": 120,
+      "jobs": ["news_catalyst_monitor", "thesis_updates", "fundamentals_if_new", "portfolio_risk_review", "watchlist_maintenance"]
+    },
+    "weekend_holiday": {
+      "enabled": true,
+      "once_per_day": true,
+      "jobs": ["latest_session_analysis", "deeper_candidate_research", "portfolio_review", "watchlist_construction", "stale_thesis_cleanup", "next_session_prep"]
+    },
+    "job_timeout_seconds": 900,
+    "lock_dir": "state/scheduler/locks",
+    "state_path": "state/scheduler/state.json",
+    "prevent_duplicate_jobs": true
+  }
+}

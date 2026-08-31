@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
+from werkzeug.exceptions import HTTPException
 
 from agentic_portfolio.approval.types import ApprovalStatus
 from agentic_portfolio.approval.validate import ApprovalValidationError
@@ -23,6 +24,10 @@ from agentic_portfolio.dashboard.family import (
     parse_amount,
 )
 from agentic_portfolio.dashboard.queries import (
+    activity_log_view,
+    agent_runtime_view,
+    ai_activity_view,
+    ai_view,
     dashboard_state,
     dashboard_view,
     discovery_view,
@@ -31,10 +36,12 @@ from agentic_portfolio.dashboard.queries import (
     get_thesis,
     journal_view,
     list_approvals,
+    notifications_view,
     orders_view,
     record_approval_decision,
     research_view,
     system_view,
+    watchlist_view,
 )
 from agentic_portfolio.dashboard.safety import (
     DashboardSafetyError,
@@ -43,11 +50,13 @@ from agentic_portfolio.dashboard.safety import (
     new_csrf_token,
 )
 from agentic_portfolio.dashboard.settings import resolve_bind, resolve_ui_flags
+from agentic_portfolio.notify import NotificationStore
 from agentic_portfolio.paths import project_root
+from agentic_portfolio.runtime import bootstrap_readonly_broker_runtime
 
 HERE = Path(__file__).resolve().parent
 DECIDE_ENDPOINTS = {"approve_packet", "reject_packet", "api_approve", "api_reject"}
-PUBLIC_ENDPOINTS = {"login_page", "login_post", "static"}
+PUBLIC_ENDPOINTS = {"login_page", "login_post", "static", "healthz"}
 FAMILY_ALLOWED_ENDPOINTS = {
     "dashboard_page",
     "api_family_me",
@@ -65,6 +74,8 @@ CSRF_ENDPOINTS = DECIDE_ENDPOINTS | {
     "family_assign",
     "password_change",
     "family_reset_password",
+    "notifications_read",
+    "api_notifications_read",
 }
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -81,6 +92,7 @@ def create_app(root: Path | None = None) -> Flask:
     app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
     app.config["SESSION_COOKIE_SECURE"] = False
     app.secret_key = "localhost-dashboard-not-a-broker-credential"
+    app.config["READONLY_BROKER_RUNTIME"] = bootstrap_readonly_broker_runtime()
     accounts = AccountStore(app.config["ROOT"])
 
     def state():
@@ -222,8 +234,10 @@ def create_app(root: Path | None = None) -> Flask:
         else:
             initials = name[:2].upper()
         pending_count = 0
+        unread_count = 0
         if user and user.get("role") == ROLE_ADMIN:
             pending_count = int(list_approvals(state()).get("pending_count") or 0)
+            unread_count = int(notifications_view(state()).get("unread_count") or 0)
         return {
             "autonomous_disabled": flags["autonomous_trading_disabled"],
             "execution_flags": flags,
@@ -231,6 +245,12 @@ def create_app(root: Path | None = None) -> Flask:
             "environment_banner": ui["environment_banner"],
             "paper_book_label": ui["paper_book_label"],
             "live_account_label": ui["live_account_label"],
+            "active_book_label": ui["active_book_label"],
+            "risk_book_label": ui["risk_book_label"],
+            "active_runtime": ui["environment"],
+            "live_account_status": ui["live_account_status"],
+            "paper_book_status": ui["paper_book_status"],
+            "book_kind": ui["book_kind"],
             "live_order_placement_enabled": False,
             "no_live_placement_banner": ui["no_live_placement_banner"],
             "csrf_token": _csrf_token(),
@@ -242,6 +262,7 @@ def create_app(root: Path | None = None) -> Flask:
             "is_user": bool(user and is_viewer_role(user.get("role"))),
             "user_initials": initials,
             "pending_count": pending_count,
+            "unread_count": unread_count,
         }
 
     @app.get("/login")
@@ -370,7 +391,7 @@ def create_app(root: Path | None = None) -> Flask:
         try:
             amount = parse_amount(_field("amount", "assigned_amount"))
             if nav is None:
-                raise ValueError("paper book NAV is not available")
+                raise ValueError("LIVE NAV is not available" if resolve_ui_flags()["environment"] == "LIVE" else "paper book NAV is not available")
             user = accounts.assign_amount(user_id, amount, nav)
         except KeyError:
             abort(404)
@@ -437,6 +458,51 @@ def create_app(root: Path | None = None) -> Flask:
         assert "nav" not in payload
         return jsonify(payload)
 
+    @app.get("/healthz")
+    def healthz():
+        from agentic_portfolio.agent.heartbeat import load_health
+
+        payload = load_health(app.config["ROOT"])
+        payload["live_order_placement_enabled"] = False
+        return jsonify(payload)
+
+    @app.get("/watchlist")
+    def watchlist_page():
+        return render_template("watchlist.html", view=watchlist_view(state()), page="watchlist")
+
+    @app.get("/notifications")
+    def notifications_page():
+        return render_template("notifications.html", view=notifications_view(state()), page="notifications")
+
+    @app.post("/notifications/read")
+    def notifications_read():
+        NotificationStore(app.config["ROOT"]).mark_read(request.form.get("notification_id") or None)
+        if _json_request():
+            return jsonify({"ok": True})
+        return redirect(url_for("notifications_page"))
+
+    @app.get("/api/watchlist")
+    def api_watchlist():
+        return jsonify(watchlist_view(state()))
+
+    @app.get("/api/notifications")
+    def api_notifications():
+        return jsonify(notifications_view(state()))
+
+    @app.post("/api/notifications/read")
+    def api_notifications_read():
+        payload = request.get_json(silent=True) or {}
+        NotificationStore(app.config["ROOT"]).mark_read(payload.get("notification_id"))
+        return jsonify({"ok": True, **notifications_view(state())})
+
+    @app.get("/api/agent")
+    def api_agent():
+        return jsonify(agent_runtime_view(state()))
+
+    @app.get("/api/activity")
+    def api_activity():
+        return jsonify(activity_log_view(state()))
+
     @app.get("/approvals")
     def approvals_page():
         return render_template("approvals.html", view=list_approvals(state()), page="approvals")
@@ -494,7 +560,7 @@ def create_app(root: Path | None = None) -> Flask:
         if _json_request():
             return jsonify({"ok": True, "packet": packet, "placed_order": False, "approved_does_not_place_order": True})
         flash(
-            f"{packet['symbol']} {status.value}. This still does not place an order."
+            f"{packet['symbol']} {packet.get('status')}. This still does not place an order."
         )
         return redirect(url_for("approval_detail_page", approval_id=approval_id))
 
@@ -513,6 +579,14 @@ def create_app(root: Path | None = None) -> Flask:
     @app.get("/discovery")
     def discovery_page():
         return render_template("discovery.html", view=discovery_view(state()), page="discovery")
+
+    @app.get("/ai")
+    def ai_page():
+        return render_template("ai.html", view=ai_view(state()), page="ai")
+
+    @app.get("/ai/activity")
+    def ai_activity_page():
+        return render_template("ai_activity.html", view=ai_activity_view(state()), page="ai")
 
     @app.get("/research/theses/<thesis_id>")
     def thesis_detail_page(thesis_id: str):
@@ -573,6 +647,14 @@ def create_app(root: Path | None = None) -> Flask:
     def api_discovery():
         return jsonify(discovery_view(state()))
 
+    @app.get("/api/ai")
+    def api_ai():
+        return jsonify(ai_view(state()))
+
+    @app.get("/api/ai/activity")
+    def api_ai_activity():
+        return jsonify(ai_activity_view(state()))
+
     @app.get("/api/orders")
     def api_orders():
         return jsonify(orders_view(state()))
@@ -602,5 +684,39 @@ def create_app(root: Path | None = None) -> Flask:
         if _json_request():
             return jsonify({"ok": False, "error": "forbidden"}), 403
         return render_template("forbidden.html", page="forbidden"), 403
+
+    @app.errorhandler(Exception)
+    def uncaught(exc):
+        if isinstance(exc, HTTPException):
+            return exc
+        from agentic_portfolio.runtime import RuntimeMode, get_active_runtime
+
+        if get_active_runtime() is RuntimeMode.LIVE:
+            app.logger.exception("LIVE dashboard failed closed")
+            if _json_request():
+                return jsonify(
+                    {
+                        "ok": False,
+                        "error": "LIVE DATA UNAVAILABLE",
+                        "live_data_unavailable": True,
+                        "live_order_placement_enabled": False,
+                    }
+                ), 500
+            try:
+                return render_template(
+                    "unavailable.html",
+                    page="system",
+                    message="LIVE DATA UNAVAILABLE",
+                ), 500
+            except Exception:
+                app.logger.exception("LIVE fail-closed page also failed")
+                return (
+                    "<!DOCTYPE html><title>LIVE DATA UNAVAILABLE</title>"
+                    "<h1>LIVE DATA UNAVAILABLE</h1>"
+                    "<p>The dashboard failed closed. Live order placement remains disabled.</p>",
+                    500,
+                    {"Content-Type": "text/html; charset=utf-8"},
+                )
+        raise
 
     return app

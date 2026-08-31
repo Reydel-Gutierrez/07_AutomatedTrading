@@ -69,6 +69,45 @@ class ProvenanceKind(str, Enum):
     CONFLICTING = "CONFLICTING"
 
 
+class FactOrigin(str, Enum):
+    """Origin of a market fact. LIVE AI may only consume MCP_OBSERVED or DERIVED."""
+
+    MCP_OBSERVED = "MCP_OBSERVED"
+    DERIVED = "DERIVED"
+    MISSING = "MISSING"
+    UNAVAILABLE = "UNAVAILABLE"
+    FIXTURE = "FIXTURE"
+    TEST = "TEST"
+    DEMO = "DEMO"
+    SAMPLE = "SAMPLE"
+    SYNTHETIC = "SYNTHETIC"
+    PAPER = "PAPER"
+    MOCK = "MOCK"
+
+
+class FreshnessStatus(str, Enum):
+    FRESH = "FRESH"
+    LAST_SESSION = "LAST_SESSION"
+    OFF_HOURS = "OFF_HOURS"
+    INDICATIVE = "INDICATIVE"
+    STALE = "STALE"
+    UNKNOWN = "UNKNOWN"
+    UNAVAILABLE = "UNAVAILABLE"
+
+
+class CandidateValidationStatus(str, Enum):
+    VALID = "VALID"
+    INVALID_IDENTITY = "INVALID_IDENTITY"
+    MISSING_IDENTITY = "MISSING_IDENTITY"
+    IDENTITY_CONFLICT = "IDENTITY_CONFLICT"
+    STALE_QUOTE = "STALE_QUOTE"
+    MISSING_QUOTE = "MISSING_QUOTE"
+    MISSING_LIQUIDITY = "MISSING_LIQUIDITY"
+    STALE_FUNDAMENTALS = "STALE_FUNDAMENTALS"
+    UNSUPPORTED_SECURITY_TYPE = "UNSUPPORTED_SECURITY_TYPE"
+    SYNTHETIC_DATA_DETECTED = "SYNTHETIC_DATA_DETECTED"
+
+
 class EmbeddedSectorStatus(str, Enum):
     AVAILABLE = "AVAILABLE"
     PARTIAL = "PARTIAL"
@@ -137,6 +176,34 @@ class EvidenceValue:
     provenance: ProvenanceKind = ProvenanceKind.MISSING
     confidence: str | None = None
     status: str | None = None
+
+
+@dataclass
+class ProvenanceFact:
+    """A single market fact with source, time, and freshness. Missing stays unavailable."""
+
+    value: Any = None
+    source: str | None = None
+    as_of: str | None = None
+    freshness: FreshnessStatus = FreshnessStatus.UNAVAILABLE
+    origin: FactOrigin = FactOrigin.MISSING
+    unavailable: bool = True
+    notes: list[str] = field(default_factory=list)
+    session: str | None = None
+
+    def for_ai(self) -> dict[str, Any]:
+        out = {
+            "value": None if self.unavailable else self.value,
+            "unavailable": bool(self.unavailable or self.value is None),
+            "source": self.source,
+            "as_of": self.as_of,
+            "freshness": self.freshness.value if isinstance(self.freshness, FreshnessStatus) else self.freshness,
+            "origin": self.origin.value if isinstance(self.origin, FactOrigin) else self.origin,
+            "notes": list(self.notes or []),
+        }
+        if self.session:
+            out["session"] = self.session
+        return out
 
 
 @dataclass

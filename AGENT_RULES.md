@@ -16,7 +16,7 @@ AI may reason and may **tighten**. AI may **never** loosen hard ceilings, skip c
 
 Agentic `account_number` in `config/account_rules.json` only. Confirm via `get_accounts` before any future mutation. Long US stocks/ETFs only.
 
-NAV is whatever `get_portfolio` returns. It is **not** a policy input you hardcode.
+NAV is whatever `get_portfolio` returns on the configured Agentic account. It is **not** a policy input you hardcode. LIVE runtime must not use paper $10,000 NAV, paper positions, paper fills, or paper thesis activation.
 
 ## Execution (do not flip)
 
@@ -76,3 +76,17 @@ Human Approval Packet output is an `ApprovalPacket` (`PENDING_HUMAN_APPROVAL` / 
 Robinhood review-only output is a persisted `ReviewResult` (`REVIEW_READY` / `REVIEW_ACCEPTED` / `REVIEW_REJECTED` / `REVIEW_EXPIRED` / `REVIEW_FAILED`). Revalidate quote, portfolio, thesis/research, and risk state. Re-check Risk Gate. Call only `review_equity_order`. Fail closed if the approval is no longer valid, facts drifted, Risk Gate no longer permits, or Robinhood differs materially from the approved OrderPlan. Do not place or cancel. Do not convert `REVIEW_ACCEPTED` into execution.
 
 Python collects facts and calculates deterministic values. AI Research interprets evidence. AI Thesis/Decision allocates and chooses action. AI Monitoring reassesses existing theses. Execution is mechanical. Do not expand Python with large qualitative stock-picking rule sets.
+
+## Production AI runtime
+
+Cursor = development agent. Raspberry Pi application = 24/7 autonomous production runtime (`scripts/run_service.py`). The scheduler is internal orchestration, not process lifetime. AI providers (OpenAI, Anthropic) = reasoning services used only through the AI Gateway. Risk Gate = deterministic authority. Broker = authoritative account/execution state.
+
+The process stays alive on weekends and holidays. Off-hours work must not treat stale liquidity as executable. APPROVE on the dashboard transitions to `APPROVED_AWAITING_EXECUTION_IMPLEMENTATION` and does not place an order.
+
+AI must **never** be described as having unrestricted trading authority.
+
+LIVE: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, `LIVE_ORDER_PLACEMENT=false`. Do not call `place_equity_order` or `cancel_equity_order`. Any placement attempt fails closed and writes an audit event.
+
+All external AI calls go through `src/agentic_portfolio/ai/gateway.py`. Model names live in `config/ai.json`. Combined spend across every provider and model must never exceed **$10 USD per calendar month**. Structured JSON only. Application facts are assembled in Python; the model interprets them and must not replace NAV/cash/positions.
+
+LIVE AI artifacts (`state/live_ai/`) must not mix with PAPER thesis/approval artifacts.

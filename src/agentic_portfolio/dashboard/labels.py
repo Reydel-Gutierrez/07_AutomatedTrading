@@ -19,6 +19,7 @@ ALLOCATION_ORDER = (
 )
 
 UNAVAILABLE = "Not enough data"
+LIVE_DATA_UNAVAILABLE = "LIVE DATA UNAVAILABLE"
 HISTORY_COLLECTING = "Performance history is being collected."
 
 

@@ -11,7 +11,7 @@
   <article class="kpi">
     <h2>Name</h2>
     <p class="figure">{{ view.name }}</p>
-    <p class="meta">{{ paper_book_label }} · no live order placement</p>
+    <p class="meta">{{ view.active_book_label or paper_book_label }} · no live order placement</p>
   </article>
   <article class="kpi">
     <h2>Starting investment</h2>
@@ -21,7 +21,7 @@
   <article class="kpi">
     <h2>Current value</h2>
     <p class="figure">{{ view.current_value_display }}</p>
-    <p class="meta">Tracks paper portfolio return from assignment baseline</p>
+    <p class="meta">{% if view.environment == 'LIVE' %}Tracks live Agentic NAV from assignment baseline{% else %}Tracks paper portfolio return from assignment baseline{% endif %}</p>
   </article>
   <article class="kpi">
     <h2>Gain / loss</h2>
@@ -33,7 +33,7 @@
 <section class="grid-2">
   <article class="card">
     <h2>Portfolio performance</h2>
-    <p class="meta">{{ paper_book_label }} · your assigned dollars only</p>
+    <p class="meta">{{ view.active_book_label or paper_book_label }} · your assigned dollars only</p>
     {% if view.chart %}
       <svg class="chart" viewBox="0 0 {{ view.chart.width }} {{ view.chart.height }}" role="img" aria-label="Assigned value over time">
         <polyline fill="none" stroke="#4f6f52" stroke-width="2" points="{{ view.chart.polyline }}"></polyline>
@@ -45,7 +45,7 @@
   </article>
   <article class="card">
     <h2>SPY comparison</h2>
-    <p class="meta">{{ paper_book_label }}</p>
+    <p class="meta">{{ view.active_book_label or paper_book_label }}</p>
     {% if view.spy.observed %}
       <p>{{ view.spy.note }}</p>
       {% if view.spy.return_display %}<p class="figure-sm">SPY {{ view.spy.return_display }}</p>{% endif %}
@@ -59,7 +59,7 @@
 <section class="grid-2">
   <article class="card chart-card">
     <h2>Portfolio allocation</h2>
-    <p class="meta">Percent of the shared paper book · dollar NAV is not shown</p>
+    <p class="meta">Percent of the shared {{ 'LIVE account' if view.environment == 'LIVE' else 'paper book' }} · dollar NAV is not shown</p>
     <div class="alloc-wrap">
       <div class="chart-frame donut">
         <canvas id="allocation-chart" aria-label="Allocation donut"></canvas>

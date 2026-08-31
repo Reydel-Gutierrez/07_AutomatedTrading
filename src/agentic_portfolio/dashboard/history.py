@@ -1,4 +1,4 @@
-"""Observed paper NAV snapshots for dashboard charts. Never fabricates prices."""
+"""Observed NAV snapshots for dashboard charts. Never fabricates prices."""
 
 from __future__ import annotations
 
@@ -8,13 +8,18 @@ from pathlib import Path
 from typing import Any
 
 from agentic_portfolio.paths import project_root
+from agentic_portfolio.runtime import RuntimeMode, resolve_runtime_mode
 
 HISTORY_NAME = "dashboard_nav_history.json"
 MIN_CHART_POINTS = 2
 
 
-def history_path(root: Path | None = None) -> Path:
-    return (root or project_root()) / "state" / HISTORY_NAME
+def history_path(root: Path | None = None, *, mode: str | None = None) -> Path:
+    base = Path(root) if root is not None else project_root()
+    current = (mode or resolve_runtime_mode().value).upper()
+    if current == RuntimeMode.LIVE.value:
+        return base / "state" / "live_book" / "nav_history.json"
+    return base / "state" / HISTORY_NAME
 
 
 def utc_now() -> str:
@@ -123,9 +128,47 @@ def _save(path: Path, points: list[dict[str, Any]]) -> None:
     path.write_text(json.dumps({"points": points}, indent=2, default=str), encoding="utf-8")
 
 
-def load_nav_history(root: Path | None = None) -> list[dict[str, Any]]:
+def _live_snapshot_points(root: Path) -> list[dict[str, Any]]:
+    points: list[dict[str, Any]] = []
+    snap_dir = root / "state" / "live_book" / "snapshots"
+    if snap_dir.is_dir():
+        for path in sorted(snap_dir.glob("*.json")):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            ctx = data.get("context") or {}
+            point = _point(
+                ctx.get("timestamp") or data.get("created_at"),
+                ctx.get("current_nav"),
+                ctx.get("spy"),
+            )
+            if point:
+                points.append(point)
+    current = root / "state" / "live_book" / "current.json"
+    if current.is_file():
+        try:
+            data = json.loads(current.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            data = {}
+        ctx = data.get("context") or {}
+        point = _point(
+            ctx.get("timestamp") or data.get("created_at"),
+            ctx.get("current_nav"),
+            ctx.get("spy"),
+        )
+        if point:
+            points.append(point)
+    return points
+
+
+def load_nav_history(root: Path | None = None, *, mode: str | None = None) -> list[dict[str, Any]]:
     base = Path(root) if root is not None else project_root()
-    merged = _merge(_load_file(history_path(base)) + _paper_snapshot_points(base))
+    current = (mode or resolve_runtime_mode().value).upper()
+    if current == RuntimeMode.LIVE.value:
+        merged = _merge(_load_file(history_path(base, mode=current)) + _live_snapshot_points(base))
+        return merged
+    merged = _merge(_load_file(history_path(base, mode=current)) + _paper_snapshot_points(base))
     return merged
 
 
@@ -135,10 +178,12 @@ def record_nav_snapshot(
     nav: float | None,
     spy: Any = None,
     at: str | None = None,
+    mode: str | None = None,
 ) -> list[dict[str, Any]]:
     """Persist an observed NAV. Skips if NAV is missing. Does not invent SPY."""
     base = Path(root) if root is not None else project_root()
-    existing = load_nav_history(base)
+    current = (mode or resolve_runtime_mode().value).upper()
+    existing = load_nav_history(base, mode=current)
     incoming = _point(at or utc_now(), nav, spy)
     if incoming is None:
         return existing
@@ -149,7 +194,7 @@ def record_nav_snapshot(
         if last_at[:16] == new_at[:16]:
             return existing
     merged = _merge(existing + [incoming])
-    _save(history_path(base), merged)
+    _save(history_path(base, mode=current), merged)
     return merged
 
 

@@ -1,0 +1,93 @@
+"""Robinhood read-only connection manager. Reconnects; fails closed on auth loss."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Any, Callable, Mapping
+
+from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable
+from agentic_portfolio.adapters.readonly_runtime import (
+    ReadonlyBrokerRuntime,
+    bootstrap_readonly_broker_runtime,
+    reset_readonly_broker_runtime,
+)
+from agentic_portfolio.agent.activity import log_activity
+from agentic_portfolio.notify import NotificationEngine, NotificationKind
+
+
+class ConnectionManager:
+    def __init__(
+        self,
+        *,
+        bootstrap: Callable[..., ReadonlyBrokerRuntime] | None = None,
+        notify: NotificationEngine | None = None,
+        root=None,
+        now_fn: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._bootstrap = bootstrap or bootstrap_readonly_broker_runtime
+        self.notify = notify
+        self.root = root
+        self._now = now_fn or (lambda: datetime.now(timezone.utc))
+        self.runtime: ReadonlyBrokerRuntime | None = None
+        self.last_error: str | None = None
+        self.connected = False
+        self.last_change_at: str | None = None
+
+    def now(self) -> datetime:
+        stamp = self._now()
+        if stamp.tzinfo is None:
+            return stamp.replace(tzinfo=timezone.utc)
+        return stamp
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "connected": self.connected,
+            "bound": bool(self.runtime and self.runtime.bound),
+            "error": self.last_error,
+            "mode": "READ_ONLY",
+            "last_change_at": self.last_change_at,
+            "LIVE_ORDER_PLACEMENT": False,
+        }
+
+    def ensure(self, *, environ: Mapping[str, str] | None = None, force: bool = False) -> ReadonlyBrokerRuntime:
+        prior = self.connected
+        try:
+            self.runtime = self._bootstrap(environ=environ, force=force or self.runtime is None or not self.connected)
+        except Exception as exc:  # noqa: BLE001 — fail closed, stay alive
+            self.runtime = None
+            self.connected = False
+            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_change_at = self.now().isoformat()
+            self._lost(prior)
+            raise LiveDataUnavailable(self.last_error) from exc
+        bound = bool(self.runtime and self.runtime.bound)
+        self.connected = bound
+        self.last_error = None if bound else (self.runtime.initialization_error if self.runtime else "not bound")
+        self.last_change_at = self.now().isoformat()
+        if bound and not prior:
+            self._recovered()
+        elif not bound:
+            self._lost(prior)
+        if not bound:
+            raise LiveDataUnavailable(self.last_error or "authorized Robinhood MCP transport is not bound")
+        return self.runtime
+
+    def _lost(self, prior: bool) -> None:
+        log_activity(self.root, "CONNECTION_FAILURE", error=self.last_error)
+        if self.notify is not None and (prior or self.last_error):
+            self.notify.emit(
+                NotificationKind.BROKER_CONNECTION_LOST,
+                title="Robinhood connection lost",
+                body=str(self.last_error or "fail closed"),
+                payload={"fail_closed": True},
+            )
+
+    def _recovered(self) -> None:
+        log_activity(self.root, "CONNECTION_RECOVERY")
+        if self.notify is not None:
+            self.notify.emit(
+                NotificationKind.BROKER_CONNECTION_RESTORED,
+                title="Robinhood connection restored",
+                body="Read-only transport is bound again.",
+                payload={"fail_closed": False},
+            )

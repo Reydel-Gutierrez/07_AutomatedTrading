@@ -7,6 +7,8 @@ Reasoning: `STRATEGY.md`. Risk: `RISK_RULES.md`.
 
 Live trading **off** except informational `review_equity_order` after a still-valid APPROVED packet. Stop after Robinhood review-only. No place/cancel. No transfers.
 
+Production AI is **advisory**. Cursor is the development agent. The Raspberry Pi application is the autonomous production runtime. OpenAI/Anthropic are reasoning services used only through the AI Gateway. Risk Gate is the deterministic authority. The broker is the authoritative account/execution state. AI never has unrestricted trading authority.
+
 ## Layers
 
 | Layer | Authority |
@@ -21,12 +23,13 @@ Keep these modules separate:
 
 | Module | Role |
 |---|---|
-| Robinhood Read Adapter | Facts only (`src/agentic_portfolio/adapters/`) |
-| Portfolio Context | Observed book + session SOD + HWM |
+| Robinhood Read Adapter | Facts only (`src/agentic_portfolio/adapters/`). LIVE portfolio refresh confirms the Agentic account and maps `get_portfolio` / `get_equity_positions` into the canonical snapshot. |
+| Portfolio Context | Observed book + session SOD + HWM. **LIVE** source of truth is the Agentic Robinhood account (`state/live_book`). **PAPER** source of truth is the isolated paper book (`state/paper_book`) for tests/dev. The two never mix. |
 | Security Classification | Deterministic class; AI cannot override |
 | Sleeve Registry | Persisted role; no silent sleeve changes |
 | Thesis Registry | Decision/review records; not a reasoning engine. New theses from this stage stay DRAFT until a future real execution. |
-| Candidate Discovery | Research-queue generation (`src/agentic_portfolio/discovery/`). Finds what is worth researching. Does **not** buy, size, or write ACTIVE theses. Same-sector names are overlap-penalized and comparison-grouped, not count-rejected. |
+| AI Gateway | Sole caller of AI providers (`src/agentic_portfolio/ai/`). OpenAI + Anthropic adapters. Structured JSON only. Hard $10/month budget. |
+| Candidate Discovery | Research-queue generation (`src/agentic_portfolio/discovery/`). Finds what is worth researching. Does **not** buy, size, or write ACTIVE theses. Same-sector names are overlap-penalized and comparison-grouped, not count-rejected. Production path: universe → eligibility → quantitative ranking → cheap AI screen → deep research → portfolio reasoning → Risk Gate → **LIVE proposal**. Placement is forbidden. |
 | Deep Research | Advisory interpretation (`src/agentic_portfolio/research/`). Python collects facts and derived metrics. A provider-agnostic `ResearchReasoner` interprets. Output is a persisted `ResearchReport`. Does **not** allocate, buy, or bypass Risk Gate. |
 | Investment Thesis + Portfolio Decision | Advisory (`src/agentic_portfolio/decision/`). AI forms/updates a DRAFT thesis and chooses BUY/ADD/HOLD/REDUCE/SELL/WATCH/REJECT/NO_ACTION vs cash and SPY. Python validates, persists, converts to `ProposedAction`, and sends it to the existing Risk Gate. No stock-picking thresholds. No broker stops. |
 | Position Monitoring + Thesis Reassessment | Advisory (`src/agentic_portfolio/monitoring/`). Python collects position facts and detects triggers. AI interprets new evidence. Meaningful triggers request Research refresh, reassess the thesis, run Portfolio Decision, and send HOLD/ADD/REDUCE/SELL/NO_ACTION to Risk Gate. Price movement alone does not invalidate CORE. Exit conditions are not broker stop orders. |
@@ -36,8 +39,27 @@ Keep these modules separate:
 | Human Approval Packet | Packaging (`src/agentic_portfolio/approval/`). Turns a Risk-Gate-approved paper OrderPlan plus thesis/research/decision/risk/context into a human-readable packet. APPROVED does not place an order. Packets expire or are superseded when facts drift. |
 | Robinhood Review-Only | Preflight (`src/agentic_portfolio/review/`). Takes a still-valid APPROVED ApprovalPacket, revalidates, re-checks Risk Gate, and calls `review_equity_order`. Persists `ReviewResult`. REVIEW_ACCEPTED does not execute. Does not place or cancel. |
 | Journal | Append-only records |
+| 24/7 Agent Runtime | Long-running process (`src/agentic_portfolio/agent/`). Stays alive on weekends/holidays. Internal orchestrator selects jobs from market phase. One failed job cannot kill the service. |
+| Persistent Watch / Thesis | LIVE watch items (`src/agentic_portfolio/watch/`). Survive close and restart. Off-hours AI may only write CONDITIONAL next-session plans. |
+| LIVE Approval Queue | Human queue (`src/agentic_portfolio/live_approval/`). APPROVE → `APPROVED_AWAITING_EXECUTION_IMPLEMENTATION`. Does not place. |
+| Notifications | Dashboard events (`src/agentic_portfolio/notify/`). Sinks can be added later without changing trading logic. |
 
-Discovery finds things to research. Research determines whether the opportunity is real. Portfolio Decision decides what we want to do. Risk Gate decides whether we are allowed to do it. Position Monitoring decides whether existing holdings still deserve that chain. Execution Controller converts a permitted action into a paper OrderPlan. Paper fill simulates the fill on an isolated paper book. Human Approval Packet packages that plan for a human; approval still does not trade. Robinhood review-only asks the broker what it would say; it still does not place.
+The production application is a **24/7 autonomous portfolio-management service**, not a market-hours script. Raspberry Pi boot starts `scripts/run_service.py`: dashboard + agent runtime. The scheduler is only an internal orchestrator.
+
+```
+while service_running:
+    determine market/session phase
+    run due jobs (isolated failures)
+    sleep until next due job / heartbeat
+```
+
+Phases: MARKET_OPEN, PREMARKET, AFTER_CLOSE, OVERNIGHT, WEEKEND, HOLIDAY.
+
+Off-hours work uses the latest completed session. It must not treat stale/off-hours quotes as executable liquidity. When the next regular session opens, deterministic software refreshes price/spread/liquidity/catalyst/cash/Risk Gate. Conditions fail → remain WATCH / invalidate / expire. Conditions pass → LIVE approval queue. APPROVE still does not place.
+
+Dashboard is the control room (system, portfolio, discovery, watchlist, AI, approvals banner, notifications, activity).
+
+Discovery finds things to research. Research determines whether the opportunity is real. Portfolio Decision decides what we want to do. Risk Gate decides whether we are allowed to do it. Position Monitoring decides whether existing holdings still deserve that chain. Execution Controller converts a permitted action into a paper OrderPlan. Paper fill simulates the fill on an isolated paper book. Human Approval Packet packages that plan for a human; approval still does not trade. Robinhood review-only asks the broker what it would say; it still does not place. The 24/7 runtime keeps this chain warm around the clock without enabling placement.
 
 ```
 MARKET / SECURITY DATA (read-only adapters + classification)
@@ -99,7 +121,9 @@ MARKET DATA (NAV, SPY, session SOD NAV — America/New_York)
 
 ## NAV
 
-Always `current_NAV` from the Agentic account. Formulas in policy JSON. No encoded portfolio size.
+Always `current_NAV` from the Agentic account in LIVE mode (`get_portfolio` → persisted `state/live_book`). Formulas in policy JSON. No encoded portfolio size. The paper $10,000 book is not a LIVE input.
+
+Runtime modes: `PAPER` (tests/dev) and `LIVE` (Robinhood Agentic account). Config: `config/runtime.json`. Env: `AGENTIC_RUNTIME_MODE` / `DASHBOARD_ENVIRONMENT`. Live order placement remains disabled in both modes.
 
 ## MCP
 
@@ -118,9 +142,15 @@ Read-only plus informational `review_equity_order` after a still-valid APPROVED 
 - Human Approval Packet (no broker calls; APPROVED does not place) → `config/approval.json`  
 - Robinhood review-only (`review_equity_order` preflight; does not place) → `config/review.json`  
 - Pipeline stage flags → `config/pipeline.json`  
+- Runtime PAPER/LIVE → `config/runtime.json`  
+- AI Gateway / $10 monthly cap / model roles / scheduler → `config/ai.json`  
 
 ## Kernel (permanent)
 
-`src/agentic_portfolio/` — portfolio context, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, deep research, investment thesis + portfolio decision, position monitoring + thesis reassessment, deterministic risk gate, **paper Execution Controller**, **paper fill + blotter**, **human approval packet**, **Robinhood review-only**. Theses created at Decision stay DRAFT until a future real execution. A paper BUY fill may mark an isolated paper thesis ACTIVE; live thesis/account state is untouched. Monitoring may mark an existing thesis WEAKENED/INVALIDATED; that is not a broker stop and not live trading. Execution Controller does not invent stop orders. Paper fill does not invent broker behavior. Approving a packet does not place an order. Review-only may call `review_equity_order` and must not place or cancel.
+`src/agentic_portfolio/` — portfolio context, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, **AI Gateway (the only module that may call an AI provider)**, deep research, investment thesis + portfolio decision, position monitoring + thesis reassessment, deterministic risk gate, **paper Execution Controller**, **paper fill + blotter**, **human approval packet**, **Robinhood review-only**. LIVE AI artifacts live in `state/live_ai/` and never mix with PAPER thesis/approval artifacts. Theses created at Decision stay DRAFT until a future real execution. A paper BUY fill may mark an isolated paper thesis ACTIVE; live thesis/account state is untouched. Monitoring may mark an existing thesis WEAKENED/INVALIDATED; that is not a broker stop and not live trading. Execution Controller does not invent stop orders. Paper fill does not invent broker behavior. Approving a packet does not place an order. Review-only may call `review_equity_order` and must not place or cancel.
+
+LIVE invariants: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, `LIVE_ORDER_PLACEMENT=false`. Combined AI spend across every provider and model is capped at **$10 USD per calendar month** (America/New_York). Restarting the app cannot reset the ledger.
+
+The Raspberry Pi scheduler (`scripts/run_scheduler.py`) runs PREMARKET / MARKET HOURS / POSTMARKET jobs without Cursor. Most ticks are deterministic. AI is invoked only for new shortlisted candidates, material new information, stored reassessment conditions, material portfolio-context changes, or a due research refresh.
 
 Facts (NAV, cash, positions) vs interpretation (research/thesis/monitoring) stay separated. Classification is deterministic. Discovery scores structured signals; crowded sector/sleeve names get `OVERLAP_PRIORITY_PENALTY` / `DEFERRED_DUE_TO_RESEARCH_QUEUE_OVERLAP` and a comparison group — they are not hard-rejected. Research interprets a `ResearchEvidencePacket` through `ResearchReasoner` (programmatic; Cursor is not the runtime). Tests in `tests/` prove **scale invariance** (same % → same verdict at $1k–$1M; identical opportunity → identical discovery score; research conclusions do not depend on a hardcoded NAV).

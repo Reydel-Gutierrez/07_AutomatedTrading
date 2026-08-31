@@ -279,6 +279,70 @@ Execution flags unchanged: `auto_execution=false`, `live_trade_actions_allowed=f
 
 ---
 
+## 2026-08-30 — LIVE runtime source of truth
+
+**Type:** `config_change` / `live_portfolio_snapshot`
+
+LIVE mode now uses the Agentic Robinhood account as the single source of truth for NAV, cash, buying power, positions, quantities, market values, allocations, concentration, HWM/drawdown, daily P/L baseline, dashboard, family-account scaling, monitoring holdings, and Risk Gate inputs.
+
+Paper $10,000 book, paper fills, paper thesis activation, and paper execution state remain for tests/dev only. LIVE fails closed on the wrong account, missing Robinhood data, or paper contamination.
+
+**Observed (read-only MCP):** Agentic `549688554` confirmed (`agentic_allowed`); NAV $500; cash $500; buying power $500; no positions. Weekend / regular hours closed. Live placement disabled.
+
+**MCP called:** `get_accounts`, `get_portfolio`, `get_equity_positions`, `get_equity_quotes`, `get_equity_orders`.
+
+**MCP NOT called:** `place_equity_order`, `cancel_equity_order`, `review_equity_order`, option/crypto trading, deposits/withdrawals/transfers.
+
+Launch check: `PYTHONPATH=src python scripts/run_live_launch_check.py`.
+
+Execution flags unchanged: `auto_execution=false`, `live_trade_actions_allowed=false`, `require_human_approval=true`.
+
+**Next permanent component:** Live placement remains gated off. Real AI + `place_equity_order` still blocked until an explicit human enable.
+
+---
+
+## 2026-08-30 — Production AI Gateway (proposal-only)
+
+**Type:** `config_change` / `ai_runtime`
+
+Added a centralized AI Gateway (`src/agentic_portfolio/ai/`) with OpenAI and Anthropic adapters. No other application code may call an AI provider. Model roles live in `config/ai.json` (screening `gpt-5.6-luna`, research `gpt-5.6-terra`, escalation `gpt-5.6-sol`, fallback Claude Sonnet). Structured JSON schemas only. OpenAI adapter uses `POST /v1/responses`.
+
+Hard global AI budget: **$10 USD per calendar month**. Every request estimates, reserves, executes only if allowed, records actual usage, and persists the ledger (`state/ai_budget/`). Restart cannot reset the cap. $8 conserving, $9.50 critical-only, $10 hard stop. The rest of the system continues when AI is blocked.
+
+LIVE AI may research and create proposals against the confirmed Agentic snapshot. Invariants: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, `LIVE_ORDER_PLACEMENT=false`. `place_equity_order` / `cancel_equity_order` remain forbidden. PAPER AI artifacts cannot appear as LIVE decisions.
+
+Raspberry Pi scheduler: PREMARKET / MARKET HOURS / POSTMARKET. Cursor is development-only. AI providers are reasoning services. Risk Gate remains deterministic authority. Broker remains account source of truth.
+
+Check: `PYTHONPATH=src python scripts/run_live_ai_check.py --scripted`. Real OpenAI: `PYTHONPATH=src python scripts/run_live_ai_check.py --use-real-ai`.
+
+**MCP NOT called:** `place_equity_order`, `cancel_equity_order`, option/crypto trading, deposits/withdrawals/transfers.
+
+---
+
+## 2026-08-30 — First real OpenAI LIVE AI test preparation
+
+**Type:** `config_change` / `ai_runtime`
+
+Mapped production models to the restricted OpenAI project: screening `gpt-5.6-luna`, research `gpt-5.6-terra`, escalation `gpt-5.6-sol`. Anthropic remains optional fallback and is not configured. OpenAI adapter uses `POST https://api.openai.com/v1/responses` (not `/v1/chat/completions`) with `text.format` JSON schema. Pricing table updated from https://developers.openai.com/api/docs/pricing (2026-08-30 standard short-context uncached rates). Combined monthly cap remains **$10**. API key is read only from `OPENAI_API_KEY` and is not logged or persisted. `scripts/run_live_ai_check.py --use-real-ai` is the explicit real-provider path; a present key cannot silently fall back to scripted.
+
+Invariants unchanged: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, `LIVE_ORDER_PLACEMENT=false`. `auto_execution=false`, `live_trade_actions_allowed=false`. `place_equity_order` / `cancel_equity_order` remain forbidden.
+
+**MCP NOT called:** `place_equity_order`, `cancel_equity_order`, option/crypto trading, deposits/withdrawals/transfers.
+
+---
+
+## 2026-08-30 — 24/7 Agent Runtime
+
+**Type:** `architecture` / `runtime`
+
+Corrected direction: the application is a 24/7 autonomous portfolio-management service, not a market-hours script. Added `src/agentic_portfolio/agent/` (session phases, job orchestrator, heartbeat, connection manager, lifecycle), persistent LIVE watch/thesis (`watch/`), LIVE approval queue (`live_approval/`; APPROVE → `APPROVED_AWAITING_EXECUTION_IMPLEMENTATION`), and dashboard notifications (`notify/`). Complete process: `scripts/run_service.py`. Pi unit: `deploy/systemd/agentic-portfolio.service`.
+
+Invariants unchanged: `auto_execution=false`, `live_trade_actions_allowed=false`, `LIVE_ORDER_PLACEMENT=false`. No reachable live place/cancel/review path. $10/month AI cap; 24/7 does not mean constant AI calls.
+
+**MCP NOT called:** `place_equity_order`, `cancel_equity_order`, option/crypto trading, deposits/withdrawals/transfers.
+
+---
+
 ## Template
 
 ```

@@ -23,6 +23,9 @@ build/
 *.key
 credentials*.json
 secrets*.json
+oauth.json
+mcp-auth.json
+*.oauth.json
 
 # Kernel runtime (generated locally; includes password hashes)
 state/**

@@ -53,6 +53,9 @@ class QuoteSnapshot:
     observed_at: str | None = None
     stale: bool = False
     source: str | None = None
+    bid_as_of: str | None = None
+    ask_as_of: str | None = None
+    spread_freshness: str | None = None
 
 
 @dataclass

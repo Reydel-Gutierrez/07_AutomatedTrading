@@ -195,3 +195,4 @@ class MonitoringResult:
     theses_activated: int = 0
     unsupported_claims: list[str] = field(default_factory=list)
     validation_errors: list[str] = field(default_factory=list)
+    runtime_mode: str | None = None

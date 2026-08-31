@@ -21,7 +21,10 @@
       {% if is_admin %}
       <a href="{{ url_for('dashboard_page') }}" class="{{ 'on' if page == 'dashboard' else '' }}" data-short="Da">Dashboard</a>
       <a href="{{ url_for('discovery_page') }}" class="{{ 'on' if page == 'discovery' else '' }}" data-short="Di">Discovery <span class="badge new">NEW</span></a>
+      <a href="{{ url_for('watchlist_page') }}" class="{{ 'on' if page == 'watchlist' else '' }}" data-short="Wa">Watchlist</a>
+      <a href="{{ url_for('ai_page') }}" class="{{ 'on' if page == 'ai' else '' }}" data-short="AI">AI</a>
       <a href="{{ url_for('approvals_page') }}" class="{{ 'on' if page == 'approvals' else '' }}" data-short="Ap">Approvals{% if pending_count %}<span class="badge count">{{ pending_count }}</span>{% endif %}</a>
+      <a href="{{ url_for('notifications_page') }}" class="{{ 'on' if page == 'notifications' else '' }}" data-short="No">Alerts{% if unread_count %}<span class="badge count">{{ unread_count }}</span>{% endif %}</a>
       <a href="{{ url_for('research_page') }}" class="{{ 'on' if page == 'research' else '' }}" data-short="Re">Research</a>
       <a href="{{ url_for('orders_page') }}" class="{{ 'on' if page == 'orders' else '' }}" data-short="Or">Orders</a>
       <a href="{{ url_for('dashboard_page') }}#positions" data-short="Po">Positions</a>
@@ -56,8 +59,15 @@
     </header>
 
     <div class="plane-bar">
-      <span class="book-tag paper">{{ paper_book_label }}</span>
+      {% if environment == 'LIVE' %}
+      <span class="runtime-chip">ACTIVE RUNTIME: LIVE</span>
+      <span class="book-tag live">LIVE ACCOUNT: {{ live_account_status }}</span>
+      <span class="book-tag paper inactive">PAPER BOOK: {{ paper_book_status }}</span>
+      {% else %}
+      <span class="runtime-chip">ACTIVE RUNTIME: PAPER</span>
+      <span class="book-tag paper">{{ paper_book_label }}: ACTIVE</span>
       <span class="book-tag live">{{ live_account_label }}</span>
+      {% endif %}
     </div>
 
     {% with messages = get_flashed_messages() %}
@@ -69,6 +79,10 @@
         </div>
       {% endif %}
     {% endwith %}
+
+    {% if pending_count %}
+    <div class="halt-banner approval-banner">TRADE APPROVAL REQUIRED — {{ pending_count }}</div>
+    {% endif %}
 
     <main>
       {% block content %}{% endblock %}

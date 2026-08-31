@@ -1,0 +1,48 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-30",
+  "description": "PAPER uses the isolated paper book for tests/dev. LIVE uses the configured Agentic Robinhood account as the single source of truth for NAV, cash, buying power, positions, allocations, HWM/drawdown, daily P/L, dashboard, monitoring, and Risk Gate inputs. Live order placement remains disabled. review_equity_order stays behind the existing approval/review gate.",
+  "mode": "PAPER",
+  "live_order_placement_enabled": false,
+  "env": {
+    "mode": ["AGENTIC_RUNTIME_MODE", "DASHBOARD_ENVIRONMENT"]
+  },
+  "live": {
+    "source_of_truth": "robinhood_agentic_account",
+    "account_config": "config/account_rules.json",
+    "fail_closed_if_wrong_account": true,
+    "fail_closed_if_data_unavailable": true,
+    "never_read_paper_book": true,
+    "never_use_paper_fills": true,
+    "never_use_paper_thesis_activation": true,
+    "snapshot_dir": "state/live_book",
+    "mcp_read_tools": [
+      "get_accounts",
+      "get_portfolio",
+      "get_equity_positions",
+      "get_equity_quotes",
+      "get_equity_orders"
+    ],
+    "mcp_forbidden": [
+      "place_equity_order",
+      "cancel_equity_order",
+      "review_equity_order"
+    ]
+  },
+  "readonly_mcp": {
+    "url": "https://agent.robinhood.com/mcp/trading",
+    "mode": "READ_ONLY",
+    "source": "shared production transport",
+    "env": {
+      "url": ["AGENTIC_READONLY_MCP_URL"],
+      "token": ["AGENTIC_READONLY_MCP_TOKEN"],
+      "token_file": ["AGENTIC_READONLY_MCP_TOKEN_FILE"],
+      "oauth_home": ["AGENTIC_READONLY_MCP_HOME"]
+    }
+  },
+  "paper": {
+    "source_of_truth": "isolated_paper_book",
+    "snapshot_dir": "state/paper_book",
+    "retained_for": ["tests", "dev"]
+  }
+}

@@ -3,7 +3,7 @@
 {% block content %}
 <section class="card">
   <h2>Create user</h2>
-  <p class="meta">{{ paper_book_label }} · not a separate trading book · no live order placement</p>
+  <p class="meta">{{ active_book_label or paper_book_label }} · not a separate trading book · no live order placement</p>
   <form class="auth-form" method="post" action="{{ url_for('family_create') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label for="name">Name</label>
@@ -18,7 +18,7 @@
 
 <section class="card">
   <h2>Users <span class="count">{{ view.member_count }}</span></h2>
-  <p class="meta">Assigned dollars track paper NAV from the baseline recorded at assignment. Changing an amount resets that baseline. {% if not view.nav_available %}Paper book NAV is not available, so amounts cannot be assigned yet.{% endif %}</p>
+  <p class="meta">Assigned dollars track {{ 'LIVE' if view.environment == 'LIVE' else 'paper' }} NAV from the baseline recorded at assignment. Changing an amount resets that baseline. {% if not view.nav_available %}{{ view.active_book_label or paper_book_label }} NAV is not available, so amounts cannot be assigned yet.{% endif %}</p>
   <div class="table-wrap">
     <table>
       <thead>

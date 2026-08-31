@@ -1,0 +1,23 @@
+[Unit]
+Description=Agentic Portfolio 24/7 autonomous service
+Documentation=file:///opt/agentic-portfolio/deploy/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/agentic-portfolio
+Environment=PYTHONPATH=src
+Environment=AGENTIC_RUNTIME_MODE=LIVE
+Environment=DASHBOARD_ENVIRONMENT=LIVE
+ExecStart=/usr/bin/python3 scripts/run_service.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=20
+KillMode=mixed
+
+# Read-only observation. Never places or cancels orders.
+# OAuth tokens live outside the repo (user-level store or env).
+
+[Install]
+WantedBy=multi-user.target

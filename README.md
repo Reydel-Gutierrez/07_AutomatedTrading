@@ -8,9 +8,9 @@ The AI never overrides hard ceilings and **never moves money**.
 
 ## Last observed book (fact, not a budget)
 
-As of 2026-08-29, read-only: NAV $500, buying power $500, cash 100%, no positions.
+As of 2026-08-30, read-only LIVE refresh: Agentic account confirmed (`agentic_allowed`); NAV $500; buying power $500; cash 100%; no positions.
 
-Use live `get_portfolio` going forward. Do not treat $500 as a policy constraint.
+Use live `get_portfolio` going forward. Do not treat $500 as a policy constraint. Do not use the paper $10,000 book as LIVE NAV.
 
 ## Execution (unchanged)
 
@@ -46,7 +46,10 @@ config/execution.json
 config/paper_fill.json
 config/approval.json
 config/review.json
-src/agentic_portfolio/   ← context, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, deep research, thesis+portfolio decision, position monitoring, risk gate, paper execution controller, paper fill/blotter, human approval packet, Robinhood review-only (no place/cancel)
+config/runtime.json
+config/ai.json
+config/dashboard.json
+src/agentic_portfolio/   ← context, LIVE Robinhood snapshot, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, deep research, thesis+portfolio decision, position monitoring, risk gate, paper execution controller, paper fill/blotter, human approval packet, Robinhood review-only (no place/cancel)
 tests/
 logs/  reports/  state/
 ```
@@ -63,7 +66,9 @@ logs/  reports/  state/
 8. `config/paper_fill.json` — paper fill + blotter (isolated paper book; not live trading)  
 9. `config/approval.json` — human approval packet (APPROVED does not place)  
 10. `config/review.json` — Robinhood review-only (`review_equity_order` preflight; does not place)  
-11. If prose ≠ JSON, **stop**
+11. `config/runtime.json` — PAPER vs LIVE source of truth (placement still off)  
+12. `config/ai.json` — AI Gateway roles/providers, $10/month hard cap, conservative LIVE shortlist, Raspberry Pi scheduler  
+13. If prose ≠ JSON, **stop**
 
 ## Candidate Discovery
 
@@ -142,3 +147,33 @@ Does not answer: place or cancel the order.
 Takes an APPROVED, still-valid `ApprovalPacket`, revalidates quote / portfolio / thesis / risk state, re-checks Risk Gate, and calls `review_equity_order`. Persists a `ReviewResult`. `REVIEW_ACCEPTED` does not execute.
 
 Paper/live-shaped run: `PYTHONPATH=src python scripts/run_paper_review.py` (one approved packet; `review_equity_order` only).
+
+## LIVE runtime (read-only)
+
+`PAPER` (default) uses the isolated paper book for tests/dev. `LIVE` uses the Agentic Robinhood account as the single source of truth for NAV, cash, buying power, positions, allocations, HWM/drawdown, daily P/L, dashboard, family shares, monitoring holdings, and Risk Gate inputs.
+
+Switch: `AGENTIC_RUNTIME_MODE=LIVE` or `DASHBOARD_ENVIRONMENT=LIVE` (see `config/runtime.json`). Dashboard shows **LIVE**. It does not fall back to paper $10,000 NAV.
+
+Read-only launch check: `PYTHONPATH=src python scripts/run_live_launch_check.py` (confirms Agentic account, refreshes `state/live_book`, fails if paper state leaks). Does **not** call `place_equity_order`. `review_equity_order` remains behind the existing approval/review gate.
+
+## Production AI (proposal-only)
+
+Cursor is the **development agent**. The Raspberry Pi application (`scripts/run_service.py`) is the **24/7 autonomous production runtime**. The scheduler is an internal orchestrator only. OpenAI/Anthropic are **reasoning services** used only through `src/agentic_portfolio/ai/` (the AI Gateway). Risk Gate remains the deterministic authority. The broker remains the account source of truth.
+
+AI never has unrestricted trading authority. LIVE invariants: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, `LIVE_ORDER_PLACEMENT=false`. Combined spend is capped at **$10/month**. The budget ledger is persisted so a restart cannot reset it.
+
+Complete local application:
+
+```
+$env:PYTHONPATH = "src"
+$env:AGENTIC_RUNTIME_MODE = "LIVE"
+$env:DASHBOARD_ENVIRONMENT = "LIVE"
+python scripts/run_service.py
+```
+
+Dashboard control room: `http://127.0.0.1:3100`. APPROVE does not place an order.
+
+AI never has unrestricted trading authority. LIVE invariants: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, `LIVE_ORDER_PLACEMENT=false`. Combined spend is capped at **$10/month**. The budget ledger is persisted so a restart cannot reset it.
+
+Proposal-only LIVE check: `PYTHONPATH=src python scripts/run_live_ai_check.py --scripted` (confirmed Agentic snapshot; scripted provider; no spend). Real OpenAI check: `PYTHONPATH=src python scripts/run_live_ai_check.py --use-real-ai` (requires `OPENAI_API_KEY`; screening `gpt-5.6-luna`, research `gpt-5.6-terra`, escalation `gpt-5.6-sol` via `POST /v1/responses`). If `OPENAI_API_KEY` is set, the script will not silently substitute the scripted provider. Does **not** call `place_equity_order` or `cancel_equity_order`.
+

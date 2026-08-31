@@ -123,7 +123,7 @@ def run_research(
         normalized, unsupported, errors = validate_reasoning(raw, packet)
         report = apply_validated_payload(report, normalized, packet, unsupported=unsupported)
         report.validation_errors = list(errors)
-        report.completed_at = datetime.now(timezone.utc).isoformat() if persist else now.isoformat()
+        report.completed_at = now.isoformat()
         report.observed_at = payload.observed_at
         report.stale_after = (now + freshness_horizon(candidate.provisional_sleeve, cfg)).isoformat()
         report = _finalize_status(report, packet)

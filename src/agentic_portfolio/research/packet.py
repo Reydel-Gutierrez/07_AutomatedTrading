@@ -22,6 +22,7 @@ from agentic_portfolio.adapters.robinhood_read import (
 from agentic_portfolio.classification import classify
 from agentic_portfolio.policy import load_policy, load_research_config
 from agentic_portfolio.research.filings import facts_from_sec, structured_filing_meta
+from agentic_portfolio.discovery.snapshot import compute_spread_metrics
 from agentic_portfolio.research.metrics import (
     as_float,
     drawdown,
@@ -247,6 +248,8 @@ def build_packet(
     fact("previous_close", snap.previous_close, "get_equity_quotes")
     fact("bid", snap.bid, "get_equity_quotes")
     fact("ask", snap.ask, "get_equity_quotes")
+    fact("bid_price", snap.bid, "get_equity_quotes.bid_price")
+    fact("ask_price", snap.ask, "get_equity_quotes.ask_price")
     fact("volume", snap.volume, "get_equity_quotes")
     fact("market_cap", snap.market_cap, "get_equity_fundamentals")
     fact("shares_outstanding", snap.shares_outstanding, "get_equity_fundamentals")
@@ -321,7 +324,15 @@ def build_packet(
     deriv("ev_ebitda", ratio(ev, ebitda), "derived:ev/ebitda")
     deriv("ev_revenue", ratio(ev, rev0), "derived:ev/revenue")
     deriv("fcf_yield", fcf_yield(as_float(fund.get("free_cash_flow") or fund.get("fcf")), snap.market_cap), "derived:fcf/market_cap")
-    deriv("spread_pct", snap.spread_pct, "derived:bid_ask")
+    deriv("spread_pct", snap.spread_pct, "derived:bid_ask", notes=["unit=fraction", "formula=(ask-bid)/midpoint", "internal_eligibility_field"])
+    spread = compute_spread_metrics(snap.bid, snap.ask)
+    if spread:
+        deriv("absolute_spread_usd", spread["absolute_spread_usd"], "derived:ask-bid", notes=["unit=usd", "formula=ask-bid"])
+        deriv("spread_percent", spread["spread_percent"], "derived:(ask-bid)/midpoint", notes=["unit=fraction", "formula=(ask-bid)/midpoint", "0.0193_means_1.93_percent_not_1.93_dollars"])
+        deriv("spread_bps", spread["spread_bps"], "derived:spread_percent*10000", notes=["unit=bps", "formula=spread_percent*10000"])
+    elif snap.spread_pct is not None:
+        deriv("spread_percent", snap.spread_pct, "derived:bid_ask", notes=["unit=fraction", "formula=(ask-bid)/midpoint", "0.0193_means_1.93_percent_not_1.93_dollars"])
+        deriv("spread_bps", snap.spread_pct * 10000.0, "derived:spread_percent*10000", notes=["unit=bps", "formula=spread_percent*10000"])
     if snap.shares_outstanding and fund.get("shares_outstanding_prior"):
         deriv("share_count_change", share_change(snap.shares_outstanding, as_float(fund.get("shares_outstanding_prior"))), "derived:shares_outstanding")
     debt = as_float(fund.get("total_debt") or fund.get("debt"))

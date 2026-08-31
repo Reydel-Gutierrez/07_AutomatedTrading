@@ -20,7 +20,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
 
-from agentic_portfolio.policy import load_policy
+from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable
+from agentic_portfolio.policy import load_account_rules, load_policy
 from agentic_portfolio.schemas import (
     ClassificationEvidence,
     EmbeddedSectorStatus,
@@ -106,6 +107,130 @@ class ReadOnlyFetcher(Protocol):
     def search_instrument(self, symbol: str) -> Mapping[str, Any] | None: ...
 
     def get_equity_quotes(self, symbol: str) -> Mapping[str, Any] | None: ...
+
+
+INSTRUMENT_READ_TOOLS = CLASSIFICATION_READ_TOOLS
+READONLY_MCP_UNREACHABLE = "readonly_mcp_unreachable"
+
+
+@dataclass
+class MappingReadOnlyFetcher:
+    """Injectable read-only MCP client. Never wraps execution tools."""
+
+    tradability: Mapping[str, Any] | None = None
+    fundamentals: Mapping[str, Any] | None = None
+    search: Mapping[str, Any] | None = None
+    quotes: Mapping[str, Any] | None = None
+    error: BaseException | None = None
+    calls: list[str] = field(default_factory=list)
+    symbol: str | None = None
+
+    @classmethod
+    def from_payloads(cls, symbol: str, payloads: Mapping[str, Any], *, error: BaseException | None = None) -> "MappingReadOnlyFetcher":
+        return cls(
+            symbol=str(symbol).upper(),
+            tradability=payloads.get("tradability"),
+            fundamentals=payloads.get("fundamentals"),
+            search=payloads.get("search"),
+            quotes=payloads.get("quotes"),
+            error=error,
+        )
+
+    def _check(self, name: str, payload: Mapping[str, Any] | None) -> Mapping[str, Any] | None:
+        self.calls.append(name)
+        if self.error is not None:
+            raise self.error
+        if payload is None:
+            return None
+        return dict(payload)
+
+    def get_equity_tradability(self, symbol: str) -> Mapping[str, Any] | None:
+        del symbol
+        return self._check("get_equity_tradability", self.tradability)
+
+    def get_equity_fundamentals(self, symbol: str) -> Mapping[str, Any] | None:
+        del symbol
+        return self._check("get_equity_fundamentals", self.fundamentals)
+
+    def search_instrument(self, symbol: str) -> Mapping[str, Any] | None:
+        del symbol
+        return self._check("search", self.search)
+
+    def get_equity_quotes(self, symbol: str) -> Mapping[str, Any] | None:
+        del symbol
+        return self._check("get_equity_quotes", self.quotes)
+
+
+@dataclass
+class AuthorizedMcpReadAdapter:
+    """Authorized LIVE instrument fact source. Read-only tools only."""
+
+    transport: Any | None = None
+    account_number: str | None = None
+    calls: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if not self.account_number:
+            self.account_number = str(load_account_rules()["account"]["account_number"])
+
+    def _invoke(self, tool: str, **kwargs: Any) -> Mapping[str, Any] | None:
+        if tool in FORBIDDEN_MCP_TOOLS or tool == "review_equity_order":
+            raise LiveDataUnavailable(f"refused forbidden MCP tool: {tool}")
+        self.calls.append(tool)
+        if self.transport is None:
+            raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: authorized Robinhood MCP transport is not bound for {tool}")
+        result = self.transport(tool, **kwargs)
+        return dict(result) if isinstance(result, Mapping) else result
+
+    def get_equity_tradability(self, symbol: str) -> Mapping[str, Any] | None:
+        return self._invoke("get_equity_tradability", account_number=self.account_number, symbols=[str(symbol).upper()])
+
+    def get_equity_fundamentals(self, symbol: str) -> Mapping[str, Any] | None:
+        return self._invoke("get_equity_fundamentals", symbols=[str(symbol).upper()])
+
+    def search_instrument(self, symbol: str) -> Mapping[str, Any] | None:
+        return self._invoke("search", query=str(symbol).upper(), asset_type="instrument", limit=10)
+
+    def get_equity_quotes(self, symbol: str) -> Mapping[str, Any] | None:
+        return self._invoke("get_equity_quotes", symbols=[str(symbol).upper()])
+
+
+def authorized_readonly_fetcher(*, transport: Any | None = None, account_number: str | None = None) -> ReadOnlyFetcher:
+    """Return the application's authorized read-only Robinhood MCP adapter."""
+    from agentic_portfolio.adapters.readonly_runtime import bootstrap_readonly_broker_runtime
+
+    runtime = bootstrap_readonly_broker_runtime(transport=transport, account_number=account_number)
+    if not runtime.bound or runtime.fetcher is None:
+        raise LiveDataUnavailable(
+            runtime.initialization_error
+            or f"{READONLY_MCP_UNREACHABLE}: authorized Robinhood MCP transport is not bound"
+        )
+    return runtime.fetcher
+
+
+def fetch_instrument_payloads(symbol: str, fetcher: ReadOnlyFetcher) -> tuple[dict[str, Any], list[str]]:
+    """Retrieve LIVE instrument MCP payloads via the read-only adapter. Exact ticker only."""
+    ticker = str(symbol).upper()
+    calls: list[str] = []
+    payloads: dict[str, Any] = {}
+    ops = (
+        ("get_equity_tradability", "get_equity_tradability", "tradability"),
+        ("get_equity_fundamentals", "get_equity_fundamentals", "fundamentals"),
+        ("search", "search_instrument", "search"),
+        ("get_equity_quotes", "get_equity_quotes", "quotes"),
+    )
+    for tool, method_name, key in ops:
+        method = getattr(fetcher, method_name, None)
+        if method is None:
+            raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: adapter is missing {tool}")
+        try:
+            payloads[key] = method(ticker)
+        except LiveDataUnavailable:
+            raise
+        except Exception as exc:
+            raise LiveDataUnavailable(f"{tool} failed: {type(exc).__name__}: {exc}") from exc
+        calls.append(tool)
+    return payloads, calls
 
 
 @dataclass
@@ -374,12 +499,15 @@ def _match_search(symbol: str, payload: Mapping[str, Any] | None) -> dict[str, A
     data = payload.get("data", payload)
     results = data.get("results") if isinstance(data, dict) else None
     if not isinstance(results, list):
-        return _first_result(payload)
+        row = _first_result(payload)
+        if row and str(row.get("symbol") or "").upper() == symbol.upper():
+            return row
+        return None
     want = symbol.upper()
     for item in results:
         if isinstance(item, dict) and str(item.get("symbol", "")).upper() == want:
             return dict(item)
-    return dict(results[0]) if results and isinstance(results[0], dict) else None
+    return None
 
 
 def _derive_instrument_kind(name: str | None, industry: str | None, description: str | None) -> tuple[str | None, ProvenanceKind, str]:

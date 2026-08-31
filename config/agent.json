@@ -1,0 +1,50 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-30",
+  "description": "24/7 autonomous portfolio-management service. The process stays alive. The scheduler is an internal orchestrator. Live order placement remains disabled.",
+  "invariants": {
+    "auto_execution": false,
+    "live_trade_actions_allowed": false,
+    "LIVE_ORDER_PLACEMENT": false,
+    "approve_does_not_place": true,
+    "continue_when_ai_exhausted": true,
+    "continue_on_job_failure": true
+  },
+  "heartbeat_seconds": 30,
+  "max_sleep_seconds": 30,
+  "min_sleep_seconds": 0.05,
+  "job_timeout_seconds": 900,
+  "pid_path": "state/runtime/agent.pid",
+  "health_path": "state/runtime/health.json",
+  "state_path": "state/runtime/orchestrator.json",
+  "lock_dir": "state/runtime/locks",
+  "activity_log": "logs/agent_activity.jsonl",
+  "watch": {
+    "price_move_pct": 0.03,
+    "entry_approach_pct": 0.015,
+    "ai_cooldown_minutes": 180,
+    "thesis_ttl_hours": 168,
+    "stale_after_hours": 336
+  },
+  "conditions": {
+    "max_spread_bps": 50.0,
+    "min_dollar_volume": 1000000.0,
+    "require_regular_hours_quotes": true,
+    "never_use_offhours_liquidity": true
+  },
+  "approval": {
+    "ttl_hours": 24,
+    "approve_status": "APPROVED_AWAITING_EXECUTION_IMPLEMENTATION"
+  },
+  "ai": {
+    "skip_when_exhausted": true,
+    "continue_without_ai": true,
+    "candidate_cooldown_minutes": 180,
+    "material_price_move_pct": 0.03
+  },
+  "connection": {
+    "reconnect_every_minutes": 5,
+    "healthy_check_every_minutes": 15,
+    "fail_closed_on_auth_loss": true
+  }
+}

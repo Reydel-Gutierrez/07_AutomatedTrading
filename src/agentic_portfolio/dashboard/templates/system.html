@@ -2,7 +2,42 @@
 {% block title %}System · Agentic Portfolio{% endblock %}
 {% block content %}
 <div class="halt-banner">AUTONOMOUS TRADING DISABLED</div>
-<p class="lede"><span class="book-tag paper">{{ view.paper_book_label }}</span> <span class="book-tag live">{{ view.live_account_label }}</span> {{ view.execution.state }} · auto_execution={{ view.execution.auto_execution }} · live_trade_actions_allowed={{ view.execution.live_trade_actions_allowed }} · require_human_approval={{ view.execution.require_human_approval }} · terminal {{ view.execution.current_terminal_stage }} · live_order_placement_enabled={{ view.live_order_placement_enabled }}</p>
+{% if view.live_data_unavailable %}
+<div class="halt-banner">LIVE DATA UNAVAILABLE</div>
+{% endif %}
+<section class="card">
+  <h2>24/7 agent runtime</h2>
+  <dl class="facts">
+    <dt>Agent</dt><dd class="{{ 'agent-online' if view.agent.alive else 'agent-offline' }}">{{ view.agent.agent if view.agent else 'OFFLINE' }}</dd>
+    <dt>Uptime</dt><dd>{{ view.agent.uptime_seconds if view.agent else 0 }}s</dd>
+    <dt>Runtime mode</dt><dd>{{ view.agent.runtime_mode if view.agent else view.active_runtime }}</dd>
+    <dt>Market / session</dt><dd>{{ (view.agent.market.phase if view.agent else None) or '—' }} · {{ (view.agent.market.reason if view.agent else '') }}</dd>
+    <dt>Last successful cycle</dt><dd>{{ (view.agent.last_cycle.at if view.agent and view.agent.last_cycle else None) or '—' }}</dd>
+    <dt>Robinhood</dt><dd>{{ 'CONNECTED' if view.agent and view.agent.robinhood.connected else 'FAIL CLOSED / OFFLINE' }}</dd>
+    <dt>OpenAI</dt><dd>{{ view.agent.openai.state if view.agent else '—' }}</dd>
+    <dt>AI monthly budget</dt><dd>{{ view.agent.ai_budget.mode if view.agent else '—' }} · ${{ '%.2f'|format((view.agent.ai_budget.spent if view.agent else 0) or 0) }} / $10</dd>
+  </dl>
+  {% if view.agent and view.agent.next_jobs %}
+  <h3>Next scheduled jobs</h3>
+  <ul class="plain">
+    {% for job in view.agent.next_jobs if job.due %}
+    <li>{{ job.job }} · {{ job.cadence }}{% if job.every_minutes %} / {{ job.every_minutes }}m{% endif %} · due</li>
+    {% else %}
+    <li class="empty">No jobs currently due. Runtime remains alive.</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</section>
+<section class="card">
+  <h2>Active runtime</h2>
+  <dl class="facts">
+    <dt>ACTIVE RUNTIME</dt><dd>{{ view.active_runtime or view.environment }}</dd>
+    <dt>LIVE account</dt><dd>{{ view.live_account_status }}</dd>
+    <dt>PAPER book</dt><dd>{{ view.paper_book_status }}</dd>
+    <dt>Portfolio source</dt><dd>{{ view.active_context.source_of_truth if view.active_context else '—' }}</dd>
+  </dl>
+</section>
+<p class="lede"><span class="book-tag {{ 'live' if view.book_kind == 'live' else 'paper' }}">{{ view.active_book_label or view.paper_book_label }}</span> {{ view.execution.state }} · auto_execution={{ view.execution.auto_execution }} · live_trade_actions_allowed={{ view.execution.live_trade_actions_allowed }} · require_human_approval={{ view.execution.require_human_approval }} · terminal {{ view.execution.current_terminal_stage }} · live_order_placement_enabled={{ view.live_order_placement_enabled }}</p>
 
 <section class="health-grid" aria-label="Dashboard health">
   {% for h in view.health %}
@@ -27,7 +62,7 @@
   </article>
   <article class="card">
     <h2>Risk state</h2>
-    <p><span class="pill {{ view.paper_context.risk_state }}">{{ view.paper_context.risk_state or '—' }}</span> on {{ view.paper_book_label }}</p>
+    <p><span class="pill {{ (view.active_context.risk_state if view.active_context else None) }}">{{ view.risk_state_label or ((view.active_context.risk_state if view.active_context else view.paper_context.risk_state) or '—') }}</span></p>
     <p class="meta">{{ view.live_account_label }} HWM {{ view.hwm.risk_state if view.hwm else '—' }} · drawdown {{ view.hwm.drawdown if view.hwm else '—' }} · NAV {{ view.hwm.nav if view.hwm else '—' }}</p>
     <p class="meta">Hard risk limits are read-only from this dashboard. Policy version {{ view.policy_version }}.</p>
   </article>
@@ -52,6 +87,7 @@
 
 <section class="card">
   <h2>Service status</h2>
+  <p class="meta">Operational {{ view.active_runtime or view.environment }} counts only.</p>
   <table>
     <thead><tr><th>Service</th><th>OK</th><th>Count</th></tr></thead>
     <tbody>
@@ -61,6 +97,22 @@
     </tbody>
   </table>
 </section>
+
+{% if view.paper_diagnostics %}
+<section class="card">
+  <h2>{{ view.paper_diagnostics.label }}</h2>
+  <p class="meta"><span class="book-tag paper inactive">PAPER BOOK: {{ view.paper_book_status }}</span> {{ view.paper_diagnostics.note }}</p>
+  <p class="meta">Paper NAV {{ view.paper_diagnostics.nav or '—' }} · cash {{ view.paper_diagnostics.cash or '—' }} · monitoring {{ view.paper_diagnostics.monitoring_symbols or '—' }}</p>
+  <table>
+    <thead><tr><th>Stored paper artifact</th><th>Count</th></tr></thead>
+    <tbody>
+      {% for s in view.paper_diagnostics.counts %}
+      <tr><td>{{ s.name }}</td><td>{{ s.count }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
 
 <section class="card">
   <h2>Bind / Cloudflare later</h2>

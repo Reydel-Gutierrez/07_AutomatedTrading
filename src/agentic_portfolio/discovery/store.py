@@ -9,6 +9,7 @@ from typing import Any
 from uuid import uuid4
 
 from agentic_portfolio.paths import project_root
+from agentic_portfolio.runtime import LIVE_SOURCE_OF_TRUTH, PAPER_SOURCE_OF_TRUTH, RuntimeMode
 from agentic_portfolio.schemas import (
     Candidate,
     CandidateStatus,
@@ -45,8 +46,9 @@ def _now() -> str:
 
 
 class CandidateStore:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, *, runtime_mode: str | None = None) -> None:
         self.path = path or candidates_path()
+        self.runtime_mode = str(runtime_mode).upper() if runtime_mode else None
         self._data: dict[str, Any] = {"records": {}}
         if self.path.exists():
             self._data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -77,7 +79,14 @@ class CandidateStore:
         return [_candidate_from_dict(r) for r in self._data.get("records", {}).values()]
 
     def upsert(self, candidate: Candidate) -> Candidate:
-        self._data.setdefault("records", {})[candidate.candidate_id] = to_dict(candidate)
+        data = to_dict(candidate)
+        if self.runtime_mode:
+            data["runtime_mode"] = self.runtime_mode
+            data["paper_environment"] = self.runtime_mode != RuntimeMode.LIVE.value
+            data["source_of_truth"] = (
+                LIVE_SOURCE_OF_TRUTH if self.runtime_mode == RuntimeMode.LIVE.value else PAPER_SOURCE_OF_TRUTH
+            )
+        self._data.setdefault("records", {})[candidate.candidate_id] = data
         self.save()
         return candidate
 
@@ -95,8 +104,9 @@ class CandidateStore:
 
 
 class ResearchQueue:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, *, runtime_mode: str | None = None) -> None:
         self.path = path or research_queue_path()
+        self.runtime_mode = str(runtime_mode).upper() if runtime_mode else None
         self._data: dict[str, Any] = {"records": {}}
         if self.path.exists():
             self._data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -118,7 +128,11 @@ class ResearchQueue:
             entry.queue_id = str(uuid4())
         if not entry.enqueued_at:
             entry.enqueued_at = _now()
-        self._data.setdefault("records", {})[entry.queue_id] = to_dict(entry)
+        data = to_dict(entry)
+        if self.runtime_mode:
+            data["runtime_mode"] = self.runtime_mode
+            data["paper_environment"] = self.runtime_mode != RuntimeMode.LIVE.value
+        self._data.setdefault("records", {})[entry.queue_id] = data
         self.save()
         return entry
 
@@ -133,8 +147,9 @@ class ResearchQueue:
 
 
 class DiscoveryRunStore:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, *, runtime_mode: str | None = None) -> None:
         self.path = path or discovery_runs_path()
+        self.runtime_mode = str(runtime_mode).upper() if runtime_mode else None
         self._data: dict[str, Any] = {"records": {}}
         if self.path.exists():
             self._data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -152,7 +167,11 @@ class DiscoveryRunStore:
         return [_run_from_dict(r) for r in self._data.get("records", {}).values()]
 
     def save_run(self, run: DiscoveryRun) -> DiscoveryRun:
-        self._data.setdefault("records", {})[run.run_id] = to_dict(run)
+        data = to_dict(run)
+        if self.runtime_mode:
+            data["runtime_mode"] = self.runtime_mode
+            data["paper_environment"] = self.runtime_mode != RuntimeMode.LIVE.value
+        self._data.setdefault("records", {})[run.run_id] = data
         self.save()
         return run
 

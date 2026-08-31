@@ -2,7 +2,7 @@
 {% block title %}{{ packet.symbol }} {{ packet.action }} · Approval{% endblock %}
 {% block content %}
 <p class="crumb"><a href="{{ url_for('approvals_page') }}">Approvals</a> / {{ packet.symbol }}</p>
-<p class="lede"><span class="book-tag paper">{{ packet.book_label or paper_book_label }}</span> not {{ live_account_label }}.</p>
+<p class="lede"><span class="book-tag {{ 'live' if packet.queue_kind == 'live' else 'paper' }}">{{ packet.book_label or paper_book_label }}</span> {% if packet.queue_kind == 'live' %}LIVE approval queue.{% else %}not {{ live_account_label }}.{% endif %}</p>
 
 {% if packet.stale %}
 <div class="halt-banner warn-banner">This packet is {{ packet.status }}. It cannot be approved or rejected.{% if packet.expiry_reasons %} Reasons: {{ packet.expiry_reasons|join(', ') }}.{% endif %}{% if packet.superseded_by %} Superseded by {{ packet.superseded_by }}.{% endif %}</div>
@@ -17,7 +17,7 @@
 
 <section class="card decision-card" id="decisions">
   <h2>Human decision</h2>
-  <p class="lede"><span class="book-tag paper">{{ packet.book_label or paper_book_label }}</span> <strong>Approving still does not place an order.</strong> No broker submit. Live execution stays blocked. Packet kind {{ packet.packet_kind }}.</p>
+  <p class="lede"><span class="book-tag {{ 'live' if packet.queue_kind == 'live' else 'paper' }}">{{ packet.book_label or paper_book_label }}</span> <strong>Approving still does not place an order.</strong> APPROVE transitions to APPROVED_AWAITING_EXECUTION_IMPLEMENTATION. Packet kind {{ packet.packet_kind }}.</p>
   {% if packet.can_decide %}
   <form class="decide" method="post" action="{{ url_for('approve_packet', approval_id=packet.approval_id) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -63,6 +63,17 @@
   </ul>
   <p><strong>Invalidation / exit:</strong> {{ packet.invalidation_exit_policy or '—' }}</p>
   <p class="meta">Thesis-based exit is not a broker stop order.</p>
+</section>
+
+<section class="card">
+  <h2>Risk Gate and quote</h2>
+  <dl class="facts">
+    <dt>Current quote</dt><dd>{{ packet.current_price if packet.current_price is not none else '—' }}</dd>
+    <dt>Spread bps</dt><dd>{{ packet.current_spread_bps if packet.current_spread_bps is not none else '—' }}</dd>
+    <dt>Risk Gate</dt><dd>{{ packet.risk_gate_verdict or '—' }}</dd>
+    <dt>Expires</dt><dd>{{ packet.expires_at or '—' }}</dd>
+    <dt>AI rationale</dt><dd>{{ packet.ai_rationale or packet.base_case or '—' }}</dd>
+  </dl>
 </section>
 
 <section class="card">

@@ -64,6 +64,25 @@ def load_dashboard_config(path: Path | None = None) -> dict[str, Any]:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def load_runtime_config(path: Path | None = None) -> dict[str, Any]:
+    p = path or (project_root() / "config" / "runtime.json")
+    if not p.exists():
+        return {"mode": "PAPER", "live_order_placement_enabled": False}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def load_ai_config(path: Path | None = None) -> dict[str, Any]:
+    p = path or (project_root() / "config" / "ai.json")
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
 def load_pipeline_config(path: Path | None = None) -> dict[str, Any]:
     p = path or (project_root() / "config" / "pipeline.json")
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
+def load_agent_config(path: Path | None = None) -> dict[str, Any]:
+    p = path or (project_root() / "config" / "agent.json")
+    if not p.exists():
+        return {}
     return json.loads(p.read_text(encoding="utf-8"))

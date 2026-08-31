@@ -497,3 +497,99 @@ def test_fail_closed_constructed_risk_result():
     )
     assert out.blocked_plans[0].risk_evaluation_id == "snap-fail"
     assert "RISK_GATE_NOT_PERMITTED" in out.blocked_plans[0].blocked_reasons
+
+
+def test_off_hours_spread_does_not_satisfy_execution_liquidity():
+    action = act(
+        symbol="QUAL",
+        sleeve=Sleeve.CORE_GROWTH,
+        security_class=SecurityClass.INDIVIDUAL_EQUITY,
+        proposed_notional=500.0,
+        expected_resulting_position_pct=0.05,
+        sector="INFORMATION_TECHNOLOGY",
+    )
+    sunday = datetime(2026, 8, 31, 1, 6, tzinfo=timezone.utc)
+    quote = QuoteSnapshot(
+        symbol="QUAL",
+        last_price=223.61,
+        bid=222.24,
+        ask=226.57,
+        spread_pct=0.019295470243532828,
+        observed_at=sunday.isoformat(),
+        bid_as_of="2026-08-31T00:03:23.00981Z",
+        ask_as_of="2026-08-31T00:03:23.00981Z",
+        source="mcp",
+    )
+    # Width is under max_spread_pct (0.02); session must still fail.
+    assert quote.spread_pct < 0.02
+    out = run_execution(
+        [(action, evaluate(ctx(10_000), action))],
+        ctx(10_000),
+        {"QUAL": quote},
+        {"QUAL": _tradable("QUAL")},
+        persist=False,
+        now=sunday,
+        journal=None,
+    )
+    plan = out.blocked_plans[0]
+    assert plan.liquidity_check.ok is False
+    assert "SPREAD_NOT_REGULAR_SESSION" in plan.liquidity_check.codes
+    assert "LIQUIDITY_CHECK_FAILED" in plan.blocked_reasons
+    assert "SLIPPAGE_CHECK_FAILED" in plan.blocked_reasons
+    assert plan.slippage_check.ok is False
+
+
+def test_open_market_execution_requires_fresh_regular_session_bid_ask():
+    action = act(
+        symbol="MSFT",
+        sleeve=Sleeve.CORE_GROWTH,
+        security_class=SecurityClass.INDIVIDUAL_EQUITY,
+        proposed_notional=500.0,
+        expected_resulting_position_pct=0.05,
+        sector="INFORMATION_TECHNOLOGY",
+    )
+    friday_open = datetime(2026, 8, 28, 18, 0, tzinfo=timezone.utc)
+    rth = QuoteSnapshot(
+        symbol="MSFT",
+        last_price=100.0,
+        bid=99.95,
+        ask=100.05,
+        spread_pct=0.001,
+        observed_at=friday_open.isoformat(),
+        bid_as_of="2026-08-28T17:59:00+00:00",
+        ask_as_of="2026-08-28T17:59:00+00:00",
+        source="mcp",
+    )
+    ok = run_execution(
+        [(action, evaluate(ctx(10_000), action))],
+        ctx(10_000),
+        {"MSFT": rth},
+        {"MSFT": _tradable("MSFT")},
+        persist=False,
+        now=friday_open,
+        journal=None,
+    )
+    assert ok.paper_plans[0].liquidity_check.ok is True
+
+    premarket = QuoteSnapshot(
+        symbol="MSFT",
+        last_price=100.0,
+        bid=99.95,
+        ask=100.05,
+        spread_pct=0.001,
+        observed_at=friday_open.isoformat(),
+        bid_as_of="2026-08-28T12:00:00+00:00",
+        ask_as_of="2026-08-28T12:00:00+00:00",
+        source="mcp",
+    )
+    blocked = run_execution(
+        [(action, evaluate(ctx(10_000), action))],
+        ctx(10_000),
+        {"MSFT": premarket},
+        {"MSFT": _tradable("MSFT")},
+        persist=False,
+        now=friday_open,
+        journal=None,
+    )
+    assert blocked.blocked_plans[0].liquidity_check.ok is False
+    assert "SPREAD_NOT_REGULAR_SESSION" in blocked.blocked_plans[0].liquidity_check.codes

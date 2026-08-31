@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Orders · Agentic Portfolio{% endblock %}
 {% block content %}
-<p class="lede"><span class="book-tag paper">{{ view.book_label }}</span> OrderPlans and fills. <span class="book-tag live">{{ view.live_account_label }}</span> reviews are preflight only.</p>
+<p class="lede"><span class="book-tag {{ 'live' if environment == 'LIVE' else 'paper' }}">{{ view.book_label }}</span> OrderPlans and fills for the active runtime. Paper fills never appear as LIVE orders.</p>
 <section class="card">
   <h2>Paper OrderPlans</h2>
   <p class="meta">{{ view.book_label }}</p>

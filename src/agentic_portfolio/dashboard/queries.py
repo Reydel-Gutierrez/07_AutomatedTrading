@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from agentic_portfolio.agent.activity import read_activity
+from agentic_portfolio.agent.heartbeat import load_health
 from agentic_portfolio.approval.engine import record_human_decision
 from agentic_portfolio.approval.report import render_packet
 from agentic_portfolio.approval.store import ApprovalStore
 from agentic_portfolio.approval.types import ApprovalPacket, ApprovalStatus
 from agentic_portfolio.approval.validate import ApprovalValidationError
+from agentic_portfolio.live_approval import LiveApproval, LiveApprovalEngine, LiveApprovalStatus, LiveApprovalStore
+from agentic_portfolio.notify import NotificationStore
+from agentic_portfolio.watch import WatchStore
 from agentic_portfolio.dashboard.history import (
     chart_ready,
     record_nav_snapshot,
@@ -20,6 +26,7 @@ from agentic_portfolio.dashboard.history import (
 from agentic_portfolio.dashboard.labels import (
     ALLOCATION_ORDER,
     HISTORY_COLLECTING,
+    LIVE_DATA_UNAVAILABLE,
     SLEEVE_LABELS,
     UNAVAILABLE,
     friendly_enum,
@@ -30,12 +37,22 @@ from agentic_portfolio.decision.store import DecisionStore
 from agentic_portfolio.discovery.store import CandidateStore, DiscoveryRunStore, ResearchQueue
 from agentic_portfolio.execution.store import OrderPlanStore
 from agentic_portfolio.journal import read_jsonl
+from agentic_portfolio.live.isolation import detect_paper_contamination
+from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.monitoring.store import MonitoringStore
 from agentic_portfolio.paper_fill.store import PaperFillStore
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.policy import load_account_rules, load_pipeline_config, load_policy
 from agentic_portfolio.research.store import ResearchStore
 from agentic_portfolio.review.store import ReviewStore
+from agentic_portfolio.runtime import (
+    RuntimeMode,
+    artifact_environment,
+    discovery_state_dir,
+    get_active_artifact_environment,
+    get_active_portfolio_source,
+    get_active_runtime,
+)
 from agentic_portfolio.schemas import ThesisRecord, to_dict
 from agentic_portfolio.session import load_session_state
 from agentic_portfolio.sleeve_registry import SleeveRegistry
@@ -67,6 +84,8 @@ class DashboardState:
     """Existing module handles pointed at one project root."""
 
     root: Path
+    runtime: RuntimeMode
+    artifact_environment: str
     approvals: ApprovalStore
     order_plans: OrderPlanStore
     fills: PaperFillStore
@@ -75,8 +94,11 @@ class DashboardState:
     decisions: DecisionStore
     research: ResearchStore
     candidates: CandidateStore
+    candidates_paper: CandidateStore
     queue: ResearchQueue
+    queue_paper: ResearchQueue
     discovery: DiscoveryRunStore
+    discovery_paper: DiscoveryRunStore
     theses_live: ThesisRegistry
     theses_paper: ThesisRegistry
     theses_monitor: ThesisRegistry
@@ -87,8 +109,24 @@ class DashboardState:
 def dashboard_state(root: Path | None = None) -> DashboardState:
     base = root or project_root()
     state_dir = base / "state"
+    runtime = get_active_runtime()
+    env = get_active_artifact_environment()
+    discovery_dir = discovery_state_dir(base, mode=runtime)
+    paper_candidates = CandidateStore(state_dir / "candidates.json", runtime_mode=RuntimeMode.PAPER.value)
+    paper_queue = ResearchQueue(state_dir / "research_queue.json", runtime_mode=RuntimeMode.PAPER.value)
+    paper_discovery = DiscoveryRunStore(state_dir / "discovery_runs.json", runtime_mode=RuntimeMode.PAPER.value)
+    if runtime is RuntimeMode.LIVE:
+        active_candidates = CandidateStore(discovery_dir / "candidates.json", runtime_mode=RuntimeMode.LIVE.value)
+        active_queue = ResearchQueue(discovery_dir / "research_queue.json", runtime_mode=RuntimeMode.LIVE.value)
+        active_discovery = DiscoveryRunStore(discovery_dir / "discovery_runs.json", runtime_mode=RuntimeMode.LIVE.value)
+    else:
+        active_candidates = paper_candidates
+        active_queue = paper_queue
+        active_discovery = paper_discovery
     return DashboardState(
         root=base,
+        runtime=runtime,
+        artifact_environment=env,
         approvals=ApprovalStore(base),
         order_plans=OrderPlanStore(base),
         fills=PaperFillStore(base),
@@ -96,9 +134,12 @@ def dashboard_state(root: Path | None = None) -> DashboardState:
         monitoring=MonitoringStore(base),
         decisions=DecisionStore(base),
         research=ResearchStore(base),
-        candidates=CandidateStore(state_dir / "candidates.json"),
-        queue=ResearchQueue(state_dir / "research_queue.json"),
-        discovery=DiscoveryRunStore(state_dir / "discovery_runs.json"),
+        candidates=active_candidates,
+        candidates_paper=paper_candidates,
+        queue=active_queue,
+        queue_paper=paper_queue,
+        discovery=active_discovery,
+        discovery_paper=paper_discovery,
         theses_live=ThesisRegistry(state_dir / "thesis_registry.json"),
         theses_paper=ThesisRegistry(state_dir / "paper_book" / "theses.json"),
         theses_monitor=ThesisRegistry(state_dir / "paper_monitor" / "theses.json"),
@@ -147,10 +188,16 @@ def _signed_pct(value: float | None) -> str:
 
 def _metric(value: Any, display: str | None, *, available: bool | None = None) -> dict[str, Any]:
     ok = bool(available) if available is not None else value is not None
+    if not ok:
+        return {
+            "available": False,
+            "value": value,
+            "display": display if display == LIVE_DATA_UNAVAILABLE else UNAVAILABLE,
+        }
     return {
-        "available": ok,
+        "available": True,
         "value": value,
-        "display": display if ok and display else UNAVAILABLE,
+        "display": display if display else UNAVAILABLE,
     }
 
 
@@ -186,6 +233,8 @@ def packet_kind(packet: ApprovalPacket) -> str:
 
 def decision_block_reason(kind: str, flags: dict[str, Any] | None = None) -> str | None:
     flags = flags or resolve_ui_flags()
+    if flags.get("environment") == "LIVE" and kind in {"paper", "demo", "stale"}:
+        return "paper artifacts are not LIVE decisions"
     if kind == "stale" and not flags["allow_stale_packet_decisions"]:
         return "stale packets cannot be approved or rejected"
     if kind == "demo" and not flags["allow_demo_packet_decisions"]:
@@ -196,24 +245,80 @@ def decision_block_reason(kind: str, flags: dict[str, Any] | None = None) -> str
 
 
 def paper_book(state: DashboardState) -> dict[str, Any]:
-    return state.fills.current_book() or {}
+    try:
+        return state.fills.current_book() or {}
+    except (OSError, json.JSONDecodeError):
+        return {}
 
 
 def paper_context(state: DashboardState) -> dict[str, Any]:
     return dict((paper_book(state).get("context") or {}))
 
 
-def spy_benchmark(ctx: dict[str, Any], reports: list[dict[str, Any]]) -> dict[str, Any]:
+def live_book(state: DashboardState) -> dict[str, Any]:
+    try:
+        return LivePortfolioStore(state.root).current_book() or {}
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def live_context(state: DashboardState) -> dict[str, Any]:
+    return dict((live_book(state).get("context") or {}))
+
+
+def _ui(flags: dict[str, Any] | None = None) -> dict[str, Any]:
+    return flags or resolve_ui_flags()
+
+
+def live_data_unavailable(state: DashboardState, flags: dict[str, Any] | None = None) -> bool:
+    flags = _ui(flags)
+    if get_active_runtime() is not RuntimeMode.LIVE and flags.get("environment") != "LIVE":
+        return False
+    ctx = live_context(state)
+    book = live_book(state)
+    return not book or ctx.get("current_nav") is None
+
+
+def active_book(state: DashboardState, flags: dict[str, Any] | None = None) -> dict[str, Any]:
+    flags = _ui(flags)
+    if get_active_runtime() is RuntimeMode.LIVE or flags.get("environment") == "LIVE":
+        return live_book(state)
+    return paper_book(state)
+
+
+def active_context(state: DashboardState, flags: dict[str, Any] | None = None) -> dict[str, Any]:
+    """PAPER → paper book. LIVE → Robinhood snapshot. LIVE never falls back to paper."""
+    flags = _ui(flags)
+    if get_active_runtime() is RuntimeMode.LIVE or flags.get("environment") == "LIVE":
+        return live_context(state)
+    return paper_context(state)
+
+
+def live_hwm_state(state: DashboardState, flags: dict[str, Any] | None = None) -> dict[str, Any]:
+    flags = _ui(flags)
+    if get_active_runtime() is RuntimeMode.LIVE or flags.get("environment") == "LIVE":
+        try:
+            return load_hwm_state(LivePortfolioStore(state.root).hwm_path()) or {}
+        except (OSError, json.JSONDecodeError):
+            return {}
+    return load_hwm_state(state.root / "state" / "hwm_state.json") or {}
+
+
+def spy_benchmark(ctx: dict[str, Any], reports: list[dict[str, Any]], *, flags: dict[str, Any] | None = None) -> dict[str, Any]:
+    flags = _ui(flags)
+    live = flags.get("environment") == "LIVE" or get_active_runtime() is RuntimeMode.LIVE
+    source_label = "live_robinhood_context" if live else "paper_book_context"
+    book_note = "LIVE Robinhood snapshot" if live else "paper book"
     spy = ctx.get("spy")
     if isinstance(spy, dict) and spy:
         return {
             "observed": True,
-            "source": "paper_book_context",
+            "source": source_label,
             "payload": spy,
-            "note": "Observed SPY benchmark from the paper book context. Not fabricated.",
+            "note": f"Observed SPY benchmark from the {book_note} context. Not fabricated.",
         }
     spy_report = next((r for r in reports if str(r.get("symbol") or "").upper() == "SPY"), None)
-    if spy_report:
+    if spy_report and not live:
         return {
             "observed": True,
             "source": "research_report",
@@ -227,7 +332,7 @@ def spy_benchmark(ctx: dict[str, Any], reports: list[dict[str, Any]]) -> dict[st
     return {
         "observed": False,
         "source": None,
-        "note": "SPY benchmark is not on the current paper book snapshot. Not fabricated.",
+        "note": f"SPY benchmark is not on the current {book_note}. Not fabricated.",
     }
 
 
@@ -260,6 +365,7 @@ def _packet_row(packet: ApprovalPacket, *, flags: dict[str, Any] | None = None) 
         "stale": stale,
         "packet_kind": kind,
         "book_label": PAPER_BOOK_LABEL if kind in {"paper", "demo", "stale"} else LIVE_ACCOUNT_LABEL,
+        "runtime_mode": artifact_environment(packet),
         "decision_block_reason": blocked,
         "can_decide": pending and blocked is None,
         "approved_does_not_place_order": True,
@@ -300,29 +406,214 @@ def packet_detail(packet: ApprovalPacket) -> dict[str, Any]:
     return row
 
 
+def _packet_env(state: DashboardState, packet: ApprovalPacket) -> str:
+    raw = state.approvals.get(packet.approval_id) or {}
+    tagged = artifact_environment(raw)
+    if tagged == RuntimeMode.LIVE.value:
+        return RuntimeMode.LIVE.value
+    return artifact_environment(packet)
+
+
+def _operational_packets(state: DashboardState, flags: dict[str, Any] | None = None) -> list[ApprovalPacket]:
+    flags = _ui(flags)
+    env = get_active_artifact_environment()
+    out: list[ApprovalPacket] = []
+    for packet in state.approvals.all_packets():
+        if _packet_env(state, packet) != env:
+            continue
+        if env == RuntimeMode.LIVE.value and packet_kind(packet) in {"paper", "demo"}:
+            continue
+        out.append(packet)
+    return out
+
+
+def _live_approval_store(state: DashboardState) -> LiveApprovalStore:
+    return LiveApprovalStore(state.root, runtime_mode=state.runtime)
+
+
+def _watch_store(state: DashboardState) -> WatchStore:
+    return WatchStore(state.root, runtime_mode=state.runtime)
+
+
+def _live_approval_row(item: LiveApproval) -> dict[str, Any]:
+    pending = item.status == LiveApprovalStatus.PENDING
+    stale = item.status == LiveApprovalStatus.EXPIRED
+    return {
+        "approval_id": item.approval_id,
+        "symbol": item.ticker,
+        "ticker": item.ticker,
+        "action": item.proposed_action,
+        "status": item.status.value,
+        "sleeve": None,
+        "current_allocation_pct": None,
+        "desired_allocation_pct": item.proposed_allocation_pct,
+        "current_allocation_display": "—",
+        "desired_allocation_display": _pct_points(item.proposed_allocation_pct),
+        "order_notional": item.proposed_dollar_amount,
+        "order_notional_display": _usd(item.proposed_dollar_amount),
+        "order_quantity": None,
+        "current_price": item.current_quote,
+        "risk_gate_verdict": (item.risk_gate_result or {}).get("verdict"),
+        "created_at": item.created_at,
+        "expires_at": item.expires_at,
+        "decided_at": item.decided_at,
+        "expiry_reasons": ["expired"] if stale else [],
+        "superseded_by": None,
+        "pending": pending,
+        "stale": stale,
+        "packet_kind": "live",
+        "queue_kind": "live",
+        "book_label": LIVE_ACCOUNT_LABEL,
+        "runtime_mode": item.runtime_mode,
+        "decision_block_reason": None,
+        "can_decide": pending,
+        "approved_does_not_place_order": True,
+        "broker_submitted": False,
+        "live_execution_blocked": True,
+        "live_order_placement_enabled": False,
+        "placed_order": False,
+        "ai_rationale": item.ai_rationale,
+        "supporting_thesis": item.supporting_thesis,
+        "reason": item.reason,
+        "current_spread_bps": item.current_spread_bps,
+        "portfolio_impact": item.portfolio_impact,
+        "risk_gate_result": item.risk_gate_result,
+    }
+
+
+def live_approval_detail(item: LiveApproval) -> dict[str, Any]:
+    row = _live_approval_row(item)
+    row.update(
+        {
+            "thesis_summary": item.supporting_thesis,
+            "why_now": item.reason,
+            "why_not_cash": None,
+            "why_not_spy": None,
+            "bull_case": None,
+            "base_case": item.ai_rationale,
+            "bear_case": None,
+            "key_risks": [],
+            "invalidation_exit_policy": None,
+            "expected_horizon": None,
+            "portfolio_effect": str(item.portfolio_impact or "—"),
+            "sector_concentration_effect": None,
+            "enhanced_review_requirements": [],
+            "order_plan_summary": {
+                "side": item.proposed_action,
+                "order_type": None,
+                "time_in_force": None,
+                "execution_status": "EXECUTION_NOT_IMPLEMENTED",
+                "live_execution_blocked": True,
+                "broker_submitted": False,
+                "stop_orders_created": 0,
+            },
+            "evidence_refs": {"watch_id": item.watch_id},
+            "snapshot": {},
+            "status_history": [],
+            "human_note": item.decision_note,
+            "monitoring_state": None,
+            "sector": None,
+            "explanation": item.ai_rationale or item.reason or item.supporting_thesis or "",
+            "raw": item.to_dict(),
+        }
+    )
+    return row
+
+
+def watchlist_view(state: DashboardState) -> dict[str, Any]:
+    items = []
+    for item in _watch_store(state).all():
+        plan = item.conditional_plan
+        items.append(
+            {
+                "watch_id": item.watch_id,
+                "ticker": item.ticker,
+                "status": item.status.value,
+                "thesis": item.research_thesis,
+                "confidence": item.confidence,
+                "score": item.source_candidate_score,
+                "entry_conditions": list(item.entry_conditions),
+                "invalidating_conditions": list(item.invalidating_conditions),
+                "last_reassessed": item.last_reassessed_at,
+                "next_review_at": item.next_review_at,
+                "expiration": item.expiration,
+                "required_market_confirmation": item.required_market_confirmation,
+                "max_price": plan.max_price if plan else None,
+                "max_spread_bps": plan.max_spread_bps if plan else None,
+                "last_updated": item.last_updated,
+                "approval_id": item.approval_id,
+            }
+        )
+    return {
+        "rows": items,
+        "count": len(items),
+        "active": sum(1 for row in items if row["status"] not in {"REJECTED", "EXPIRED", "INVALIDATED"}),
+        "live_order_placement_enabled": False,
+    }
+
+
+def notifications_view(state: DashboardState) -> dict[str, Any]:
+    store = NotificationStore(state.root)
+    items = [n.to_dict() for n in store.all()]
+    unread = [n for n in items if not n.get("read")]
+    return {"rows": items, "unread": unread, "unread_count": len(unread)}
+
+
+def agent_runtime_view(state: DashboardState) -> dict[str, Any]:
+    health = load_health(state.root)
+    return {
+        "agent": health.get("agent") or "OFFLINE",
+        "alive": bool(health.get("alive")),
+        "uptime_seconds": health.get("uptime_seconds") or 0,
+        "runtime_mode": health.get("runtime_mode") or get_active_artifact_environment(),
+        "market": health.get("market") or {},
+        "last_cycle": health.get("last_cycle"),
+        "next_jobs": health.get("next_jobs") or [],
+        "robinhood": health.get("robinhood") or {},
+        "openai": health.get("openai") or {},
+        "ai_budget": health.get("ai_budget") or {},
+        "cycles": health.get("cycles") or 0,
+        "LIVE_ORDER_PLACEMENT": False,
+    }
+
+
+def activity_log_view(state: DashboardState, *, limit: int = 200) -> dict[str, Any]:
+    rows = read_activity(state.root, limit=limit)
+    rows.sort(key=lambda row: str(row.get("logged_at") or ""), reverse=True)
+    return {"entries": rows, "count": len(rows)}
+
+
+
 def list_approvals(state: DashboardState) -> dict[str, Any]:
     flags = resolve_ui_flags()
-    packets = [_packet_row(p, flags=flags) for p in state.approvals.all_packets()]
-    pending = [p for p in packets if p["pending"]]
-    stale = [p for p in packets if p["stale"]]
-    other = [p for p in packets if not p["pending"] and not p["stale"]]
+    env = get_active_artifact_environment()
+    packets = [_packet_row(p, flags=flags) for p in _operational_packets(state, flags)]
+    live_rows = [_live_approval_row(item) for item in _live_approval_store(state).all()]
+    pending = [p for p in live_rows if p["pending"]] + [p for p in packets if p["pending"]]
+    stale = [p for p in live_rows if p["stale"]] + [p for p in packets if p["stale"]]
+    other = [p for p in live_rows if not p["pending"] and not p["stale"]] + [p for p in packets if not p["pending"] and not p["stale"]]
     return {
         "pending": pending,
         "stale": stale,
         "other": other,
-        "all": packets,
+        "all": live_rows + packets,
         "pending_count": len(pending),
+        "live_pending_count": sum(1 for p in live_rows if p["pending"]),
         "approved_does_not_place_order": True,
-        "book_label": PAPER_BOOK_LABEL,
+        "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
+        "runtime_mode": env,
         "live_order_placement_enabled": False,
-        "allow_paper_packet_decisions": flags["allow_paper_packet_decisions"],
-        "allow_demo_packet_decisions": flags["allow_demo_packet_decisions"],
+        "allow_paper_packet_decisions": flags["allow_paper_packet_decisions"] and env != RuntimeMode.LIVE.value,
+        "allow_demo_packet_decisions": flags["allow_demo_packet_decisions"] and env != RuntimeMode.LIVE.value,
         "allow_stale_packet_decisions": flags["allow_stale_packet_decisions"],
     }
 
 
 def get_approval(state: DashboardState, approval_id: str) -> dict[str, Any] | None:
+    live = _live_approval_store(state).get(approval_id)
+    if live is not None:
+        return live_approval_detail(live)
     packet = state.approvals.get_packet(approval_id)
     if packet is None:
         return None
@@ -332,31 +623,45 @@ def get_approval(state: DashboardState, approval_id: str) -> dict[str, Any] | No
 def record_approval_decision(
     state: DashboardState,
     approval_id: str,
-    status: ApprovalStatus,
+    status: ApprovalStatus | LiveApprovalStatus | str,
     *,
     note: str | None = None,
 ) -> dict[str, Any]:
+    live_store = _live_approval_store(state)
+    live = live_store.get(approval_id)
+    if live is not None:
+        engine = LiveApprovalEngine(live_store, journal=state.root / "logs" / "approval.jsonl")
+        wanted = LiveApprovalStatus.APPROVED if str(getattr(status, "value", status)).upper() in {"APPROVED", "APPROVED_AWAITING_EXECUTION_IMPLEMENTATION"} else LiveApprovalStatus.REJECTED
+        updated = engine.record_decision(approval_id, wanted, note=note)
+        if updated.placed_order or updated.broker_submitted or updated.execution_attempted:
+            raise ApprovalValidationError("dashboard approval must not place an order")
+        from agentic_portfolio.agent.activity import log_activity
+
+        log_activity(state.root, "APPROVAL_APPROVED" if wanted is LiveApprovalStatus.APPROVED else "APPROVAL_REJECTED", ticker=updated.ticker, approval_id=updated.approval_id)
+        return live_approval_detail(updated)
     packet = state.approvals.get_packet(approval_id)
     if packet is None:
         raise KeyError(approval_id)
     blocked = decision_block_reason(packet_kind(packet))
     if blocked:
         raise ApprovalValidationError(blocked)
-    updated = record_human_decision(
+    paper_status = status if isinstance(status, ApprovalStatus) else ApprovalStatus(str(getattr(status, "value", status)))
+    updated_packet = record_human_decision(
         packet,
-        status,
+        paper_status,
         note=note or None,
         store=state.approvals,
         persist=True,
         journal=state.root / "logs" / "approval.jsonl",
     )
-    if updated.broker_submitted or not updated.approved_does_not_place_order:
+    if updated_packet.broker_submitted or not updated_packet.approved_does_not_place_order:
         raise ApprovalValidationError("dashboard approval must not place an order")
-    return packet_detail(updated)
+    return packet_detail(updated_packet)
 
 
 def _thesis_row(rec: ThesisRecord, *, book: str) -> dict[str, Any]:
     status = rec.status.value
+    env = RuntimeMode.LIVE.value if book == "live" else RuntimeMode.PAPER.value
     return {
         "thesis_id": rec.thesis_id,
         "symbol": rec.symbol,
@@ -365,6 +670,7 @@ def _thesis_row(rec: ThesisRecord, *, book: str) -> dict[str, Any]:
         "decision": rec.decision.value if rec.decision else None,
         "book": book,
         "book_label": BOOK_LABELS.get(book, book),
+        "runtime_mode": env,
         "active_or_draft": status in ACTIVE_THESIS,
         "thesis_summary": rec.thesis_summary,
         "bull_case": rec.bull_case,
@@ -384,25 +690,72 @@ def _thesis_row(rec: ThesisRecord, *, book: str) -> dict[str, Any]:
     }
 
 
-def _merge_theses(state: DashboardState) -> list[dict[str, Any]]:
+def _merge_theses(state: DashboardState, flags: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    flags = _ui(flags)
+    env = get_active_artifact_environment()
     by_id: dict[str, dict[str, Any]] = {}
-    for rec in state.theses_live.all_records():
-        by_id[rec.thesis_id] = _thesis_row(rec, book="live")
-    for rec in state.theses_monitor.all_records():
-        by_id[rec.thesis_id] = _thesis_row(rec, book="paper_monitor")
-    for rec in state.theses_paper.all_records():
-        by_id[rec.thesis_id] = _thesis_row(rec, book="paper")
+    if env == RuntimeMode.LIVE.value:
+        for rec in state.theses_live.all_records():
+            raw = to_dict(rec)
+            if artifact_environment(raw) != RuntimeMode.LIVE.value:
+                continue
+            by_id[rec.thesis_id] = _thesis_row(rec, book="live")
+    else:
+        for rec in state.theses_live.all_records():
+            by_id[rec.thesis_id] = _thesis_row(rec, book="live")
+        for rec in state.theses_monitor.all_records():
+            by_id[rec.thesis_id] = _thesis_row(rec, book="paper_monitor")
+        for rec in state.theses_paper.all_records():
+            by_id[rec.thesis_id] = _thesis_row(rec, book="paper")
     rows = list(by_id.values())
     rows.sort(key=lambda r: str(r.get("updated_at") or ""), reverse=True)
     return rows
 
 
+def _live_research_rows(state: DashboardState) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for row in _ai_store(state, RuntimeMode.LIVE.value).research_reports():
+        if artifact_environment(row) != RuntimeMode.LIVE.value:
+            continue
+        ticker = str(row.get("ticker") or row.get("symbol") or "").upper()
+        rows.append(
+            {
+                "research_id": row.get("research_id"),
+                "symbol": ticker,
+                "research_conclusion": row.get("recommended_action"),
+                "research_status": "COMPLETE" if row.get("research_id") else "NONE",
+                "executive_summary": row.get("thesis") or row.get("executive_summary"),
+                "freshness": row.get("freshness") or "FRESH",
+                "confidence": row.get("confidence"),
+                "provisional_sleeve": row.get("provisional_sleeve"),
+                "bull_case": {"summary": row.get("bull_case")} if row.get("bull_case") else None,
+                "base_case": {"summary": row.get("base_case")} if row.get("base_case") else None,
+                "bear_case": {"summary": row.get("bear_case")} if row.get("bear_case") else None,
+                "key_risks": list(row.get("risks") or row.get("key_risks") or []),
+                "invalidation_candidates": list(row.get("invalidation_candidates") or []),
+                "completed_at": row.get("created_at") or row.get("completed_at"),
+                "started_at": row.get("created_at"),
+                "runtime_mode": RuntimeMode.LIVE.value,
+                "source_of_truth": get_active_portfolio_source(),
+            }
+        )
+    rows.sort(key=lambda r: str(r.get("completed_at") or r.get("started_at") or ""), reverse=True)
+    return rows
+
+
 def research_view(state: DashboardState) -> dict[str, Any]:
+    flags = resolve_ui_flags()
+    env = get_active_artifact_environment()
     candidates = [to_dict(c) for c in state.candidates.all()]
+    for row in candidates:
+        row["runtime_mode"] = env
     candidates.sort(key=lambda c: float(c.get("discovery_score") or 0), reverse=True)
-    reports = [to_dict(r) for r in state.research.all_reports()]
-    reports.sort(key=lambda r: str(r.get("completed_at") or r.get("started_at") or ""), reverse=True)
-    theses = _merge_theses(state)
+    if env == RuntimeMode.LIVE.value:
+        reports = _live_research_rows(state)
+    else:
+        reports = [to_dict(r) for r in state.research.all_reports()]
+        reports.sort(key=lambda r: str(r.get("completed_at") or r.get("started_at") or ""), reverse=True)
+    theses = _merge_theses(state, flags)
     queue = [to_dict(q) for q in state.queue.all()]
     return {
         "candidates": candidates,
@@ -410,66 +763,90 @@ def research_view(state: DashboardState) -> dict[str, Any]:
         "reports": reports,
         "theses": theses,
         "active_or_draft": [t for t in theses if t["active_or_draft"]],
-        "book_label": PAPER_BOOK_LABEL,
+        "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
+        "runtime_mode": env,
         "live_order_placement_enabled": False,
     }
 
 
 def get_thesis(state: DashboardState, thesis_id: str) -> dict[str, Any] | None:
-    for rec, book in (
+    env = get_active_artifact_environment()
+    lookups = [
+        (state.theses_live.get(thesis_id), "live"),
         (state.theses_paper.get(thesis_id), "paper"),
         (state.theses_monitor.get(thesis_id), "paper_monitor"),
-        (state.theses_live.get(thesis_id), "live"),
-    ):
+    ]
+    if env == RuntimeMode.LIVE.value:
+        live = lookups[0]
+        if live[0] is not None and artifact_environment(to_dict(live[0])) == RuntimeMode.LIVE.value:
+            return _thesis_row(live[0], book="live")
+        return None
+    for rec, book in lookups:
         if rec is not None:
             return _thesis_row(rec, book=book)
     return None
 
 
 def get_report(state: DashboardState, research_id: str) -> dict[str, Any] | None:
+    env = get_active_artifact_environment()
+    if env == RuntimeMode.LIVE.value:
+        for row in _live_research_rows(state):
+            if str(row.get("research_id")) == str(research_id):
+                return row
+        return None
     report = state.research.get(research_id)
     return to_dict(report) if report else None
 
 
 def orders_view(state: DashboardState) -> dict[str, Any]:
+    flags = resolve_ui_flags()
+    env = get_active_artifact_environment()
     plans: list[dict[str, Any]] = []
-    for run in state.order_plans.all_runs():
-        for plan in run.get("plans") or []:
-            row = dict(plan)
-            row["run_id"] = run.get("run_id")
-            row["run_created_at"] = run.get("created_at")
-            row["notional_display"] = _usd(plan.get("notional"))
-            row["status"] = plan.get("execution_status")
-            row["blocked"] = list(plan.get("blocked_reasons") or [])
-            row["live_execution_blocked"] = True
-            row["broker_submitted"] = False
-            row["book_label"] = PAPER_BOOK_LABEL
-            plans.append(row)
     fills: list[dict[str, Any]] = []
-    for run in state.fills.all_runs():
-        skipped = run.get("skipped") or []
-        for fill in run.get("fills") or []:
-            row = dict(fill)
-            row["run_id"] = run.get("run_id")
-            row["filled_notional_display"] = _usd(fill.get("filled_notional"))
-            row["book_label"] = PAPER_BOOK_LABEL
-            fills.append(row)
-        for skip in skipped:
-            if isinstance(skip, dict):
-                fills.append(
-                    {
-                        "fill_id": None,
-                        "symbol": skip.get("symbol"),
-                        "status": skip.get("reason") or skip.get("status") or "SKIPPED",
-                        "reject_reasons": [skip.get("reason")] if skip.get("reason") else [],
-                        "run_id": run.get("run_id"),
-                        "order_plan_id": skip.get("order_plan_id"),
-                    }
-                )
+    if env != RuntimeMode.LIVE.value:
+        for run in state.order_plans.all_runs():
+            if artifact_environment(run) != env:
+                continue
+            for plan in run.get("plans") or []:
+                row = dict(plan)
+                row["run_id"] = run.get("run_id")
+                row["run_created_at"] = run.get("created_at")
+                row["notional_display"] = _usd(plan.get("notional"))
+                row["status"] = plan.get("execution_status")
+                row["blocked"] = list(plan.get("blocked_reasons") or [])
+                row["live_execution_blocked"] = True
+                row["broker_submitted"] = False
+                row["runtime_mode"] = RuntimeMode.PAPER.value
+                row["book_label"] = PAPER_BOOK_LABEL
+                plans.append(row)
+        for run in state.fills.all_runs():
+            skipped = run.get("skipped") or []
+            for fill in run.get("fills") or []:
+                row = dict(fill)
+                row["run_id"] = run.get("run_id")
+                row["filled_notional_display"] = _usd(fill.get("filled_notional"))
+                row["book_label"] = PAPER_BOOK_LABEL
+                row["runtime_mode"] = RuntimeMode.PAPER.value
+                fills.append(row)
+            for skip in skipped:
+                if isinstance(skip, dict):
+                    fills.append(
+                        {
+                            "fill_id": None,
+                            "symbol": skip.get("symbol"),
+                            "status": skip.get("reason") or skip.get("status") or "SKIPPED",
+                            "reject_reasons": [skip.get("reason")] if skip.get("reason") else [],
+                            "run_id": run.get("run_id"),
+                            "order_plan_id": skip.get("order_plan_id"),
+                            "runtime_mode": RuntimeMode.PAPER.value,
+                        }
+                    )
     reviews = []
     for result in state.reviews.all_results():
         row = to_dict(result)
+        if env == RuntimeMode.LIVE.value and artifact_environment(row) != RuntimeMode.LIVE.value:
+            continue
         row["order_placed"] = False
         row["broker_submitted"] = False
         row["book_label"] = LIVE_ACCOUNT_LABEL
@@ -479,39 +856,77 @@ def orders_view(state: DashboardState) -> dict[str, Any]:
         "plans": plans,
         "fills": fills,
         "reviews": reviews,
-        "book_label": PAPER_BOOK_LABEL,
+        "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
+        "runtime_mode": env,
         "live_order_placement_enabled": False,
     }
 
 
 def journal_view(state: DashboardState, *, limit: int = 250) -> dict[str, Any]:
+    flags = resolve_ui_flags()
+    env = get_active_artifact_environment()
     rows: list[dict[str, Any]] = []
     logs = state.root / "logs"
-    for source, name in JOURNAL_FILES:
+    files = list(JOURNAL_FILES)
+    if env == RuntimeMode.LIVE.value:
+        files = [item for item in files if item[0] != "paper_fill"]
+        files.append(("live", "live_portfolio.jsonl"))
+        files.append(("ai", "ai_gateway.jsonl"))
+    for source, name in files:
         for item in read_jsonl(logs / name):
             row = dict(item)
             row["_source"] = source
             row["_file"] = name
             row["_at"] = row.get("logged_at") or row.get("timestamp") or row.get("created_at") or row.get("reviewed_at")
+            row_env = artifact_environment(row)
+            if source == "paper_fill":
+                row_env = RuntimeMode.PAPER.value
+            if source == "live":
+                row_env = RuntimeMode.LIVE.value
+            if row_env != env:
+                continue
             if "type" not in row:
                 if source == "risk":
                     row["type"] = "RISK_GATE"
                 elif source == "review":
                     row["type"] = row.get("status") or "REVIEW"
+            row["runtime_mode"] = row_env
             rows.append(row)
     rows.sort(key=lambda r: str(r.get("_at") or ""), reverse=True)
     return {
         "entries": rows[:limit],
         "count": len(rows),
-        "book_label": PAPER_BOOK_LABEL,
+        "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
+        "runtime_mode": env,
         "live_order_placement_enabled": False,
     }
 
 
-def monitoring_alerts(state: DashboardState) -> list[dict[str, Any]]:
-    latest = state.monitoring.latest()
+def _latest_monitor(state: DashboardState, flags: dict[str, Any] | None = None) -> dict[str, Any]:
+    flags = _ui(flags)
+    env = get_active_artifact_environment()
+    if env != RuntimeMode.LIVE.value:
+        latest = state.monitoring.latest() or {}
+        if latest and artifact_environment(latest) == RuntimeMode.LIVE.value:
+            return {}
+        return latest
+    for run in state.monitoring.all_runs():
+        if artifact_environment(run) == RuntimeMode.LIVE.value:
+            return run
+    return {
+        "runtime_mode": RuntimeMode.LIVE.value,
+        "symbols": [],
+        "positions": [],
+        "created_at": None,
+        "note": "No live positions to monitor.",
+        "synthetic_empty": True,
+    }
+
+
+def monitoring_alerts(state: DashboardState, flags: dict[str, Any] | None = None) -> list[dict[str, Any]]:
+    latest = _latest_monitor(state, flags)
     if not latest:
         return []
     alerts: list[dict[str, Any]] = []
@@ -537,8 +952,27 @@ def monitoring_alerts(state: DashboardState) -> list[dict[str, Any]]:
 
 
 def recent_decisions(state: DashboardState, *, limit: int = 12) -> list[dict[str, Any]]:
+    env = get_active_artifact_environment()
     out: list[dict[str, Any]] = []
+    if env == RuntimeMode.LIVE.value:
+        for row in _ai_store(state, RuntimeMode.LIVE.value).decisions()[:limit]:
+            if artifact_environment(row) != RuntimeMode.LIVE.value:
+                continue
+            ticker = str(row.get("ticker") or "").upper()
+            out.append(
+                {
+                    "batch_id": row.get("decision_id") or row.get("context_id"),
+                    "created_at": row.get("created_at"),
+                    "symbols": [ticker] if ticker else [],
+                    "decisions": [{"symbol": ticker, "decision": row.get("action")}],
+                    "runtime_mode": RuntimeMode.LIVE.value,
+                    "comparison": None,
+                }
+            )
+        return out
     for run in state.decisions.all_runs()[:limit]:
+        if artifact_environment(run) == RuntimeMode.LIVE.value:
+            continue
         names = run.get("decisions") or []
         if isinstance(names, dict):
             items = [{"symbol": k, "decision": v} for k, v in names.items()]
@@ -550,6 +984,7 @@ def recent_decisions(state: DashboardState, *, limit: int = 12) -> list[dict[str
                 "created_at": run.get("created_at"),
                 "symbols": run.get("symbols") or [],
                 "decisions": items,
+                "runtime_mode": RuntimeMode.PAPER.value,
                 "comparison": run.get("comparison"),
             }
         )
@@ -559,26 +994,47 @@ def recent_decisions(state: DashboardState, *, limit: int = 12) -> list[dict[str
 def health_status(state: DashboardState) -> list[dict[str, Any]]:
     flags = execution_flags()
     ui = resolve_ui_flags()
-    latest_monitor = state.monitoring.latest() or {}
-    reports = state.research.all_reports()
-    decision_ids = state.decisions.all_ids()
-    risk_rows = read_jsonl(state.root / "logs" / "risk_gate.jsonl")
-    review_ids = state.reviews.all_ids()
-    ctx = paper_context(state)
+    env = get_active_artifact_environment()
+    latest_monitor = _latest_monitor(state, ui)
+    if env == RuntimeMode.LIVE.value:
+        reports = _live_research_rows(state)
+        decision_count = len(_ai_store(state, RuntimeMode.LIVE.value).decisions())
+        review_ids = [rid for rid in state.reviews.all_ids() if artifact_environment(state.reviews.get(rid) or {}) == RuntimeMode.LIVE.value]
+    else:
+        reports = state.research.all_reports()
+        decision_count = len(state.decisions.all_ids())
+        review_ids = state.reviews.all_ids()
+    risk_rows = [row for row in read_jsonl(state.root / "logs" / "risk_gate.jsonl") if artifact_environment(row) == env]
+    ctx = active_context(state, ui)
+    monitor_ok = bool(latest_monitor) and not latest_monitor.get("synthetic_empty")
+    if env == RuntimeMode.LIVE.value:
+        monitor_ok = True
+        monitor_detail = f"{len(latest_monitor.get('positions') or [])} positions"
+    else:
+        monitor_detail = latest_monitor.get("created_at") or "no run"
+    unavailable = live_data_unavailable(state, ui)
+    health = load_health(state.root)
     return [
+        {
+            "id": "agent_runtime",
+            "name": "agent runtime",
+            "ok": bool(health.get("alive")),
+            "status": str(health.get("agent") or "OFFLINE"),
+            "detail": (health.get("market") or {}).get("phase") or "not running",
+        },
         {
             "id": "dashboard",
             "name": "dashboard",
-            "ok": True,
-            "status": "up",
-            "detail": "localhost",
+            "ok": not unavailable,
+            "status": "unavailable" if unavailable else "up",
+            "detail": LIVE_DATA_UNAVAILABLE if unavailable else "localhost",
         },
         {
             "id": "monitoring",
             "name": "monitoring",
-            "ok": bool(latest_monitor),
-            "status": "up" if latest_monitor else "missing",
-            "detail": latest_monitor.get("created_at") or "no run",
+            "ok": monitor_ok,
+            "status": "up" if monitor_ok else "missing",
+            "detail": monitor_detail,
         },
         {
             "id": "research",
@@ -590,9 +1046,9 @@ def health_status(state: DashboardState) -> list[dict[str, Any]]:
         {
             "id": "decision",
             "name": "decision",
-            "ok": bool(decision_ids),
-            "status": "up" if decision_ids else "missing",
-            "detail": f"{len(decision_ids)} batches",
+            "ok": bool(decision_count),
+            "status": "up" if decision_count else "missing",
+            "detail": f"{decision_count} batches",
         },
         {
             "id": "risk_gate",
@@ -609,6 +1065,13 @@ def health_status(state: DashboardState) -> list[dict[str, Any]]:
             "detail": "preflight only; does not place",
         },
         {
+            "id": "ai_gateway",
+            "name": "AI gateway",
+            "ok": True,
+            "status": "advisory",
+            "detail": "proposal-only; $10/month cap; never places",
+        },
+        {
             "id": "live_placement",
             "name": "live placement disabled",
             "ok": True,
@@ -623,33 +1086,61 @@ def health_status(state: DashboardState) -> list[dict[str, Any]]:
 def system_view(state: DashboardState) -> dict[str, Any]:
     flags = execution_flags()
     ui = resolve_ui_flags()
+    runtime = get_active_runtime()
+    env = get_active_artifact_environment()
+    live = env == RuntimeMode.LIVE.value
+    unavailable = live_data_unavailable(state, ui)
     rules = load_account_rules()
     policy = load_policy()
     pipeline = load_pipeline_config()
-    hwm = load_hwm_state(state.root / "state" / "hwm_state.json") or {}
-    session = load_session_state(state.root / "state" / "session_state.json")
-    book = paper_book(state)
-    ctx = paper_context(state)
+    book = active_book(state, ui)
+    ctx = active_context(state, ui)
+    paper = paper_book(state)
+    live_snap = live_book(state)
+    hwm = live_hwm_state(state, ui)
+    session_path = LivePortfolioStore(state.root).session_path() if live else (state.root / "state" / "session_state.json")
+    try:
+        session = load_session_state(session_path)
+    except (OSError, json.JSONDecodeError):
+        session = None
     discovery_runs = state.discovery.all()
     latest_discovery = max(discovery_runs, key=lambda r: r.started_at) if discovery_runs else None
-    latest_monitor = state.monitoring.latest() or {}
-    reports = [to_dict(r) for r in state.research.all_reports()]
+    latest_monitor = _latest_monitor(state, ui)
+    live_reports = _live_research_rows(state) if live else []
+    paper_reports = [to_dict(r) for r in state.research.all_reports()]
+    reports = live_reports if live else paper_reports
+    leaks = detect_paper_contamination(live_snap, paper, runtime_mode=env) if live else []
+    paper_monitor = state.monitoring.latest() or {}
+    if artifact_environment(paper_monitor) == RuntimeMode.LIVE.value:
+        paper_monitor = {}
+    paper_monitor_symbols = ",".join((paper_monitor.get("symbols") or [])[:6])
+    live_monitor_count = 0 if latest_monitor.get("synthetic_empty") else len(latest_monitor.get("positions") or [])
+    live_packet_count = len(_operational_packets(state, ui))
+    paper_packet_count = sum(1 for p in state.approvals.all_packets() if _packet_env(state, p) != RuntimeMode.LIVE.value)
+    paper_thesis_count = len(state.theses_paper.all_records()) + len(state.theses_monitor.all_records())
+    untagged_registry = sum(
+        1 for rec in state.theses_live.all_records() if artifact_environment(to_dict(rec)) != RuntimeMode.LIVE.value
+    )
+    live_thesis_count = sum(
+        1 for rec in state.theses_live.all_records() if artifact_environment(to_dict(rec)) == RuntimeMode.LIVE.value
+    )
+    monitor_detail = f"{live_monitor_count} positions" if live else paper_monitor_symbols
     freshness = [
         {
-            "label": "Paper book",
-            "present": bool(book),
+            "label": "LIVE Robinhood snapshot" if live else "Paper book",
+            "present": bool(book) and not unavailable,
             "updated_at": book.get("created_at"),
-            "detail": "isolated paper blotter",
+            "detail": LIVE_DATA_UNAVAILABLE if unavailable else ("agentic account source of truth" if live else "isolated paper blotter"),
         },
         {
-            "label": "Live HWM state",
-            "present": bool(hwm),
+            "label": "HWM state",
+            "present": bool(hwm) and not unavailable,
             "updated_at": hwm.get("updated_at"),
-            "detail": hwm.get("risk_state"),
+            "detail": hwm.get("risk_state") if not unavailable else LIVE_DATA_UNAVAILABLE,
         },
         {
             "label": "Session SOD",
-            "present": session is not None,
+            "present": session is not None and not unavailable,
             "updated_at": session.last_observed_at if session else None,
             "detail": session.session_id if session else "missing",
         },
@@ -661,9 +1152,9 @@ def system_view(state: DashboardState) -> dict[str, Any]:
         },
         {
             "label": "Monitoring",
-            "present": bool(latest_monitor),
+            "present": True if live else bool(latest_monitor),
             "updated_at": latest_monitor.get("created_at"),
-            "detail": ",".join((latest_monitor.get("symbols") or [])[:6]),
+            "detail": monitor_detail or "0 positions",
         },
         {
             "label": "Research reports",
@@ -673,37 +1164,86 @@ def system_view(state: DashboardState) -> dict[str, Any]:
         },
     ]
     services = [
-        {"name": "Approval packets", "ok": bool(state.approvals.all_ids()), "count": len(state.approvals.all_ids())},
-        {"name": "Order plans", "ok": bool(state.order_plans.all_ids()), "count": len(state.order_plans.all_ids())},
-        {"name": "Paper fills", "ok": bool(state.fills.all_ids()), "count": len(state.fills.all_ids())},
-        {"name": "Robinhood reviews", "ok": bool(state.reviews.all_ids()), "count": len(state.reviews.all_ids())},
+        {"name": "Approval packets", "ok": True, "count": live_packet_count if live else paper_packet_count},
+        {"name": "Order plans", "ok": True, "count": 0 if live else len(state.order_plans.all_ids())},
+        {"name": "Fills", "ok": True, "count": 0 if live else len(state.fills.all_ids())},
+        {"name": "Robinhood reviews", "ok": True, "count": 0 if live else len(state.reviews.all_ids())},
         {"name": "Candidates", "ok": True, "count": len(state.candidates.all())},
-        {"name": "Theses (paper)", "ok": True, "count": len(state.theses_paper.all_records())},
+        {"name": "Theses", "ok": True, "count": live_thesis_count if live else paper_thesis_count + untagged_registry},
+        {"name": "LIVE AI proposals", "ok": True, "count": len(_ai_store(state, "LIVE").proposals())},
     ]
+    paper_ctx = paper_context(state)
+    paper_diagnostics = {
+        "inactive": True,
+        "label": "PAPER DIAGNOSTICS",
+        "note": "Stored on disk for tests/dev. Not active LIVE operational state.",
+        "nav": paper_ctx.get("current_nav"),
+        "cash": paper_ctx.get("cash"),
+        "risk_state": paper_ctx.get("risk_state"),
+        "updated_at": paper.get("created_at"),
+        "monitoring_symbols": paper_monitor_symbols,
+        "counts": [
+            {"name": "Research reports", "count": len(paper_reports)},
+            {"name": "Approval packets", "count": paper_packet_count},
+            {"name": "Order plans", "count": len(state.order_plans.all_ids())},
+            {"name": "Paper fills", "count": len(state.fills.all_ids())},
+            {"name": "Candidates", "count": len(state.candidates_paper.all())},
+            {"name": "Theses (paper book)", "count": paper_thesis_count},
+            {"name": "Theses (untagged registry)", "count": untagged_registry},
+            {"name": "PAPER AI proposals", "count": len(_ai_store(state, "PAPER").proposals())},
+        ],
+    }
+    risk_state = ctx.get("risk_state") if not unavailable else None
     return {
         "execution": flags,
         "account_nickname": (rules.get("account") or {}).get("nickname"),
         "live_observed": (rules.get("account") or {}).get("last_observed"),
-        "hwm": hwm,
+        "hwm": hwm if not unavailable else {},
         "session": session.to_dict() if session else None,
+        "active_runtime": env,
+        "live_account_status": ui["live_account_status"],
+        "paper_book_status": ui["paper_book_status"],
+        "risk_book_label": ui["risk_book_label"],
+        "risk_state_label": (
+            LIVE_DATA_UNAVAILABLE
+            if unavailable
+            else (f"{risk_state} on {ui['risk_book_label']}" if risk_state else "—")
+        ),
+        "live_data_unavailable": unavailable,
         "paper_context": {
-            "nav": ctx.get("current_nav"),
-            "cash": ctx.get("cash"),
-            "risk_state": ctx.get("risk_state"),
-            "updated_at": book.get("created_at"),
+            "nav": paper_ctx.get("current_nav"),
+            "cash": paper_ctx.get("cash"),
+            "risk_state": paper_ctx.get("risk_state"),
+            "updated_at": paper.get("created_at"),
         },
+        "active_context": {
+            "nav": None if unavailable else ctx.get("current_nav"),
+            "cash": ctx.get("cash") if not unavailable else None,
+            "buying_power": ctx.get("buying_power") if not unavailable else None,
+            "risk_state": risk_state,
+            "updated_at": book.get("created_at") if not unavailable else None,
+            "source_of_truth": get_active_portfolio_source(),
+        },
+        "paper_leak_reasons": leaks,
         "freshness": freshness,
         "services": services,
+        "paper_diagnostics": paper_diagnostics,
         "health": health_status(state),
         "environment": ui["environment"],
         "paper_book_label": PAPER_BOOK_LABEL,
         "live_account_label": LIVE_ACCOUNT_LABEL,
+        "active_book_label": ui["active_book_label"],
+        "book_kind": ui["book_kind"],
         "live_order_placement_enabled": False,
         "pipeline_stop": pipeline.get("hard_stop_after"),
         "policy_version": policy.get("version"),
         "daily_halt_threshold": (policy.get("daily_risk_halt") or {}).get("threshold_fraction_of_start_of_day_nav"),
         "risk_limits_read_only": True,
         "writes_allowed": ["approve_packet", "reject_packet"],
+        "runtime": runtime.value,
+        "agent": agent_runtime_view(state),
+        "watchlist": watchlist_view(state),
+        "notifications": notifications_view(state),
     }
 
 
@@ -755,7 +1295,59 @@ def allocation_slices(ctx: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def compact_activity(state: DashboardState) -> list[dict[str, Any]]:
+    env = get_active_artifact_environment()
     items: list[dict[str, Any]] = []
+    if env == RuntimeMode.LIVE.value:
+        activity = ai_activity_view(state)
+        for row in activity.get("rows") or []:
+            ticker = row.get("ticker")
+            if not ticker:
+                continue
+            items.append(
+                {
+                    "kind": "ai",
+                    "label": "AI",
+                    "title": f"{ticker} {friendly_enum(str(row.get('decision_action') or row.get('classification') or ''))}",
+                    "meta": None,
+                    "href": "/ai/activity",
+                    "runtime_mode": RuntimeMode.LIVE.value,
+                }
+            )
+        for packet in (list_approvals(state).get("pending") or [])[:4]:
+            items.append(
+                {
+                    "kind": "approval",
+                    "label": "Approval",
+                    "title": f"{packet.get('symbol')} {packet.get('action')}",
+                    "meta": packet.get("created_at"),
+                    "href": f"/approvals/{packet.get('approval_id')}",
+                    "runtime_mode": RuntimeMode.LIVE.value,
+                }
+            )
+        for row in read_activity(state.root, limit=20):
+            items.append(
+                {
+                    "kind": str(row.get("type") or "activity").lower(),
+                    "label": str(row.get("type") or "Activity").replace("_", " "),
+                    "title": f"{row.get('ticker') or row.get('symbol') or row.get('job') or row.get('type')}",
+                    "meta": row.get("logged_at"),
+                    "href": "/journal",
+                    "runtime_mode": RuntimeMode.LIVE.value,
+                }
+            )
+        items.sort(key=lambda row: str(row.get("meta") or ""), reverse=True)
+        return items[:12]
+    for row in read_activity(state.root, limit=20):
+        items.append(
+            {
+                "kind": str(row.get("type") or "activity").lower(),
+                "label": str(row.get("type") or "Activity").replace("_", " "),
+                "title": f"{row.get('ticker') or row.get('symbol') or row.get('job') or row.get('type')}",
+                "meta": row.get("logged_at"),
+                "href": "/journal",
+                "runtime_mode": env,
+            }
+        )
     for batch in recent_decisions(state, limit=4):
         created = batch.get("created_at")
         for decision in (batch.get("decisions") or [])[:4]:
@@ -841,9 +1433,11 @@ def candidate_rows(state: DashboardState) -> list[dict[str, Any]]:
         research_status = queue_status.get(str(raw.get("candidate_id"))) or queue_status.get(
             f"sym:{str(raw.get('symbol') or '').upper()}"
         )
+        env = get_active_artifact_environment()
         rows.append(
             {
                 **raw,
+                "runtime_mode": env,
                 "sleeve_label": friendly_enum(raw.get("provisional_sleeve")),
                 "priority_label": friendly_enum(raw.get("priority")),
                 "status_label": friendly_enum(raw.get("status")),
@@ -865,29 +1459,34 @@ def candidate_rows(state: DashboardState) -> list[dict[str, Any]]:
 
 def discovery_view(state: DashboardState) -> dict[str, Any]:
     ui = resolve_ui_flags()
+    env = get_active_artifact_environment()
     rows = candidate_rows(state)
     return {
         "candidates": rows,
         "count": len(rows),
-        "book_label": PAPER_BOOK_LABEL,
+        "book_label": ui["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "live_order_placement_enabled": False,
-        "environment": ui["environment"],
-        "note": "Read from stored discovery results. This page does not run discovery.",
+        "environment": env,
+        "runtime_mode": env,
+        "note": "Read from stored discovery results. This page does not run discovery. PAPER candidates are never reused as LIVE.",
     }
 
 
 def dashboard_view(state: DashboardState) -> dict[str, Any]:
     flags = execution_flags()
     ui = resolve_ui_flags()
-    book = paper_book(state)
-    ctx = paper_context(state)
-    hwm = load_hwm_state(state.root / "state" / "hwm_state.json") or {}
-    reports = [to_dict(r) for r in state.research.all_reports()]
+    live = ui["environment"] == "LIVE" or get_active_runtime() is RuntimeMode.LIVE
+    unavailable = live_data_unavailable(state, ui)
+    book = {} if unavailable else active_book(state, ui)
+    ctx = {} if unavailable else active_context(state, ui)
+    hwm = {} if unavailable else live_hwm_state(state, ui)
+    reports = _live_research_rows(state) if live else [to_dict(r) for r in state.research.all_reports()]
     sleeves = ctx.get("sleeve_allocation_pct") or {}
     theses = _thesis_index(state)
     companies = _company_index(reports)
     nav = ctx.get("current_nav")
+    missing = LIVE_DATA_UNAVAILABLE if unavailable else UNAVAILABLE
     positions = []
     for pos in ctx.get("positions") or []:
         mv = pos.get("market_value")
@@ -910,11 +1509,12 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
                 "thesis_status_label": friendly_enum(thesis.get("status")) if thesis else "—",
             }
         )
-    history = record_nav_snapshot(
+    history = [] if unavailable else record_nav_snapshot(
         state.root,
         nav=float(nav) if nav is not None else None,
         spy=(ctx.get("spy") if isinstance(ctx.get("spy"), dict) else None),
         at=ctx.get("timestamp") or book.get("created_at"),
+        mode=ui["environment"],
     )
     port_ret = total_return(history)
     spy_ret = spy_return(history)
@@ -928,38 +1528,50 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
         today_display = _signed_pct(daily) if today_dollars is None else f"{_signed_usd(today_dollars)} ({_signed_pct(daily)})"
     drawdown = ctx.get("current_drawdown") if ctx.get("current_drawdown") is not None else hwm.get("drawdown")
     risk_state = ctx.get("risk_state") or hwm.get("risk_state")
+    risk_label = None if unavailable else (f"{risk_state} on {ui['risk_book_label']}" if risk_state else None)
     excess = None if port_ret is None or spy_ret is None else port_ret - spy_ret
     slices = allocation_slices(ctx)
     candidates = candidate_rows(state)
     ready = chart_ready(history)
+    latest_monitor = _latest_monitor(state, ui)
     return {
         "execution": flags,
-        "book_kind": "paper",
+        "book_kind": ui["book_kind"],
         "environment": ui["environment"],
+        "active_runtime": env if (env := get_active_artifact_environment()) else ui["environment"],
         "paper_book_label": PAPER_BOOK_LABEL,
         "live_account_label": LIVE_ACCOUNT_LABEL,
+        "active_book_label": ui["active_book_label"],
+        "risk_book_label": ui["risk_book_label"],
+        "risk_state_label": risk_label,
+        "live_account_status": ui["live_account_status"],
+        "paper_book_status": ui["paper_book_status"],
         "live_order_placement_enabled": False,
+        "live_data_unavailable": unavailable,
         "health": health_status(state),
-        "paper_environment": bool(book.get("paper_environment", True)),
-        "live_book_untouched": bool(book.get("live_book_untouched", True)),
-        "nav": ctx.get("current_nav"),
-        "nav_display": _usd(ctx.get("current_nav")),
-        "cash": ctx.get("cash"),
-        "cash_display": _usd(ctx.get("cash")),
-        "cash_pct": ctx.get("cash_allocation_pct"),
-        "cash_pct_display": _pct_fraction(ctx.get("cash_allocation_pct")),
-        "buying_power": ctx.get("buying_power"),
-        "holdings_count": ctx.get("holdings_count") or len(positions),
-        "risk_state": risk_state,
-        "daily_risk_halt": bool(ctx.get("daily_risk_halt")),
-        "high_water_mark": ctx.get("high_water_mark") or hwm.get("cash_flow_adjusted_hwm"),
-        "hwm_display": _usd(ctx.get("high_water_mark") or hwm.get("cash_flow_adjusted_hwm")),
-        "drawdown": drawdown,
-        "drawdown_display": _pct_fraction(drawdown),
-        "start_of_day_nav": ctx.get("start_of_day_nav"),
-        "daily_return": daily,
-        "daily_return_display": _pct_fraction(daily),
-        "updated_at": ctx.get("timestamp") or book.get("created_at"),
+        "paper_environment": False if live else bool(book.get("paper_environment", True)),
+        "live_book_untouched": False if live else bool(book.get("live_book_untouched", True)),
+        "source_of_truth": get_active_portfolio_source(),
+        "empty_positions_label": LIVE_DATA_UNAVAILABLE if unavailable else ("No live positions." if live else "No paper positions."),
+        "nav": None if unavailable else ctx.get("current_nav"),
+        "nav_display": missing if unavailable else _usd(ctx.get("current_nav")),
+        "cash": None if unavailable else ctx.get("cash"),
+        "cash_display": missing if unavailable else _usd(ctx.get("cash")),
+        "cash_pct": None if unavailable else ctx.get("cash_allocation_pct"),
+        "cash_pct_display": missing if unavailable else _pct_fraction(ctx.get("cash_allocation_pct")),
+        "buying_power": None if unavailable else ctx.get("buying_power"),
+        "buying_power_display": missing if unavailable else _usd(ctx.get("buying_power")),
+        "holdings_count": 0 if unavailable else (ctx.get("holdings_count") or len(positions)),
+        "risk_state": None if unavailable else risk_state,
+        "daily_risk_halt": False if unavailable else bool(ctx.get("daily_risk_halt")),
+        "high_water_mark": None if unavailable else (ctx.get("high_water_mark") or hwm.get("cash_flow_adjusted_hwm")),
+        "hwm_display": missing if unavailable else _usd(ctx.get("high_water_mark") or hwm.get("cash_flow_adjusted_hwm")),
+        "drawdown": None if unavailable else drawdown,
+        "drawdown_display": missing if unavailable else _pct_fraction(drawdown),
+        "start_of_day_nav": None if unavailable else ctx.get("start_of_day_nav"),
+        "daily_return": None if unavailable else daily,
+        "daily_return_display": missing if unavailable else _pct_fraction(daily),
+        "updated_at": None if unavailable else (ctx.get("timestamp") or book.get("created_at")),
         "sleeves": [
             {
                 "sleeve": name,
@@ -971,21 +1583,23 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
             for name, value in sleeves.items()
         ],
         "positions": positions,
-        "spy": spy_benchmark(ctx, reports),
+        "spy": spy_benchmark(ctx, reports, flags=ui) if not unavailable else {"observed": False, "source": None, "note": LIVE_DATA_UNAVAILABLE},
         "live_hwm": hwm,
         "approvals": list_approvals(state),
-        "alerts": monitoring_alerts(state),
+        "alerts": [] if unavailable else monitoring_alerts(state),
         "recent_decisions": recent_decisions(state),
         "approved_does_not_place_order": True,
+        "monitoring_positions_count": 0 if unavailable else len(latest_monitor.get("positions") or []),
         "kpis": {
-            "portfolio_value": _metric(nav, _usd(nav)),
-            "cash": _metric(ctx.get("cash"), f"{_usd(ctx.get('cash'))} ({_pct_fraction(ctx.get('cash_allocation_pct'))})"),
-            "today_pnl": _metric(daily, today_display),
-            "total_return": _metric(port_ret, _signed_pct(port_ret)),
-            "spy_return": _metric(spy_ret, _signed_pct(spy_ret)),
-            "excess_return": _metric(excess, _signed_pct(excess)),
-            "drawdown": _metric(drawdown, _pct_fraction(drawdown)),
-            "risk_state": _metric(risk_state, risk_state, available=bool(risk_state)),
+            "portfolio_value": _metric(nav, _usd(nav) if not unavailable else missing, available=nav is not None and not unavailable),
+            "cash": _metric(ctx.get("cash"), f"{_usd(ctx.get('cash'))} ({_pct_fraction(ctx.get('cash_allocation_pct'))})" if not unavailable else missing, available=ctx.get("cash") is not None and not unavailable),
+            "buying_power": _metric(ctx.get("buying_power"), _usd(ctx.get("buying_power")) if not unavailable else missing, available=ctx.get("buying_power") is not None and not unavailable),
+            "today_pnl": _metric(daily, today_display if not unavailable else missing, available=daily is not None and not unavailable),
+            "total_return": _metric(port_ret, _signed_pct(port_ret) if not unavailable else missing, available=port_ret is not None and not unavailable),
+            "spy_return": _metric(spy_ret, _signed_pct(spy_ret) if not unavailable else missing, available=spy_ret is not None and not unavailable),
+            "excess_return": _metric(excess, _signed_pct(excess) if not unavailable else missing, available=excess is not None and not unavailable),
+            "drawdown": _metric(drawdown, _pct_fraction(drawdown) if not unavailable else missing, available=drawdown is not None and not unavailable),
+            "risk_state": _metric(risk_state, risk_label or missing, available=bool(risk_label) and not unavailable),
         },
         "allocation_chart": {
             "labels": [row["label"] for row in slices],
@@ -994,8 +1608,8 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
             "slices": slices,
         },
         "performance": {
-            "ready": ready,
-            "message": None if ready else HISTORY_COLLECTING,
+            "ready": ready and not unavailable,
+            "message": LIVE_DATA_UNAVAILABLE if unavailable else (None if ready else HISTORY_COLLECTING),
             "labels": [row["at"] for row in history],
             "nav": [row["nav"] for row in history],
             "spy": [row.get("spy") for row in history],
@@ -1004,6 +1618,145 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
         "activity": compact_activity(state),
         "top_candidates": candidates[:5],
         "candidate_count": len(candidates),
-        "unavailable": UNAVAILABLE,
+        "ai": ai_summary(state, ui),
+        "unavailable": missing,
         "history_collecting": HISTORY_COLLECTING,
+        "agent": agent_runtime_view(state),
+        "watchlist": watchlist_view(state),
+        "notifications": notifications_view(state),
+        "approval_banner": (
+            f"TRADE APPROVAL REQUIRED — {list_approvals(state)['pending_count']}"
+            if list_approvals(state)["pending_count"]
+            else None
+        ),
+        "autonomous_activity": activity_log_view(state, limit=40)["entries"][:12],
+    }
+
+
+def _ai_store(state: DashboardState, mode: str):
+    from agentic_portfolio.ai.store import AIArtifactStore
+
+    return AIArtifactStore(state.root, runtime_mode=mode)
+
+
+def _ai_budget_status(state: DashboardState):
+    from agentic_portfolio.ai.budget import BudgetManager
+    from agentic_portfolio.ai.config import load_ai_config
+    from agentic_portfolio.ai.ledger import UsageLedger
+
+    cfg = load_ai_config()
+    return BudgetManager(UsageLedger(state.root, config=cfg), cfg).status()
+
+
+def ai_summary(state: DashboardState, ui: dict[str, Any] | None = None) -> dict[str, Any]:
+    from agentic_portfolio.ai.config import load_ai_config
+    from agentic_portfolio.ai.gateway import default_providers
+    from agentic_portfolio.ai.safety import LIVE_AI_ALLOWED, LIVE_ORDER_PLACEMENT, LIVE_PROPOSALS_ALLOWED
+
+    flags = ui or resolve_ui_flags()
+    mode = flags["environment"]
+    status = _ai_budget_status(state)
+    cfg = load_ai_config()
+    roles = {
+        name: {"provider": spec.get("provider"), "model": spec.get("model")}
+        for name, spec in dict(cfg.get("roles") or {}).items()
+    }
+    availability = {name: bool(adapter.available()) for name, adapter in default_providers(cfg).items() if name != "scripted"}
+    store = _ai_store(state, mode)
+    other = "PAPER" if mode == "LIVE" else "LIVE"
+    return {
+        "runtime_mode": mode,
+        "LIVE_AI_ALLOWED": LIVE_AI_ALLOWED,
+        "LIVE_PROPOSALS_ALLOWED": LIVE_PROPOSALS_ALLOWED,
+        "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+        "roles": roles,
+        "providers": availability,
+        "budget_mode": status.mode.value,
+        "cap": float(status.cap),
+        "spent": float(status.spent),
+        "remaining": float(status.remaining),
+        "pct_used": status.pct_used,
+        "calls_month": status.calls_month,
+        "calls_today": status.calls_today,
+        "spend_by_provider": {k: float(v) for k, v in status.spend_by_provider.items()},
+        "spend_by_model": {k: float(v) for k, v in status.spend_by_model.items()},
+        "spent_display": f"${float(status.spent):.4f}",
+        "remaining_display": f"${float(status.remaining):.4f}",
+        "cap_display": f"${float(status.cap):.2f}",
+        "proposals": len(store.proposals()),
+        "screenings": len(store.screenings()),
+        "other_book": other,
+        "isolation_note": "PAPER AI artifacts never appear as LIVE decisions.",
+    }
+
+
+def ai_view(state: DashboardState) -> dict[str, Any]:
+    ui = resolve_ui_flags()
+    summary = ai_summary(state, ui)
+    return {
+        **summary,
+        "environment": ui["environment"],
+        "paper_book_label": PAPER_BOOK_LABEL,
+        "live_account_label": LIVE_ACCOUNT_LABEL,
+        "active_book_label": ui["active_book_label"],
+        "book_kind": ui["book_kind"],
+        "live_order_placement_enabled": False,
+        "note": "AI is advisory. Risk Gate is deterministic. Broker is the account source of truth. Cursor is the development agent; the Raspberry Pi runs this runtime.",
+    }
+
+
+def ai_activity_view(state: DashboardState) -> dict[str, Any]:
+    ui = resolve_ui_flags()
+    mode = ui["environment"]
+    store = _ai_store(state, mode)
+    other_store = _ai_store(state, "PAPER" if mode == "LIVE" else "LIVE")
+    screenings = store.screenings()
+    research = store.research_reports()
+    decisions = store.decisions()
+    proposals = store.proposals()
+    scans = store.scans()
+    other_ids = {str(r.get("proposal_id") or r.get("screening_id") or r.get("research_id")) for r in other_store.proposals() + other_store.screenings()}
+    rows = []
+    research_by = {str(r.get("ticker") or "").upper(): r for r in research}
+    decision_by = {str(r.get("ticker") or "").upper(): r for r in decisions}
+    proposal_by = {str(r.get("ticker") or "").upper(): r for r in proposals}
+    for screen in screenings:
+        ticker = str(screen.get("ticker") or "").upper()
+        if str(screen.get("runtime_mode") or mode).upper() != mode:
+            continue
+        report = research_by.get(ticker) or {}
+        decision = decision_by.get(ticker) or {}
+        proposal = proposal_by.get(ticker) or {}
+        rows.append(
+            {
+                "ticker": ticker,
+                "runtime_mode": screen.get("runtime_mode") or mode,
+                "screen_score": screen.get("score"),
+                "classification": screen.get("classification"),
+                "worth_deep_research": screen.get("worth_deep_research"),
+                "research_action": report.get("recommended_action"),
+                "research_status": "complete" if report else "none",
+                "decision_action": decision.get("action"),
+                "confidence": proposal.get("confidence") or decision.get("confidence") or screen.get("confidence"),
+                "risk_verdict": proposal.get("risk_verdict"),
+                "proposal_status": proposal.get("status"),
+                "rejection_reason": proposal.get("rejection_reason") or screen.get("rejection_reason") or report.get("rejection_reason"),
+                "provider": proposal.get("provider") or screen.get("provider"),
+                "model": proposal.get("model") or screen.get("model"),
+            }
+        )
+    rows.sort(key=lambda r: str(r.get("ticker") or ""))
+    return {
+        "environment": mode,
+        "book_kind": ui["book_kind"],
+        "active_book_label": ui["active_book_label"],
+        "paper_book_label": PAPER_BOOK_LABEL,
+        "live_account_label": LIVE_ACCOUNT_LABEL,
+        "live_order_placement_enabled": False,
+        "scans": scans[-10:],
+        "rows": rows,
+        "proposals": proposals,
+        "other_book_count": len(other_ids),
+        "contamination": False,
+        "note": f"Showing {mode} AI activity only. The other book has {len(other_ids)} artifacts that are not mixed in.",
     }

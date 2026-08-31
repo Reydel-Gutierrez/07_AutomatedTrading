@@ -1,3 +1,5 @@
+import pytest
+
 from agentic_portfolio.context import build_context
 from agentic_portfolio.policy import load_account_rules
 from agentic_portfolio.schemas import (
@@ -13,6 +15,23 @@ from agentic_portfolio.schemas import (
 ACCOUNT = load_account_rules()["account"]["account_number"]
 
 HUGE_ADV = LiquidityInputs(median_daily_dollar_volume_20d=1e12)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_live_and_ai_env(monkeypatch, tmp_path):
+    """Tests must not inherit LIVE shell secrets or runtime flags."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.delenv("AGENTIC_RUNTIME_MODE", raising=False)
+    monkeypatch.delenv("DASHBOARD_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("AGENTIC_READONLY_MCP_TOKEN", raising=False)
+    monkeypatch.delenv("AGENTIC_READONLY_MCP_URL", raising=False)
+    monkeypatch.delenv("AGENTIC_READONLY_MCP_TOKEN_FILE", raising=False)
+    monkeypatch.delenv("AGENTIC_READONLY_MCP_JSON", raising=False)
+    monkeypatch.setenv("AGENTIC_READONLY_MCP_HOME", str(tmp_path / "mcp-home"))
+    from agentic_portfolio.runtime import reset_readonly_broker_runtime
+
+    reset_readonly_broker_runtime()
 
 
 def ctx(

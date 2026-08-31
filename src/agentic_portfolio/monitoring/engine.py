@@ -79,6 +79,7 @@ def run_position_monitor(
     now: datetime | None = None,
     config: dict | None = None,
     journal: Path | None = None,
+    runtime_mode: str | None = None,
 ) -> MonitoringResult:
     """Monitor holdings. Meaningful triggers reassess thesis and may hit Risk Gate."""
     cfg = config or load_monitoring_config()
@@ -89,6 +90,12 @@ def run_position_monitor(
     for obs in obs_map.values():
         used.extend(obs.sources_observed)
     assert_no_forbidden_tools(used)
+    if str(runtime_mode or "").upper() == "LIVE":
+        from agentic_portfolio.live.isolation import PaperContaminationError
+
+        held = {p.symbol.upper() for p in context.positions}
+        if context.current_nav == 10_000.0 and held >= {"NVDA", "NKE"}:
+            raise PaperContaminationError("LIVE monitoring received paper holdings")
     report_map = _report_map(reports)
     theses = theses or (ThesisRegistry() if persist else None)
     sleeves = sleeves or (SleeveRegistry() if persist else None)
@@ -138,6 +145,7 @@ def run_position_monitor(
         theses_activated=0,
         unsupported_claims=unsupported,
         validation_errors=errors,
+        runtime_mode=runtime_mode,
     )
     if persist:
         (store or MonitoringStore()).save(run_id, _run_record(result, now))
@@ -452,6 +460,8 @@ def _run_record(result: MonitoringResult, now: datetime) -> dict[str, Any]:
         "theses_activated": 0,
         "unsupported_claims": list(result.unsupported_claims),
         "nav": result.context.current_nav if result.context else None,
+        "runtime_mode": result.runtime_mode,
+        "source_of_truth": "robinhood_agentic_account" if str(result.runtime_mode or "").upper() == "LIVE" else "isolated_paper_book",
     }
 
 

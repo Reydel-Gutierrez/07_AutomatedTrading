@@ -3,7 +3,7 @@
 {% block content %}
 <section class="card">
   <h2>Chronological history</h2>
-  <p class="meta"><span class="book-tag paper">{{ view.book_label }}</span> and <span class="book-tag live">{{ view.live_account_label }}</span> journals. Decisions, research, risk, approval, review, execution, paper fill, monitoring. Showing latest {{ view.entries|length }} of {{ view.count }}.</p>
+  <p class="meta"><span class="book-tag {{ 'live' if view.runtime_mode == 'LIVE' or environment == 'LIVE' else 'paper' }}">{{ view.book_label }}</span> journal for the active runtime. Paper fill history is diagnostics-only in LIVE. Showing latest {{ view.entries|length }} of {{ view.count }}.</p>
   <div class="table-wrap">
     <table>
       <thead><tr><th>When</th><th>Source</th><th>Type</th><th>Detail</th></tr></thead>

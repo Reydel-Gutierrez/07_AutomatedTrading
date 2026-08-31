@@ -5,10 +5,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Iterable
 
+from agentic_portfolio.calendar import is_regular_hours
 from agentic_portfolio.liquidity import liquidity_ok
 from agentic_portfolio.policy import load_policy
 from agentic_portfolio.schemas import (
     Decision,
+    FreshnessStatus,
     GateVerdict,
     OpenOrder,
     PortfolioContext,
@@ -33,6 +35,7 @@ from agentic_portfolio.execution.types import (
 
 RISK_OK_VERDICTS = {GateVerdict.PASS}
 RISK_REDUCING_VERDICTS = {GateVerdict.RISK_REDUCING_ONLY, GateVerdict.HALTED}
+NON_EXECUTABLE_SPREAD = {FreshnessStatus.OFF_HOURS, FreshnessStatus.INDICATIVE}
 
 
 class ExecutionValidationError(ValueError):
@@ -79,6 +82,36 @@ def held_quantity(ctx: PortfolioContext, symbol: str) -> float:
 def held_market_value(ctx: PortfolioContext, symbol: str) -> float:
     pos = held_position(ctx, symbol)
     return float(pos.market_value or 0.0) if pos else 0.0
+
+
+def quote_spread_freshness(quote: QuoteSnapshot | None, *, now: datetime) -> FreshnessStatus | None:
+    """Session of the bid/ask used for execution. None means unknown (legacy paper quotes)."""
+    if quote is None:
+        return None
+    raw = quote.spread_freshness
+    if raw:
+        try:
+            return raw if isinstance(raw, FreshnessStatus) else FreshnessStatus(str(raw))
+        except ValueError:
+            return None
+    as_of = quote.ask_as_of or quote.bid_as_of
+    if not as_of:
+        return None
+    from agentic_portfolio.ai.identity import evaluate_freshness, ttl_for
+
+    return evaluate_freshness(as_of, now=now, max_age=ttl_for("spread", now=now), kind="spread")
+
+
+def spread_usable_for_execution(quote: QuoteSnapshot | None, *, now: datetime) -> tuple[bool, str | None]:
+    """Off-hours/indicative NBBO is contextual only. Open-market checks need fresh RTH bid/ask."""
+    status = quote_spread_freshness(quote, now=now)
+    if status is None:
+        return True, None
+    if status in NON_EXECUTABLE_SPREAD:
+        return False, "SPREAD_NOT_REGULAR_SESSION"
+    if is_regular_hours(now) and status is not FreshnessStatus.FRESH:
+        return False, "SPREAD_NOT_REGULAR_SESSION"
+    return True, None
 
 
 def quote_spread_pct(quote: QuoteSnapshot | None, action: ProposedAction) -> float | None:
@@ -208,11 +241,15 @@ def liquidity_and_slippage(
     notional: float | None,
     quote: QuoteSnapshot | None,
     config: dict[str, Any],
+    *,
+    now: datetime | None = None,
 ) -> tuple[LiquidityCheck, SlippageCheck]:
     policy = load_policy()["liquidity"]
     max_spread = float(config.get("max_spread_pct") or 0.02)
     max_slip = float(config.get("max_slippage_pct") or 0.01)
+    stamp = now or datetime.now(timezone.utc)
     spread = quote_spread_pct(quote, action)
+    usable, session_code = spread_usable_for_execution(quote, now=stamp)
     adv = action.liquidity.median_daily_dollar_volume_20d if action.liquidity else None
     frac = None
     if notional is not None and adv and adv > 0:
@@ -240,20 +277,28 @@ def liquidity_and_slippage(
         if adv is None or adv <= 0:
             liq_codes.append("LIQUIDITY_UNKNOWN_EXIT")
 
-    if spread is not None and spread > max_spread + 1e-12:
+    if not usable:
+        liq_ok = False
+        if session_code and session_code not in liq_codes:
+            liq_codes.append(session_code)
+        slip_ok = False
+        if session_code and session_code not in slip_codes:
+            slip_codes.append(session_code)
+    elif spread is not None and spread > max_spread + 1e-12:
         liq_ok = False
         liq_codes.append("SPREAD_EXCEEDS_MAX")
     elif spread is None and action.decision in BUY_ACTIONS:
         liq_ok = False
         liq_codes.append("LIQUIDITY_INSUFFICIENT_EVIDENCE")
 
-    estimated_slip = (spread / 2.0) if spread is not None else None
-    if estimated_slip is not None and estimated_slip > max_slip + 1e-12:
-        slip_ok = False
-        slip_codes.append("SLIPPAGE_EXCEEDS_MAX")
-    elif estimated_slip is None and action.decision in BUY_ACTIONS:
-        slip_ok = False
-        slip_codes.append("SLIPPAGE_INSUFFICIENT_EVIDENCE")
+    estimated_slip = (spread / 2.0) if spread is not None and usable else None
+    if usable:
+        if estimated_slip is not None and estimated_slip > max_slip + 1e-12:
+            slip_ok = False
+            slip_codes.append("SLIPPAGE_EXCEEDS_MAX")
+        elif estimated_slip is None and action.decision in BUY_ACTIONS:
+            slip_ok = False
+            slip_codes.append("SLIPPAGE_INSUFFICIENT_EVIDENCE")
 
     if frac is not None and action.decision in BUY_ACTIONS:
         sleeve_key = "speculative" if action.sleeve and action.sleeve.value == "SPECULATIVE" else "normal"
@@ -329,7 +374,7 @@ def collect_block_reasons(
     codes.extend(size_codes)
     codes.extend(cash_and_quantity_codes(action, ctx, quantity, notional))
 
-    liq, slip = liquidity_and_slippage(action, notional, quote, config)
+    liq, slip = liquidity_and_slippage(action, notional, quote, config, now=now)
     if not liq.ok:
         codes.append("LIQUIDITY_CHECK_FAILED")
     if not slip.ok:

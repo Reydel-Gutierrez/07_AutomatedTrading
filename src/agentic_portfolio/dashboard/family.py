@@ -8,13 +8,15 @@ from typing import Any
 from agentic_portfolio.dashboard.accounts import public_user
 from agentic_portfolio.dashboard.queries import (
     DashboardState,
+    active_book,
+    active_context,
     allocation_slices,
     candidate_rows,
-    paper_book,
     paper_context,
     spy_benchmark,
 )
 from agentic_portfolio.dashboard.settings import LIVE_ACCOUNT_LABEL, PAPER_BOOK_LABEL, resolve_ui_flags
+from agentic_portfolio.runtime import RuntimeMode, get_active_runtime
 
 
 def _usd(value: float | None) -> str:
@@ -49,7 +51,19 @@ def _signed_pct(value: float | None) -> str:
     return f"{number:.2f}%"
 
 
+def current_runtime_nav(state: DashboardState) -> float | None:
+    ctx = active_context(state)
+    nav = ctx.get("current_nav")
+    if nav is None:
+        return None
+    return float(nav)
+
+
 def current_paper_nav(state: DashboardState) -> float | None:
+    """PAPER book NAV. LIVE callers should use current_runtime_nav."""
+    flags = resolve_ui_flags()
+    if get_active_runtime() is RuntimeMode.LIVE or flags.get("environment") == "LIVE":
+        return current_runtime_nav(state)
     ctx = paper_context(state)
     nav = ctx.get("current_nav")
     if nav is None:
@@ -62,10 +76,11 @@ def scaled_share(
     baseline_nav: float | None,
     current_nav: float | None,
 ) -> dict[str, Any]:
-    """Family dollars track paper NAV from the assignment baseline.
+    """Family dollars track the active book NAV from the assignment baseline.
 
     Example: $2,000 assigned when NAV=$10,000; later NAV=$11,000 → $2,200.
     Changing the assigned amount resets the baseline at that moment.
+    In LIVE mode the NAV is the Agentic Robinhood account, not the paper book.
     """
     starting = None if assigned_amount is None else float(assigned_amount)
     payload = {
@@ -114,7 +129,9 @@ def parse_amount(raw: Any) -> float:
 def nav_history(state: DashboardState) -> list[dict[str, Any]]:
     points: list[dict[str, Any]] = []
     seen: set[str] = set()
-    snap_dir = state.root / "state" / "paper_book" / "snapshots"
+    flags = resolve_ui_flags()
+    live = flags.get("environment") == "LIVE" or get_active_runtime() is RuntimeMode.LIVE
+    snap_dir = state.root / "state" / ("live_book" if live else "paper_book") / "snapshots"
 
     def _add(at: Any, nav: Any) -> None:
         if nav is None or at is None:
@@ -134,8 +151,8 @@ def nav_history(state: DashboardState) -> list[dict[str, Any]]:
                 continue
             ctx = data.get("context") or {}
             _add(ctx.get("timestamp") or data.get("created_at"), ctx.get("current_nav"))
-    book = paper_book(state) or {}
-    ctx = paper_context(state)
+    book = active_book(state, flags) or {}
+    ctx = active_context(state, flags)
     _add(ctx.get("timestamp") or book.get("created_at"), ctx.get("current_nav"))
     points.sort(key=lambda row: str(row.get("at") or ""))
     return points
@@ -170,7 +187,7 @@ def performance_series(user: dict[str, Any], state: DashboardState) -> list[dict
         if assigned_at and stamp < str(assigned_at):
             continue
         _append(stamp, point["nav"])
-    current = current_paper_nav(state)
+    current = current_runtime_nav(state)
     if current is not None:
         _append("current", current)
     return series
@@ -207,7 +224,7 @@ def chart_from_series(series: list[dict[str, Any]], *, width: int = 420, height:
 
 
 def allocation_percentages(state: DashboardState) -> dict[str, Any]:
-    ctx = paper_context(state)
+    ctx = active_context(state)
     sleeves = []
     for name, value in (ctx.get("sleeve_allocation_pct") or {}).items():
         sleeves.append({"sleeve": name, "pct": value, "display": _pct_fraction(value)})
@@ -233,24 +250,29 @@ def allocation_percentages(state: DashboardState) -> dict[str, Any]:
 
 
 def family_spy(state: DashboardState) -> dict[str, Any]:
-    ctx = paper_context(state)
+    flags = resolve_ui_flags()
+    ctx = active_context(state, flags)
     spy = ctx.get("spy")
+    book_note = "LIVE Robinhood snapshot" if flags.get("environment") == "LIVE" else "paper book"
     if isinstance(spy, dict) and spy:
-        observed = spy_benchmark(ctx, [])
+        observed = spy_benchmark(ctx, [], flags=flags)
         payload = dict(observed)
         payload.pop("payload", None)
-        note = payload.get("note") or "Observed SPY from the paper book. Not fabricated."
+        note = payload.get("note") or f"Observed SPY from the {book_note}. Not fabricated."
         payload["note"] = note
         if "price" not in payload and spy.get("price") is not None:
             payload["price"] = spy.get("price")
         if spy.get("return_pct") is not None:
             payload["return_pct"] = spy.get("return_pct")
             payload["return_display"] = _signed_pct(spy.get("return_pct"))
+        elif spy.get("period_return") is not None:
+            payload["return_pct"] = spy.get("period_return")
+            payload["return_display"] = _signed_pct(spy.get("period_return"))
         return payload
     return {
         "observed": False,
         "source": None,
-        "note": "SPY comparison is not on the current paper book snapshot. Not fabricated.",
+        "note": f"SPY comparison is not on the current {book_note}. Not fabricated.",
     }
 
 
@@ -264,7 +286,7 @@ def member_row(user: dict[str, Any], current_nav: float | None) -> dict[str, Any
 
 def family_admin_view(state: DashboardState, users: list[dict[str, Any]]) -> dict[str, Any]:
     ui = resolve_ui_flags()
-    nav = current_paper_nav(state)
+    nav = current_runtime_nav(state)
     members = [member_row(user, nav) for user in users]
     return {
         "members": members,
@@ -272,6 +294,7 @@ def family_admin_view(state: DashboardState, users: list[dict[str, Any]]) -> dic
         "environment": ui["environment"],
         "paper_book_label": PAPER_BOOK_LABEL,
         "live_account_label": LIVE_ACCOUNT_LABEL,
+        "active_book_label": ui["active_book_label"],
         "live_order_placement_enabled": False,
         "nav_available": nav is not None and nav > 0,
     }
@@ -299,11 +322,11 @@ def _public_candidates(state: DashboardState) -> list[dict[str, Any]]:
 
 def family_member_view(state: DashboardState, user: dict[str, Any]) -> dict[str, Any]:
     ui = resolve_ui_flags()
-    nav = current_paper_nav(state)
+    nav = current_runtime_nav(state)
     row = member_row(user, nav)
     series = performance_series(user, state)
     allocations = allocation_percentages(state)
-    slices = allocation_slices(paper_context(state))
+    slices = allocation_slices(active_context(state))
     candidates = _public_candidates(state)
     return {
         "name": row.get("name"),
@@ -332,5 +355,6 @@ def family_member_view(state: DashboardState, user: dict[str, Any]) -> dict[str,
         "environment": ui["environment"],
         "paper_book_label": PAPER_BOOK_LABEL,
         "live_account_label": LIVE_ACCOUNT_LABEL,
+        "active_book_label": ui["active_book_label"],
         "live_order_placement_enabled": False,
     }

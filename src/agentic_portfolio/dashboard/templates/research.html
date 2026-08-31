@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Research · Agentic Portfolio{% endblock %}
 {% block content %}
-<p class="lede"><span class="book-tag paper">{{ view.book_label }}</span> research and theses. Live-registry rows are labeled {{ view.live_account_label }}.</p>
+<p class="lede"><span class="book-tag {{ 'live' if view.runtime_mode == 'LIVE' or environment == 'LIVE' else 'paper' }}">{{ view.book_label }}</span> research and theses for the active runtime. Paper artifacts stay on System diagnostics.</p>
 <section class="card">
   <h2>Candidates</h2>
   <div class="table-wrap">

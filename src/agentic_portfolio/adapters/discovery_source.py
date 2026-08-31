@@ -18,7 +18,7 @@ from agentic_portfolio.adapters.robinhood_read import (
 from agentic_portfolio.classification import classify
 from agentic_portfolio.discovery.safety import DISCOVERY_FORBIDDEN_TOOLS, DISCOVERY_READ_TOOLS, assert_no_forbidden_tools
 from agentic_portfolio.discovery.snapshot import SecuritySnapshot
-from agentic_portfolio.schemas import MarketRegime, MarketRegimeStatus
+from agentic_portfolio.schemas import FactOrigin, FreshnessStatus, MarketRegime, MarketRegimeStatus, ProvenanceFact
 
 SOURCE_ID_ROBINHOOD = "robinhood"
 SOURCE_ID_PUBLIC = "public"
@@ -94,9 +94,9 @@ def assemble_snapshot(payload: SymbolPayloads, *, source_id: str = SOURCE_ID_ROB
     classification = classify(payload.symbol, evidence)
     classification.liquidity = liquidity
 
-    fund = _first(payload.fundamentals)
-    quote = _first(payload.quotes)
-    trad = _first(payload.tradability)
+    fund = _row_for_symbol(payload.fundamentals, payload.symbol)
+    quote = _row_for_symbol(payload.quotes, payload.symbol)
+    trad = _row_for_symbol(payload.tradability, payload.symbol)
     price = _f((quote or {}).get("last_trade_price") or (quote or {}).get("previous_close") or (fund or {}).get("open"))
     prev = _f((quote or {}).get("previous_close") or (fund or {}).get("previous_close"))
     high52 = _f((fund or {}).get("high_52_weeks") or (fund or {}).get("year_high"))
@@ -127,11 +127,47 @@ def assemble_snapshot(payload: SymbolPayloads, *, source_id: str = SOURCE_ID_ROB
         state = trad.get("state")
 
     refs = [f"{source_id}:{k}" for k in ("quotes", "fundamentals", "financials", "historicals") if getattr(payload, k)]
+    search_row = _match_search_row(payload.search, payload.symbol)
+    instrument_id = (search_row or {}).get("instrument_id") or (trad or {}).get("instrument_id")
+    quote_as_of = (
+        (quote or {}).get("venue_last_trade_time")
+        or (quote or {}).get("updated_at")
+        or ts
+    )
+    # Bid/ask timestamps must not inherit last_trade time. Weekend NBBO is
+    # observed off-hours even when last_trade is Friday RTH.
+    bid_as_of = (quote or {}).get("venue_bid_time") or ts
+    ask_as_of = (quote or {}).get("venue_ask_time") or ts
+    quote_source = "get_equity_quotes.last_trade_price" if quote else None
+    origin = FactOrigin.MCP_OBSERVED if source_id in {SOURCE_ID_ROBINHOOD, "mcp", "live"} else FactOrigin.MCP_OBSERVED
+    provenance = _snapshot_provenance(
+        ts=ts,
+        quote_as_of=str(quote_as_of) if quote_as_of else ts,
+        bid_as_of=str(bid_as_of) if bid_as_of else (str(quote_as_of) if quote_as_of else ts),
+        ask_as_of=str(ask_as_of) if ask_as_of else (str(quote_as_of) if quote_as_of else ts),
+        name=(trad or {}).get("name") or (fund or {}).get("description"),
+        instrument_kind=evidence.instrument_kind,
+        price=price,
+        prev=prev,
+        bid=_f((quote or {}).get("bid_price")),
+        ask=_f((quote or {}).get("ask_price")),
+        market_cap=_f((fund or {}).get("market_cap")),
+        pe=_f((fund or {}).get("pe_ratio") or (fund or {}).get("pe")),
+        pb=_f((fund or {}).get("pb_ratio") or (fund or {}).get("pb")),
+        sector=(fund or {}).get("sector"),
+        industry=(fund or {}).get("industry"),
+        description=(fund or {}).get("description"),
+        avg_vol=avg_vol,
+        high52=high52,
+        low52=low52,
+        instrument_id=instrument_id,
+        origin=origin,
+    )
     return SecuritySnapshot(
         symbol=payload.symbol.upper(),
         observed_at=ts,
         sources=list(payload.sources) or [source_id],
-        name=(trad or {}).get("name") or (fund or {}).get("description"),
+        name=(trad or {}).get("name") or (search_row or {}).get("name") or (fund or {}).get("description"),
         instrument_kind=evidence.instrument_kind,
         tradable=tradable if tradable is None else bool(tradable),
         trade_state=state,
@@ -174,6 +210,13 @@ def assemble_snapshot(payload: SymbolPayloads, *, source_id: str = SOURCE_ID_ROB
         classification=classification,
         liquidity=liquidity,
         evidence_refs=refs,
+        data_origin="mcp",
+        broker_instrument_id=str(instrument_id) if instrument_id else None,
+        quote_as_of=str(quote_as_of) if quote_as_of else ts,
+        quote_source=quote_source,
+        bid_as_of=str(bid_as_of) if bid_as_of else None,
+        ask_as_of=str(ask_as_of) if ask_as_of else None,
+        fact_provenance=provenance,
     )
 
 
@@ -268,6 +311,39 @@ def symbols_from_earnings_calendar(payload: Mapping[str, Any] | None) -> list[tu
             days_i = None
         out.append((sym, days_i))
     return out
+
+
+def _row_for_symbol(payload: Mapping[str, Any] | None, symbol: str) -> dict[str, Any] | None:
+    """Exact-symbol match only. Never take the first search/quote hit."""
+    rows = _all_rows(payload)
+    want = str(symbol or "").upper()
+    matched = [row for row in rows if str(row.get("symbol") or "").upper() == want]
+    if matched:
+        return matched[0]
+    if len(rows) == 1 and not str(rows[0].get("symbol") or "").strip():
+        return rows[0]
+    return None
+
+
+def _all_rows(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not payload:
+        return []
+    data = payload.get("data", payload) if isinstance(payload, Mapping) else None
+    if not isinstance(data, dict):
+        return []
+    results = data.get("results")
+    rows: list[dict[str, Any]] = []
+    if isinstance(results, list):
+        for item in results:
+            if not isinstance(item, dict):
+                continue
+            if "quote" in item and isinstance(item.get("quote"), dict) and len(item) <= 3:
+                rows.append(dict(item.get("quote") or {}))
+            else:
+                rows.append(dict(item))
+    elif "symbol" in data or "name" in data or "last_trade_price" in data:
+        rows.append(dict(data))
+    return rows
 
 
 def _first(payload: Mapping[str, Any] | None) -> dict[str, Any] | None:
@@ -477,6 +553,91 @@ def _sec_flags(payload: Mapping[str, Any] | None) -> tuple[bool | None, bool | N
     if not going and not dilution:
         return None, None
     return (True if going else None), (True if dilution else None)
+
+
+def _match_search_row(payload: Mapping[str, Any] | None, symbol: str) -> dict[str, Any] | None:
+    if not payload:
+        return None
+    data = payload.get("data", payload) if isinstance(payload, Mapping) else None
+    results = data.get("results") if isinstance(data, dict) else None
+    want = symbol.upper()
+    if isinstance(results, list):
+        for item in results:
+            if isinstance(item, dict) and str(item.get("symbol") or "").upper() == want:
+                return dict(item)
+        return None
+    row = _first(payload)
+    if row and str(row.get("symbol") or "").upper() in {want, ""}:
+        return row
+    return None
+
+
+def _prov(value: Any, *, source: str, as_of: str, origin: FactOrigin, notes: list[str] | None = None) -> ProvenanceFact:
+    if value is None or value == "":
+        return ProvenanceFact(
+            value=None,
+            source=source,
+            as_of=None,
+            freshness=FreshnessStatus.UNAVAILABLE,
+            origin=FactOrigin.UNAVAILABLE,
+            unavailable=True,
+            notes=list(notes or []),
+        )
+    return ProvenanceFact(
+        value=value,
+        source=source,
+        as_of=as_of,
+        freshness=FreshnessStatus.UNKNOWN,
+        origin=origin,
+        unavailable=False,
+        notes=list(notes or []),
+    )
+
+
+def _snapshot_provenance(
+    *,
+    ts: str,
+    quote_as_of: str,
+    bid_as_of: str,
+    ask_as_of: str,
+    name: Any,
+    instrument_kind: Any,
+    price: Any,
+    prev: Any,
+    bid: Any,
+    ask: Any,
+    market_cap: Any,
+    pe: Any,
+    pb: Any,
+    sector: Any,
+    industry: Any,
+    description: Any,
+    avg_vol: Any,
+    high52: Any,
+    low52: Any,
+    instrument_id: Any,
+    origin: FactOrigin,
+) -> dict[str, ProvenanceFact]:
+    return {
+        "security_name": _prov(name, source="get_equity_tradability.name", as_of=ts, origin=origin),
+        "security_type": _prov(instrument_kind, source="derived:name+industry", as_of=ts, origin=FactOrigin.DERIVED),
+        "last_price": _prov(price, source="get_equity_quotes.last_trade_price", as_of=quote_as_of, origin=origin),
+        "previous_close": _prov(prev, source="get_equity_quotes.previous_close", as_of=quote_as_of, origin=origin),
+        "bid": _prov(bid, source="get_equity_quotes.bid_price", as_of=bid_as_of, origin=origin),
+        "ask": _prov(ask, source="get_equity_quotes.ask_price", as_of=ask_as_of, origin=origin),
+        "market_cap": _prov(market_cap, source="get_equity_fundamentals.market_cap", as_of=ts, origin=origin),
+        "net_assets": _prov(market_cap, source="get_equity_fundamentals.market_cap", as_of=ts, origin=origin, notes=["fund_assets_when_instrument_is_etf"]),
+        "pe_ratio": _prov(pe, source="get_equity_fundamentals.pe_ratio", as_of=ts, origin=origin),
+        "fund_pe_ratio": _prov(pe, source="get_equity_fundamentals.pe_ratio", as_of=ts, origin=origin, notes=["holdings_weighted_when_instrument_is_etf"]),
+        "pb_ratio": _prov(pb, source="get_equity_fundamentals.pb_ratio", as_of=ts, origin=origin),
+        "sector": _prov(sector, source="get_equity_fundamentals.sector", as_of=ts, origin=origin),
+        "industry": _prov(industry, source="get_equity_fundamentals.industry", as_of=ts, origin=origin),
+        "description": _prov(description, source="get_equity_fundamentals.description", as_of=ts, origin=origin),
+        "average_volume": _prov(avg_vol, source="get_equity_fundamentals.average_volume", as_of=ts, origin=origin),
+        "high_52_week": _prov(high52, source="get_equity_fundamentals.high_52_weeks", as_of=ts, origin=origin),
+        "low_52_week": _prov(low52, source="get_equity_fundamentals.low_52_weeks", as_of=ts, origin=origin),
+        "broker_instrument_id": _prov(instrument_id, source="search.instrument_id", as_of=ts, origin=origin),
+    }
 
 
 # Re-export so callers can see the allowed/forbidden split.
