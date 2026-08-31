@@ -223,11 +223,22 @@ class GuardedFetcherProxy:
             "get_indexes",
             "get_index_quotes",
             "get_sec_filing_index",
+            "get_sec_filing",
+            "get_sec_filing_facts",
+            "get_sec_filing_facts_catalog",
+            "get_equity_price_book",
+            "get_equity_technical_indicators",
+            "sec_index",
+            "sec_facts",
+            "sec_filing",
+            "price_book",
+            "technicals",
             "scans",
             "watchlists",
             "watchlist_items",
             "popular_watchlists",
             "earnings_calendar",
+            "earnings_results",
             "fundamentals",
             "financials",
             "historicals",
@@ -242,14 +253,34 @@ class GuardedFetcherProxy:
     def __init__(self, inner: Any) -> None:
         object.__setattr__(self, "_inner", inner)
 
+    _ALIASES = {
+        "get_financials": "financials",
+        "get_equity_news": "news",
+        "get_equity_historicals": "historicals",
+        "get_earnings_results": "earnings_results",
+        "get_earnings_calendar": "earnings_calendar",
+        "get_sec_filing_index": "sec_index",
+        "get_sec_filing_facts": "sec_facts",
+        "get_sec_filing": "sec_filing",
+        "get_equity_technical_indicators": "technicals",
+        "get_equity_price_book": "price_book",
+    }
+
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
         if name in WRITE_ORDER_TOOLS:
             raise AttributeError(name)
-        if name not in self._ALLOWED:
+        resolved = self._ALIASES.get(name, name)
+        if name not in self._ALLOWED and resolved not in self._ALLOWED:
             raise AttributeError(name)
-        return getattr(self._inner, name)
+        inner = object.__getattribute__(self, "_inner")
+        method = getattr(inner, name, None)
+        if method is None and resolved != name:
+            method = getattr(inner, resolved, None)
+        if method is None:
+            raise AttributeError(name)
+        return method
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name == "_inner":

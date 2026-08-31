@@ -11,15 +11,20 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from json import dumps as json_dumps
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
+from uuid import uuid4
 
 from agentic_portfolio.ai.config import load_ai_config, pipeline_limits
+from agentic_portfolio.ai.context import assemble_context
 from agentic_portfolio.ai.errors import AIError, BudgetDenied, BudgetExhausted
 from agentic_portfolio.ai.gateway import AIGateway
 from agentic_portfolio.ai.reasoners import GatewayDecisionReasoner, GatewayResearchReasoner
+from agentic_portfolio.ai.schemas import SCREENING_SCHEMA
+from agentic_portfolio.ai.screening import SCREEN_INSTRUCTIONS, screening_from_payload
 from agentic_portfolio.ai.store import AIArtifactStore
-from agentic_portfolio.ai.types import BudgetMode
+from agentic_portfolio.ai.types import BudgetMode, ModelRole
 from agentic_portfolio.context import portfolio_context_from_dict
 from agentic_portfolio.decision.engine import run_portfolio_decision
 from agentic_portfolio.decision.reasoner import DecisionReasoner
@@ -37,9 +42,10 @@ from agentic_portfolio.paper_fill.store import PaperFillStore
 from agentic_portfolio.policy import load_research_config
 from agentic_portfolio.research.collect import collect_research_payload
 from agentic_portfolio.research.engine import evidence_fingerprint, run_research
-from agentic_portfolio.research.packet import ResearchPayload
+from agentic_portfolio.research.packet import ResearchPayload, build_packet
 from agentic_portfolio.research.reasoner import ResearchReasoner
 from agentic_portfolio.research.store import ResearchStore
+from agentic_portfolio.research.sufficiency import evaluate_evidence_sufficiency
 from agentic_portfolio.research.types import ResearchConclusion, ResearchFreshness, ResearchReport, ResearchStatus
 from agentic_portfolio.research.validate import ResearchValidationError
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, LIVE_SOURCE_OF_TRUTH, RuntimeMode, discovery_state_dir, live_placement_enabled
@@ -273,6 +279,120 @@ class ResearchQueueWorker:
             return collect_research_payload(candidate.symbol, self.fetcher, now=self.now())
         raise RuntimeError(f"no research payload source for {candidate.symbol}")
 
+    def _luna_screen(self, candidate: Candidate, packet, context: PortfolioContext) -> dict[str, Any]:
+        """Cheap Luna screen before Terra. Outages defer; they do not look like a reject."""
+        if self.gateway is None or self.research_reasoner is not None:
+            return {"outcome": "proceed", "ai_calls": 0}
+        existing = self.ai_store.latest_for_ticker("screenings", candidate.symbol)
+        if existing is not None:
+            if existing.get("worth_deep_research") is False:
+                return {"outcome": "reject", "ai_calls": 0, "screening_id": existing.get("screening_id")}
+            if existing.get("worth_deep_research") is True:
+                return {"outcome": "proceed", "ai_calls": 0, "screening_id": existing.get("screening_id")}
+        facts = {item.name: item.value for item in packet.facts}
+        derived = {item.name: item.value for item in packet.derived_metrics}
+        snap = {
+            "current_price": facts.get("market_price"),
+            "bid": facts.get("bid") or facts.get("bid_price"),
+            "ask": facts.get("ask") or facts.get("ask_price"),
+            "previous_close": facts.get("previous_close"),
+            "name": facts.get("legal_name"),
+            "sector": facts.get("sector_label_raw"),
+            "description": facts.get("description"),
+            "market_cap": facts.get("market_cap"),
+            "pe_ratio": facts.get("pe_ratio"),
+            "average_volume": facts.get("average_volume"),
+            "return_5d": derived.get("return_5d"),
+            "return_21d": derived.get("return_21d"),
+            "rsi": facts.get("rsi"),
+            "sma_50": facts.get("sma_50"),
+            "sma_200": facts.get("sma_200"),
+            "news_headlines": facts.get("news_headlines") or [],
+        }
+        ctx = assemble_context(
+            candidate.symbol,
+            context,
+            now_iso=self.now().isoformat(),
+            runtime_mode=self.runtime_mode,
+            snapshot=snap,
+            discovery={
+                "discovery_score": candidate.discovery_score,
+                "provisional_sleeve": candidate.provisional_sleeve.value if candidate.provisional_sleeve else None,
+            },
+        )
+        try:
+            result = self.gateway.complete_structured(
+                role=ModelRole.SCREENING,
+                purpose="candidate_screening",
+                schema_name="screening",
+                schema=SCREENING_SCHEMA,
+                messages=[
+                    {"role": "system", "content": SCREEN_INSTRUCTIONS},
+                    {"role": "user", "content": json_dumps(ctx.to_prompt_dict(), default=str)},
+                ],
+                ticker=candidate.symbol,
+            )
+        except (BudgetDenied, BudgetExhausted, AIError) as exc:
+            return {"outcome": "defer", "reason": str(exc), "ai_calls": 0}
+        row = screening_from_payload(
+            result.payload,
+            provider=result.provider,
+            model=result.model,
+            cost=result.actual_cost,
+            context_id=ctx.context_id,
+            screening_id=str(uuid4()),
+            runtime_mode=self.runtime_mode.value,
+        )
+        try:
+            self.ai_store.save_screening(
+                row.screening_id,
+                {**row.__dict__, "created_at": self.now().isoformat(), "context_id": ctx.context_id, "ticker": row.ticker},
+            )
+        except FileExistsError:
+            pass
+        except Exception:  # noqa: BLE001
+            pass
+        if not row.worth_deep_research:
+            return {"outcome": "reject", "ai_calls": 1, "screening_id": row.screening_id}
+        return {"outcome": "proceed", "ai_calls": 1, "screening_id": row.screening_id}
+
+    def screen_cycle(self, *, job: str = "LUNA_SCREEN") -> dict[str, Any]:
+        """Run Luna against queued names without calling Terra."""
+        result = {"job": job, "status": "OK", "ai_calls": 0, "screened": 0, "rejected": 0, "placement_attempted": False}
+        blocked, why = self._budget_blocked()
+        if blocked:
+            result["status"] = "BLOCKED"
+            result["skipped"] = why
+            return result
+        if self.gateway is None:
+            result["status"] = "SKIPPED_NO_WORK"
+            result["skipped"] = "no_ai_gateway"
+            return result
+        context = self._context()
+        if context is None:
+            result["status"] = "BLOCKED"
+            result["skipped"] = "missing_live_context"
+            return result
+        self.reload_stores()
+        for entry in self.pending_entries():
+            candidate = self.candidates.get(entry.candidate_id) or self.candidates.active_for_symbol(entry.symbol)
+            if candidate is None:
+                continue
+            try:
+                payload = self._payload(candidate)
+                packet = build_packet(payload, candidate, context)
+                if not evaluate_evidence_sufficiency(packet).sufficient:
+                    continue
+                luna = self._luna_screen(candidate, packet, context)
+            except Exception:  # noqa: BLE001
+                continue
+            result["ai_calls"] += int(luna.get("ai_calls") or 0)
+            result["screened"] += 1
+            if luna.get("outcome") == "reject":
+                result["rejected"] += 1
+                self.queue.set_status(entry.queue_id, ResearchQueueStatus.REJECTED, skipped_reason="luna_screen_rejected")
+        return result
+
     def _budget_blocked(self) -> tuple[bool, str]:
         if self.gateway is None:
             return False, ""
@@ -418,7 +538,8 @@ class ResearchQueueWorker:
                 skipped_reason="payload_failed",
             )
             return {"symbol": candidate.symbol, "status": "FAILED", "reason": f"{type(exc).__name__}: {exc}"}
-        fingerprint = evidence_fingerprint(candidate, payload=payload)
+        packet = build_packet(payload, candidate, context)
+        fingerprint = evidence_fingerprint(candidate, payload=payload, packet=packet)
         existing = self.research_store.by_candidate(candidate.candidate_id) or self.research_store.by_symbol(candidate.symbol)
         complete = [
             r
@@ -450,6 +571,47 @@ class ResearchQueueWorker:
                 return self._apply_report(report, candidate, context, entry, ai_calls=0, duplicate=True)
 
         stamp = self.now()
+        try:
+            self.research_store.save_packet(packet)
+        except Exception:  # noqa: BLE001 — packet persist must not block research
+            pass
+        sufficiency = evaluate_evidence_sufficiency(packet)
+        luna_calls = 0
+        if sufficiency.sufficient:
+            luna = self._luna_screen(candidate, packet, context)
+            if luna["outcome"] == "defer":
+                self.queue.set_status(
+                    entry.queue_id,
+                    ResearchQueueStatus.QUEUED,
+                    last_error=str(luna.get("reason") or "luna_unavailable"),
+                    claimed_at=None,
+                    skipped_reason="ai_unavailable",
+                )
+                return {
+                    "symbol": candidate.symbol,
+                    "status": "FAILED",
+                    "reason": str(luna.get("reason") or "ai_unavailable"),
+                    "ai_calls": int(luna.get("ai_calls") or 0),
+                    "skipped_reason": "ai_unavailable",
+                }
+            if luna["outcome"] == "reject":
+                self.queue.set_status(
+                    entry.queue_id,
+                    ResearchQueueStatus.REJECTED,
+                    claimed_at=None,
+                    skipped_reason="luna_screen_rejected",
+                )
+                self.candidates.set_status(candidate.candidate_id, CandidateStatus.REJECTED, reason="luna_screen_rejected")
+                return {
+                    "symbol": candidate.symbol,
+                    "status": "OK",
+                    "ai_calls": int(luna.get("ai_calls") or 0),
+                    "reports_created": 0,
+                    "rejected": 1,
+                    "conclusion": "SCREEN_REJECTED",
+                    "screening_id": luna.get("screening_id"),
+                }
+            luna_calls = int(luna.get("ai_calls") or 0)
         self.queue.set_status(
             entry.queue_id,
             ResearchQueueStatus.RESEARCHING,
@@ -486,7 +648,7 @@ class ResearchQueueWorker:
                 body=str(exc),
                 payload={"symbol": candidate.symbol, "reason": str(exc)},
             )
-            return {"symbol": candidate.symbol, "status": "DEGRADED", "reason": str(exc), "ai_calls": 0, "rejected": 0}
+            return {"symbol": candidate.symbol, "status": "DEGRADED", "reason": str(exc), "ai_calls": luna_calls, "rejected": 0}
         except AIError as exc:
             self.queue.set_status(
                 entry.queue_id,
@@ -499,7 +661,7 @@ class ResearchQueueWorker:
                 "symbol": candidate.symbol,
                 "status": "FAILED",
                 "reason": f"{type(exc).__name__}: {exc}",
-                "ai_calls": 0,
+                "ai_calls": luna_calls,
                 "skipped_reason": "ai_unavailable",
             }
         except Exception as exc:  # noqa: BLE001 — one candidate must not kill the cycle
@@ -514,6 +676,7 @@ class ResearchQueueWorker:
 
         report = out.report
         report.evidence_fingerprint = report.evidence_fingerprint or fingerprint
+        terra_calls = 0 if report.research_source == "deterministic" else 1
         self._persist_ai_research(report, candidate)
         self.queue.set_status(
             entry.queue_id,
@@ -522,20 +685,21 @@ class ResearchQueueWorker:
             claimed_at=None,
             evidence_fingerprint=report.evidence_fingerprint,
         )
-        self._notify(
-            NotificationKind.RESEARCH_COMPLETED,
-            title=f"Research completed — {report.symbol}",
-            body=f"{report.symbol}: {report.research_conclusion.value if report.research_conclusion else report.research_status.value}",
-            payload={
-                "symbol": report.symbol,
-                "research_id": report.research_id,
-                "research_source": report.research_source,
-                "provider": report.provider,
-                "model": report.model,
-                "ai_call_id": report.ai_call_id,
-            },
-        )
-        return self._apply_report(report, candidate, context, entry, ai_calls=1, duplicate=False)
+        if report.research_source != "deterministic":
+            self._notify(
+                NotificationKind.RESEARCH_COMPLETED,
+                title=f"Research completed — {report.symbol}",
+                body=f"{report.symbol}: {report.research_conclusion.value if report.research_conclusion else report.research_status.value}",
+                payload={
+                    "symbol": report.symbol,
+                    "research_id": report.research_id,
+                    "research_source": report.research_source,
+                    "provider": report.provider,
+                    "model": report.model,
+                    "ai_call_id": report.ai_call_id,
+                },
+            )
+        return self._apply_report(report, candidate, context, entry, ai_calls=luna_calls + terra_calls, duplicate=False)
 
     def _apply_report(
         self,

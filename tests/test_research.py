@@ -427,7 +427,10 @@ def test_incomplete_evidence_need_more_data():
     payload = _payload("THIN", rich=False)
     cand = _candidate("THIN", score=80)
     packet = build_packet(payload, cand, ctx(10_000))
-    assert packet.completeness == "INCOMPLETE"
+    assert packet.completeness == "PARTIAL"
+    from agentic_portfolio.research.sufficiency import evaluate_evidence_sufficiency
+
+    assert evaluate_evidence_sufficiency(packet).sufficient is True
     out = run_research(
         cand,
         payload,
@@ -440,6 +443,95 @@ def test_incomplete_evidence_need_more_data():
     assert out.report.research_conclusion == ResearchConclusion.NEED_MORE_DATA
     assert out.report.research_status == ResearchStatus.RESEARCH_INCONCLUSIVE
     assert out.report.confidence == ResearchConfidence.LOW
+
+
+def test_core_incomplete_packet_skips_paid_reasoner(tmp_path):
+    from agentic_portfolio.research.sufficiency import evaluate_evidence_sufficiency
+
+    class Spy:
+        calls = 0
+
+        def reason(self, request):
+            self.calls += 1
+            return _ai("EMPTY")
+
+    payload = ResearchPayload(
+        symbol="EMPTY",
+        observed_at=TS,
+        sources_attempted=["get_equity_quotes", "get_equity_fundamentals"],
+        sources_observed=[],
+        sources_unavailable=["get_equity_quotes", "get_equity_fundamentals", "get_financials"],
+    )
+    cand = _candidate("EMPTY")
+    packet = build_packet(payload, cand, ctx(500))
+    assert packet.completeness == "INCOMPLETE"
+    assert evaluate_evidence_sufficiency(packet).sufficient is False
+    spy = Spy()
+    store = ResearchStore(tmp_path)
+    out = run_research(cand, payload, ctx(500), spy, persist=True, now=NOW, store=store, journal=tmp_path / "j.jsonl")
+    assert spy.calls == 0
+    assert out.report.research_source == "deterministic"
+    assert out.report.research_conclusion == ResearchConclusion.NEED_MORE_DATA
+    assert store.packets_for_symbol("EMPTY")
+
+
+def test_collect_resolves_adapter_method_aliases():
+    from agentic_portfolio.research.collect import collect_research_payload
+
+    class AdapterStyle:
+        def get_equity_quotes(self, symbols):
+            return _wrap("META", last_trade_price=320.0, previous_close=318.0, bid_price=319.9, ask_price=320.1, volume=1e7)
+
+        def get_equity_fundamentals(self, symbol):
+            return _wrap(symbol, description="Social network", sector="Technology", market_cap=8e11, pe_ratio=26.0)
+
+        def get_equity_tradability(self, symbol):
+            return _wrap(symbol, name="Meta Platforms Inc", state="active", tradeable=True)
+
+        def search_instrument(self, symbol):
+            return {"data": {"results": [{"symbol": symbol, "name": "Meta Platforms"}]}}
+
+        def financials(self, symbols, *, period="quarterly", limit=8):
+            return {
+                "data": {
+                    "results": [
+                        {
+                            "symbol": "META",
+                            "financials": [
+                                {"revenue": "60801000000", "net_income": "15848000000", "net_margin": "26.07", "gross_profit": "49471000000", "period_end_date": "2026-06-30"},
+                            ],
+                        }
+                    ]
+                }
+            }
+
+        def news(self, symbol, *, limit=15):
+            return {"data": {"results": [{"title": "Meta reports results"}]}}
+
+        def historicals(self, symbols, *, start_time, interval="day"):
+            return {"data": {"results": [{"close": 300 + i} for i in range(30)]}}
+
+        def earnings_results(self, symbol):
+            return {"data": {"results": [{"actual_eps": 1.1, "estimated_eps": 1.0}]}}
+
+        def earnings_calendar(self, *, days=14):
+            return {"data": {"results": []}}
+
+        def sec_index(self, symbol, *, form_type=None):
+            return {"data": {"results": [{"form_type": "10-K", "filing_id": "x"}]}}
+
+    payload = collect_research_payload("META", AdapterStyle(), now=NOW)
+    assert "get_financials" in payload.sources_observed
+    assert "get_equity_news" in payload.sources_observed
+    assert "get_financials" not in payload.sources_unavailable
+    packet = build_packet(payload, _candidate("META"), ctx(500))
+    names = {e.name for e in packet.facts}
+    assert "revenue_periods" in names
+    assert "news_headlines" in names
+    from agentic_portfolio.research.sufficiency import evaluate_evidence_sufficiency
+
+    assert evaluate_evidence_sufficiency(packet).sufficient is True
+    assert packet.completeness != "INCOMPLETE"
 
 
 def test_conflicting_evidence_lowers_confidence():

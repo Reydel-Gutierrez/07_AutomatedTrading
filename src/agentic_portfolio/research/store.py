@@ -37,6 +37,8 @@ class ResearchStore:
     def __init__(self, root: Path | None = None) -> None:
         self.root = research_dir(root)
         self.root.mkdir(parents=True, exist_ok=True)
+        self._packets = self.root / "packets"
+        self._packets.mkdir(parents=True, exist_ok=True)
         self._index_path = self.root / "index.json"
         self._index = self._load_index()
 
@@ -74,6 +76,35 @@ class ResearchStore:
             self._index.setdefault("by_date", {}).setdefault(day, []).append(report.research_id)
         self._save_index()
         return path
+
+    def save_packet(self, packet) -> Path:
+        """Persist the evidence packet that was sent (or would have been sent) to Terra."""
+        from agentic_portfolio.research.types import ResearchEvidencePacket
+
+        if not isinstance(packet, ResearchEvidencePacket):
+            raise TypeError("save_packet expects ResearchEvidencePacket")
+        path = self._packets / f"{packet.packet_id}.json"
+        path.write_text(json.dumps(to_dict(packet), indent=2, default=str), encoding="utf-8")
+        self._index.setdefault("packets_by_symbol", {}).setdefault(packet.symbol.upper(), []).append(packet.packet_id)
+        self._index.setdefault("packets_by_id", {})[packet.packet_id] = {
+            "symbol": packet.symbol,
+            "candidate_id": packet.candidate_id,
+            "assembled_at": packet.assembled_at,
+            "completeness": packet.completeness,
+            "path": f"packets/{path.name}",
+        }
+        self._save_index()
+        return path
+
+    def get_packet(self, packet_id: str):
+        path = self._packets / f"{packet_id}.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def packets_for_symbol(self, symbol: str) -> list[dict[str, Any]]:
+        ids = self._index.get("packets_by_symbol", {}).get(symbol.upper(), [])
+        return [p for pid in ids if (p := self.get_packet(pid))]
 
     def get(self, research_id: str) -> ResearchReport | None:
         path = self.path_for(research_id)

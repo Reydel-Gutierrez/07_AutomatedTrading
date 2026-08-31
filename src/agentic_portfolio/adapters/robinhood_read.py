@@ -298,11 +298,32 @@ class AuthorizedMcpReadAdapter:
     def financials(self, symbols: list[str], *, period: str = "quarterly", limit: int = 8) -> Mapping[str, Any] | None:
         return self._invoke("get_financials", symbols=as_symbol_list(symbols), period=period, limit=limit)
 
+    def get_financials(self, symbols: str | list[str], *, period: str = "quarterly", limit: int = 8) -> Mapping[str, Any] | None:
+        return self.financials(as_symbol_list(symbols), period=period, limit=limit)
+
     def historicals(self, symbols: list[str], *, start_time: str, interval: str = "day") -> Mapping[str, Any] | None:
         return self._invoke("get_equity_historicals", symbols=as_symbol_list(symbols), start_time=start_time, interval=interval)
 
-    def technicals(self, symbol: str, *, indicator: str, interval: str, start_time: str) -> Mapping[str, Any] | None:
-        return self._invoke("get_equity_technical_indicators", symbol=str(symbol).upper(), type=indicator, interval=interval, start_time=start_time)
+    def get_equity_historicals(self, symbols: str | list[str], *, start_time: str, interval: str = "day") -> Mapping[str, Any] | None:
+        return self.historicals(as_symbol_list(symbols), start_time=start_time, interval=interval)
+
+    def technicals(self, symbol: str, *, indicator: str, interval: str, start_time: str, period: int | None = None) -> Mapping[str, Any] | None:
+        kwargs: dict[str, Any] = {"symbol": str(symbol).upper(), "type": indicator, "interval": interval, "start_time": start_time}
+        if period is not None:
+            kwargs["period"] = period
+        return self._invoke("get_equity_technical_indicators", **kwargs)
+
+    def get_equity_technical_indicators(
+        self,
+        symbol: str,
+        *,
+        type: str | None = None,
+        indicator: str | None = None,
+        interval: str = "day",
+        start_time: str,
+        period: int | None = None,
+    ) -> Mapping[str, Any] | None:
+        return self.technicals(symbol, indicator=str(indicator or type or "rsi"), interval=interval, start_time=start_time, period=period)
 
     def tradability(self, symbols: list[str]) -> Mapping[str, Any] | None:
         return self._invoke("get_equity_tradability", account_number=self.account_number, symbols=as_symbol_list(symbols))
@@ -310,17 +331,29 @@ class AuthorizedMcpReadAdapter:
     def earnings_calendar(self, *, days: int = 7, **kwargs: Any) -> Mapping[str, Any] | None:
         return self._invoke("get_earnings_calendar", days=days, **kwargs)
 
+    def get_earnings_calendar(self, *, days: int = 7, **kwargs: Any) -> Mapping[str, Any] | None:
+        return self.earnings_calendar(days=days, **kwargs)
+
     def earnings_results(self, symbol: str) -> Mapping[str, Any] | None:
         return self._invoke("get_earnings_results", symbol=str(symbol).upper())
 
+    def get_earnings_results(self, symbol: str) -> Mapping[str, Any] | None:
+        return self.earnings_results(symbol)
+
     def news(self, symbol: str, *, limit: int = 5) -> Mapping[str, Any] | None:
         return self._invoke("get_equity_news", symbol=str(symbol).upper(), limit=limit)
+
+    def get_equity_news(self, symbol: str, *, limit: int = 5) -> Mapping[str, Any] | None:
+        return self.news(symbol, limit=limit)
 
     def sec_index(self, symbol: str, *, form_type: list[str] | None = None) -> Mapping[str, Any] | None:
         kwargs: dict[str, Any] = {"symbol": str(symbol).upper()}
         if form_type:
             kwargs["form_type"] = form_type
         return self._invoke("get_sec_filing_index", **kwargs)
+
+    def get_sec_filing_index(self, symbol: str, *, form_type: list[str] | None = None) -> Mapping[str, Any] | None:
+        return self.sec_index(symbol, form_type=form_type)
 
     def scans(self) -> Mapping[str, Any] | None:
         return self._invoke("get_scans")

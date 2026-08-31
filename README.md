@@ -148,7 +148,7 @@ Dashboard: `http://127.0.0.1:3100/approvals`.
 
 Switch: `AGENTIC_RUNTIME_MODE=LIVE` or `DASHBOARD_ENVIRONMENT=LIVE` (see `config/runtime.json`). Dashboard shows **LIVE**. It does not fall back to paper $10,000 NAV.
 
-The `RESEARCH_QUEUE_WORKER` job consumes promoted candidates in `state/live_ai/research_queue.json` through the existing Research Engine and AI Gateway. LIVE never reads `state/research_queue.json`. It runs during MARKET_OPEN as well (every 30 minutes, max 1 deep-research item per cycle; max 2 outside regular hours). Successful research can create DRAFT theses, persistent watches, or human approval packets. WATCH/REJECT/NEED_MORE_DATA do not immediately requeue.
+The `RESEARCH_QUEUE_WORKER` job consumes promoted candidates in `state/live_ai/research_queue.json`. Incomplete evidence is rejected deterministically before any paid call. Luna (`gpt-5.6-luna`) screens remaining names, then Terra (`gpt-5.6-terra`) researches only those worth deep research. LIVE never reads `state/research_queue.json`. It runs during MARKET_OPEN as well (every 30 minutes, max 1 deep-research item per cycle; max 2 outside regular hours). Successful research can create DRAFT theses, persistent watches, or human approval packets. WATCH/REJECT/NEED_MORE_DATA do not immediately requeue.
 
 Live discovery is dynamic (`LIVE_DISCOVERY_WIRED=true`): positions, watchlists, popular lists, saved scans, earnings, plus a deterministic core-liquid/ETF sleeve — no AI, no frozen-only universe.
 

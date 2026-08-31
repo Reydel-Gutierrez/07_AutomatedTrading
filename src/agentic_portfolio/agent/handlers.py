@@ -668,6 +668,10 @@ def _ai_screen(services: AgentServices, ctx: dict[str, Any], *, role: str) -> di
         if reason == "budget_exhausted":
             services.notify.emit(kind, title="AI budget exhausted", body="Runtime continues without external AI calls.", payload={"job": job})
         return _ok(job, ai_calls=0, skipped=reason, runtime_continues=True)
+    if services.gateway is not None:
+        row = _pipeline_worker(services).screen_cycle(job=job)
+        row["role"] = role
+        return row
     analysis = _session_analysis(services, ctx, job)
     analysis["role"] = role
     if services.ai_call_fn is None:

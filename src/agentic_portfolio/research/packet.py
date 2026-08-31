@@ -344,24 +344,50 @@ def build_packet(
     deriv("debt_to_assets", ratio(debt, assets), "derived:debt/assets")
 
     missing: list[str] = []
-    for src in payload.sources_unavailable:
-        missing.append(f"source_unavailable:{src}")
-    if not snap.revenue_periods:
-        missing.append("financials.revenue")
-    if snap.pe_ratio is None and not (cls and cls.security_class and "ETF" in cls.security_class.value):
-        missing.append("valuation.pe_ratio")
-    if not snap.news_headlines:
-        missing.append("news")
-    if payload.sec_index is None:
-        missing.append("sec_filings")
+    optional_gaps: list[str] = []
+    cls_value = cls.security_class.value if cls and cls.security_class else None
+    is_etf = bool(cls_value and "ETF" in cls_value)
+
     if snap.current_price is None:
         missing.append("market_price")
+    if not (snap.name or snap.tradable is not None):
+        missing.append("identity")
+    substance = bool(
+        snap.revenue_periods
+        or snap.pe_ratio is not None
+        or snap.market_cap is not None
+        or snap.description
+        or snap.sector
+    )
+    if is_etf and not (snap.description or snap.name or snap.market_cap):
+        missing.append("etf_mandate_or_description")
+    elif not is_etf and not substance:
+        missing.append("fundamentals_or_financials")
+
+    if not snap.revenue_periods and not is_etf:
+        optional_gaps.append("financials.revenue")
+    if snap.pe_ratio is None and not is_etf:
+        optional_gaps.append("valuation.pe_ratio")
+    if not snap.news_headlines:
+        optional_gaps.append("news")
+    if payload.sec_index is None:
+        optional_gaps.append("sec_filings")
+    for src in payload.sources_unavailable:
+        label = f"source_unavailable:{src}"
+        if src in {"get_equity_quotes", "get_equity_fundamentals", "get_equity_tradability"}:
+            missing.append(label)
+        else:
+            optional_gaps.append(label)
 
     completeness = "COMPLETE"
-    if len(missing) >= 4 or snap.current_price is None:
+    if snap.current_price is None or any(
+        item in missing for item in ("market_price", "identity", "fundamentals_or_financials", "etf_mandate_or_description")
+    ):
         completeness = "INCOMPLETE"
-    elif missing:
+    elif optional_gaps:
         completeness = "PARTIAL"
+
+    missing_information = list(dict.fromkeys([*missing, *optional_gaps]))
 
     sleeve = candidate.provisional_sleeve
     questions = list(cfg.get("sleeve_research_questions", {}).get(sleeve.value, []))
@@ -405,7 +431,7 @@ def build_packet(
             "technical_weight": tech_weight,
             "subject_kind": subject_kind.value,
         },
-        missing_information=missing,
+        missing_information=missing_information,
         comparison_group_id=candidate.comparison_group_id,
         comparison_peer_symbols=list(comparison_peer_symbols or []),
         discovery_score=candidate.discovery_score,

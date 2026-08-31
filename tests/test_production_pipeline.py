@@ -38,6 +38,7 @@ from agentic_portfolio.discovery.store import CandidateStore, ResearchQueue
 from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.live_approval import LiveApprovalEngine, LiveApprovalStatus, LiveApprovalStore
 from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
+from agentic_portfolio.research.packet import ResearchPayload
 from agentic_portfolio.research.reasoner import ScriptedResearchReasoner
 from agentic_portfolio.research.types import ResearchConclusion, ResearchStatus
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode, discovery_state_dir
@@ -54,6 +55,7 @@ from agentic_portfolio.schemas import (
 )
 from agentic_portfolio.watch import WatchEngine, WatchStatus, WatchStore
 from tests.conftest import ctx
+from tests.test_ai_gateway import SCREEN
 from tests.test_decision import _payload as _decision_payload
 from tests.test_research import _ai, _candidate, _payload
 
@@ -167,6 +169,7 @@ def test_c_ai_research_goes_through_gateway(tmp_path):
     _seed(tmp_path, symbol="QUAL")
     scripted = ScriptedProvider(
         {
+            "screening:QUAL": {**SCREEN, "ticker": "QUAL"},
             "research_report:QUAL": _ai("QUAL", conclusion="KEEP_WATCHING"),
         },
         name="openai",
@@ -174,15 +177,23 @@ def test_c_ai_research_goes_through_gateway(tmp_path):
     gw = build_gateway(tmp_path, providers={"openai": scripted}, runtime_mode=RuntimeMode.LIVE, now_fn=lambda: NOW)
     worker = _worker(tmp_path, gateway=gw, decision=ScriptedDecisionReasoner(_decision_payload("QUAL", decision="WATCH", alloc=0)))
     result = worker.run_cycle()
-    assert result.ai_calls >= 1
+    assert result.ai_calls >= 2
     assert scripted.calls
-    assert scripted.calls[0].schema_name == "research_report"
-    assert scripted.calls[0].purpose == "deep_research"
+    assert [c.schema_name for c in scripted.calls] == ["screening", "research_report"]
+    assert scripted.calls[0].purpose == "candidate_screening"
+    assert scripted.calls[1].purpose == "deep_research"
+    assert worker.ai_store.screenings()
 
 
 def test_d_budget_ledger_is_charged(tmp_path):
     _seed(tmp_path)
-    scripted = ScriptedProvider({"research_report:QUAL": _ai("QUAL", conclusion="REJECT")}, name="openai")
+    scripted = ScriptedProvider(
+        {
+            "screening:QUAL": {**SCREEN, "ticker": "QUAL"},
+            "research_report:QUAL": _ai("QUAL", conclusion="REJECT"),
+        },
+        name="openai",
+    )
     gw = build_gateway(tmp_path, providers={"openai": scripted}, runtime_mode=RuntimeMode.LIVE, now_fn=lambda: NOW)
     before = gw.budget.status().spent
     _worker(tmp_path, gateway=gw).run_cycle()
@@ -839,7 +850,13 @@ def test_live_gateway_does_not_silently_fallback_to_scripted(tmp_path):
 
 def test_gateway_research_stamps_ai_provenance_and_charges_ledger(tmp_path):
     _seed(tmp_path, symbol="SBSW")
-    scripted = ScriptedProvider({"research_report:SBSW": _ai("SBSW", conclusion="NEED_MORE_DATA")}, name="openai")
+    scripted = ScriptedProvider(
+        {
+            "screening:SBSW": {**SCREEN, "ticker": "SBSW"},
+            "research_report:SBSW": _ai("SBSW", conclusion="NEED_MORE_DATA"),
+        },
+        name="openai",
+    )
     gw = build_gateway(tmp_path, providers={"openai": scripted}, runtime_mode=RuntimeMode.LIVE, now_fn=lambda: NOW)
     worker = _worker(tmp_path, gateway=gw)
     worker.run_cycle()
@@ -849,7 +866,7 @@ def test_gateway_research_stamps_ai_provenance_and_charges_ledger(tmp_path):
     assert report.model
     assert report.ai_call_id
     assert report.actual_cost is not None
-    assert gw.budget.status().calls_month == 1
+    assert gw.budget.status().calls_month == 2
     assert gw.budget.status().spent > Decimal("0")
     kinds = [n.kind for n in worker.notify.store.all()]
     assert NotificationKind.RESEARCH_COMPLETED in kinds
@@ -1242,4 +1259,85 @@ def test_sell_reduce_require_human_approval(tmp_path):
         assert pending[0].proposed_action == "SELL"
         assert pending[0].status.value == "PENDING"
         assert pending[0].placed_order is False
+
+
+def test_incomplete_evidence_does_not_call_terra(tmp_path):
+    _seed(tmp_path, symbol="EMPTY")
+    scripted = ScriptedProvider({"*": _ai("EMPTY")}, name="openai")
+    gw = build_gateway(tmp_path, providers={"openai": scripted}, runtime_mode=RuntimeMode.LIVE, now_fn=lambda: NOW)
+    worker = _worker(tmp_path, gateway=gw)
+    worker.payload_fn = lambda candidate: ResearchPayload(
+        symbol=candidate.symbol,
+        observed_at=NOW.isoformat(),
+        sources_attempted=["get_equity_quotes"],
+        sources_observed=[],
+        sources_unavailable=["get_equity_quotes", "get_equity_fundamentals", "get_financials"],
+    )
+    result = worker.run_cycle()
+    assert scripted.calls == []
+    reports = worker.research_store.by_symbol("EMPTY")
+    assert reports
+    assert reports[0].research_source == "deterministic"
+    assert reports[0].research_conclusion is ResearchConclusion.NEED_MORE_DATA
+    assert result.ai_calls == 0
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    assert queue.all()[0].status is ResearchQueueStatus.NEED_MORE_DATA
+
+
+def test_need_more_data_does_not_immediately_recall_terra(tmp_path):
+    _seed(tmp_path, symbol="EMPTY")
+    scripted = ScriptedProvider({"*": _ai("EMPTY")}, name="openai")
+    gw = build_gateway(tmp_path, providers={"openai": scripted}, runtime_mode=RuntimeMode.LIVE, now_fn=lambda: NOW)
+    worker = _worker(tmp_path, gateway=gw)
+    worker.payload_fn = lambda candidate: ResearchPayload(
+        symbol=candidate.symbol,
+        observed_at=NOW.isoformat(),
+        sources_unavailable=["get_equity_quotes", "get_equity_fundamentals"],
+    )
+    worker.run_cycle()
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    queue.set_status(queue.all()[0].queue_id, ResearchQueueStatus.QUEUED)
+    worker.run_cycle()
+    assert scripted.calls == []
+    assert len(worker.research_store.by_symbol("EMPTY")) == 1
+
+
+def test_luna_reject_does_not_call_terra(tmp_path):
+    _seed(tmp_path)
+    scripted = ScriptedProvider(
+        {
+            "screening:QUAL": {**SCREEN, "ticker": "QUAL", "worth_deep_research": False, "score": 20.0},
+            "research_report:QUAL": _ai("QUAL", conclusion="ADVANCE_TO_THESIS"),
+        },
+        name="openai",
+    )
+    gw = build_gateway(tmp_path, providers={"openai": scripted}, runtime_mode=RuntimeMode.LIVE, now_fn=lambda: NOW)
+    result = _worker(tmp_path, gateway=gw).run_cycle()
+    assert [c.schema_name for c in scripted.calls] == ["screening"]
+    assert result.rejections == 1
+    assert result.proposals_created == 0
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    assert queue.all()[0].status is ResearchQueueStatus.REJECTED
+
+
+def test_sufficient_evidence_can_produce_non_need_more_data(tmp_path):
+    _seed(tmp_path)
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="KEEP_WATCHING")}),
+    )
+    result = worker.run_cycle()
+    report = worker.research_store.by_symbol("QUAL")[0]
+    assert report.research_conclusion is ResearchConclusion.KEEP_WATCHING
+    assert report.research_conclusion is not ResearchConclusion.NEED_MORE_DATA
+    assert result.proposals_created == 0
+
+
+def test_unfavorable_research_produces_no_buy(tmp_path):
+    _seed(tmp_path)
+    worker = _worker(tmp_path, research=ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="REJECT")}))
+    result = worker.run_cycle()
+    assert result.rejections == 1
+    assert worker.approvals.store.pending() == []
+    assert result.proposals_created == 0
 

@@ -22,6 +22,7 @@ from agentic_portfolio.research.packet import ResearchPayload, build_packet
 from agentic_portfolio.research.reasoner import (
     REASONER_INSTRUCTIONS,
     ResearchReasoner,
+    ScriptedResearchReasoner,
     packet_for_reasoner,
 )
 from agentic_portfolio.research.safety import (
@@ -30,6 +31,7 @@ from agentic_portfolio.research.safety import (
     research_cannot_become_buy,
 )
 from agentic_portfolio.research.store import ResearchStore
+from agentic_portfolio.research.sufficiency import evaluate_evidence_sufficiency
 from agentic_portfolio.research.types import (
     ResearchConclusion,
     ResearchConfidence,
@@ -105,13 +107,40 @@ def run_research(
         comparison_peer_symbols=comparison_peer_symbols,
         existing_thesis_id=existing_thesis_id,
     )
+    persist_store = store or (ResearchStore() if persist else None)
+    if persist and persist_store is not None:
+        persist_store.save_packet(packet)
     report = _blank_report(research_id, candidate, packet, started, subject_kind, existing_thesis_id)
     report.research_status = ResearchStatus.RESEARCHING
-    report.evidence_fingerprint = evidence_fingerprint(candidate, payload=payload)
+    report.evidence_fingerprint = evidence_fingerprint(candidate, payload=payload, packet=packet)
     if queue_entry is not None:
         report.research_generation = int(getattr(queue_entry, "research_generation", None) or 1)
     if queue_entry and persist and queue_store:
         queue_store.set_status(queue_entry.queue_id, ResearchQueueStatus.RESEARCHING)
+
+    sufficiency = evaluate_evidence_sufficiency(packet)
+    if not sufficiency.sufficient:
+        report = _insufficient_report(report, packet, sufficiency, now=now, payload=payload, config=cfg)
+        _journal(
+            {
+                "type": "RESEARCH_INCONCLUSIVE",
+                "research_id": research_id,
+                "candidate_id": candidate.candidate_id,
+                "symbol": candidate.symbol,
+                "conclusion": ResearchConclusion.NEED_MORE_DATA.value,
+                "status": report.research_status.value,
+                "reason": sufficiency.reason,
+                "skipped_paid_reasoner": True,
+                "packet_id": packet.packet_id,
+            },
+            journal,
+            persist=persist,
+        )
+        if persist and persist_store is not None:
+            persist_store.save(report)
+            if queue_entry and queue_store:
+                queue_store.set_status(queue_entry.queue_id, ResearchQueueStatus.NEED_MORE_DATA)
+        return ResearchResult(report=report, packet=packet, candidate=candidate, context=context)
 
     request = ResearchReasoningRequest(
         candidate=to_dict(candidate),
@@ -191,7 +220,7 @@ def run_research(
     )
 
     if persist:
-        (store or ResearchStore()).save(report)
+        (persist_store or ResearchStore()).save(report)
         if queue_entry and queue_store:
             queue_store.set_status(queue_entry.queue_id, ResearchQueueStatus.COMPLETED)
 
@@ -269,6 +298,29 @@ def _empty_packet_anchor(report: ResearchReport) -> ResearchEvidencePacket:
     )
 
 
+def _insufficient_report(report, packet, sufficiency, *, now, payload, config) -> ResearchReport:
+    report.facts = list(packet.facts)
+    report.derived_metrics = list(packet.derived_metrics)
+    report.sources_observed = list(packet.sources_observed)
+    report.sources_unavailable = list(packet.sources_unavailable)
+    report.packet_id = packet.packet_id
+    report.missing_information = list(sufficiency.missing_core) + list(sufficiency.missing_optional)
+    report.research_conclusion = ResearchConclusion.NEED_MORE_DATA
+    report.research_status = ResearchStatus.RESEARCH_INCONCLUSIVE
+    report.confidence = ResearchConfidence.LOW
+    report.research_source = "deterministic"
+    report.executive_summary = (
+        "Paid research skipped: core evidence is missing ("
+        + ", ".join(sufficiency.missing_core)
+        + "). Optional gaps were not treated as a reason to spend Terra."
+    )
+    report.recommended_next_step = "NEED_MORE_DATA"
+    report.completed_at = now.isoformat()
+    report.observed_at = payload.observed_at
+    report.stale_after = (now + freshness_horizon(report.provisional_sleeve, config)).isoformat()
+    return report
+
+
 def apply_research_provenance(
     report: ResearchReport,
     reasoner: ResearchReasoner,
@@ -304,7 +356,7 @@ def apply_research_provenance(
             report.research_source = "scripted" if report.provider.lower() == "scripted" else "AI"
             return report
     name = type(reasoner).__name__
-    if name == "ScriptedResearchReasoner":
+    if isinstance(reasoner, ScriptedResearchReasoner):
         report.research_source = "scripted"
     elif name == "GatewayResearchReasoner":
         report.research_source = "AI"
