@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import inspect
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
+from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable, StaticPortfolioFetcher
 from agentic_portfolio.adapters.readonly_runtime import ReadonlyBrokerRuntime
+from agentic_portfolio.agent.activity import read_activity
 from agentic_portfolio.agent.connection import ConnectionManager
 from agentic_portfolio.agent.handlers import AgentServices, build_handlers
 from agentic_portfolio.agent.heartbeat import load_health
-from agentic_portfolio.agent.jobs import catalog
+from agentic_portfolio.agent.jobs import catalog, specs_by_name
 from agentic_portfolio.agent.orchestrator import JobOrchestrator
-from agentic_portfolio.agent.runtime import AgentRuntime
+from agentic_portfolio.agent.runtime import AgentRuntime, refresh_live_from_connection
 from agentic_portfolio.agent.safety import inspect_agent_packages_for_forbidden_calls
 from agentic_portfolio.agent.session import MarketPhase, classify_market_phase
 from agentic_portfolio.calendar import EASTERN
@@ -357,3 +360,287 @@ def test_malformed_candidate_is_rejected_before_ai(tmp_path):
     assert row["status"] == "OK"
     assert services.watch_store.by_ticker("FAKE") is None
     assert services.watch_store.by_ticker("QUAL") is not None
+
+
+FORBIDDEN_MCP_TOOLS = (
+    "place_equity_order",
+    "review_equity_order",
+    "cancel_equity_order",
+    "place_option_order",
+    "review_option_order",
+    "preview_crypto_order",
+    "place_crypto_order",
+    "cancel_crypto_order",
+)
+
+WRITE_MARKERS = FORBIDDEN_MCP_TOOLS + ("deposit", "withdrawal", "withdraw", "transfer")
+
+
+def _msft_position():
+    from tests.test_live_mode import _accounts, _portfolio, _positions, _quotes
+
+    return StaticPortfolioFetcher(
+        accounts=_accounts(),
+        portfolio=_portfolio(nav=1513.67, cash=1000.0, bp=1000.0),
+        positions=_positions([{"symbol": "MSFT", "quantity": "1", "average_buy_price": "500"}]),
+        quotes=_quotes(("MSFT", 513.67), ("SPY", 769.39)),
+        orders={"data": {"orders": []}},
+    )
+
+
+def _bound_runtime(fetcher, *, bound=True, error=None):
+    return ReadonlyBrokerRuntime(
+        bound=bound,
+        mode="READ_ONLY",
+        fetcher=fetcher if bound else None,
+        initialization_error=error,
+    )
+
+
+def _wired_runtime(tmp_path: Path, *, now, fetcher=None, bootstrap=None, **kwargs):
+    client = fetcher if fetcher is not None else _msft_position()
+
+    def _bootstrap(**_kwargs):
+        if bootstrap is not None:
+            return bootstrap(**_kwargs)
+        return _bound_runtime(client)
+
+    notify = NotificationEngine(NotificationStore(tmp_path), now_fn=now)
+    conn = ConnectionManager(bootstrap=_bootstrap, notify=notify, root=tmp_path, now_fn=now)
+    runtime = AgentRuntime(
+        tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        now_fn=now,
+        sleep_fn=lambda _s: None,
+        connection=conn,
+        ai_allowed=False,
+        **kwargs,
+    )
+    return runtime, client
+
+
+def test_production_runtime_wires_live_refresh_fn(tmp_path):
+    src = inspect.getsource(AgentRuntime.__init__)
+    assert "refresh_fn=refresh_live" in src.replace(" ", "") or "refresh_fn=refresh_live" in src
+    assert "refresh_live_from_connection" in src
+    refresh_src = inspect.getsource(refresh_live_from_connection)
+    assert "connection.ensure" in refresh_src
+    assert "bound.fetcher" in refresh_src or "runtime.fetcher" in refresh_src
+    assert "refresh_live_portfolio" in refresh_src
+    runtime, _fetcher = _wired_runtime(tmp_path, now=lambda: SATURDAY)
+    assert runtime.services.refresh_fn is not None
+    assert LIVE_ORDER_PLACEMENT is False
+    assert runtime.runtime_mode is RuntimeMode.LIVE
+
+
+def test_live_refresh_uses_bound_readonly_fetcher(tmp_path):
+    fetcher = _msft_position()
+    runtime, bound_fetcher = _wired_runtime(tmp_path, now=lambda: SATURDAY, fetcher=fetcher)
+    assert bound_fetcher is fetcher
+    result = runtime.services.refresh_fn()
+    assert runtime.connection.connected is True
+    assert runtime.connection.snapshot()["mode"] == "READ_ONLY"
+    assert runtime.connection.snapshot()["bound"] is True
+    assert fetcher.calls[0] == "get_accounts"
+    assert "get_portfolio" in fetcher.calls
+    assert "get_equity_positions" in fetcher.calls
+    assert result.context.current_nav == 1513.67
+    assert result.placement_disabled is True
+    for tool in FORBIDDEN_MCP_TOOLS:
+        assert tool not in fetcher.calls
+        assert tool not in result.tools_used
+
+
+def test_successful_mcp_refresh_persists_and_dashboard_reads_it(tmp_path, monkeypatch):
+    from agentic_portfolio.dashboard.app import create_app
+    from agentic_portfolio.dashboard.queries import dashboard_state, dashboard_view
+    from agentic_portfolio.live.store import LivePortfolioStore
+    from tests.test_family import _admin
+    from tests.test_live_mode import _write_paper
+
+    _write_paper(tmp_path, 10000.0)
+    runtime, fetcher = _wired_runtime(tmp_path, now=lambda: SATURDAY)
+    row = runtime.orchestrator.run_job("LIVE_ACCOUNT_REFRESH", now=SATURDAY)
+    assert row["status"] == "OK"
+    assert row["nav"] == 1513.67
+    assert row["cash"] == 1000.0
+    assert row["buying_power"] == 1000.0
+    assert row["placement_attempted"] is False
+    book = LivePortfolioStore(tmp_path).current_book()
+    assert book is not None
+    assert book["context"]["current_nav"] == 1513.67
+    assert book["paper_environment"] is False
+    positions = book["context"]["positions"]
+    assert positions[0]["symbol"] == "MSFT"
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    monkeypatch.setenv("DASHBOARD_ENVIRONMENT", "LIVE")
+    view = dashboard_view(dashboard_state(tmp_path))
+    assert view["live_data_unavailable"] is False
+    assert view["nav"] == 1513.67
+    assert view["cash"] == 1000.0
+    assert view["buying_power"] == 1000.0
+    assert view["positions"][0]["symbol"] == "MSFT"
+    assert view["live_order_placement_enabled"] is False
+    html = _admin(create_app(tmp_path).test_client()).get("/").get_data(as_text=True)
+    assert '<div class="halt-banner">LIVE DATA UNAVAILABLE</div>' not in html
+    assert "$1,513.67" in html
+    assert "$1,000.00" in html
+    assert "MSFT" in html
+    assert "$10,000.00" not in html
+    for tool in FORBIDDEN_MCP_TOOLS:
+        assert tool not in fetcher.calls
+
+
+def test_weekend_portfolio_review_performs_readonly_refresh(tmp_path):
+    spec = specs_by_name()["WEEKEND_PORTFOLIO_REVIEW"]
+    assert spec.requires_broker is True
+    handler_src = inspect.getsource(build_handlers)
+    assert "_portfolio_review" in handler_src
+    assert 'WEEKEND_PORTFOLIO_REVIEW' in handler_src
+    runtime, fetcher = _wired_runtime(tmp_path, now=lambda: SATURDAY)
+    orch = JobOrchestrator(tmp_path, handlers=build_handlers(runtime.services), now_fn=lambda: SATURDAY)
+    assert "WEEKEND_PORTFOLIO_REVIEW" in orch.due_jobs(SATURDAY)
+    assert "LIVE_ACCOUNT_REFRESH" in orch.due_jobs(SATURDAY)
+    row = orch.run_job("WEEKEND_PORTFOLIO_REVIEW", now=SATURDAY)
+    assert row["status"] == "OK"
+    assert row.get("skipped") != "no_refresh"
+    assert row["nav"] == 1513.67
+    assert row["executable_liquidity"] is False
+    assert row["placement_attempted"] is False
+    assert "get_accounts" in fetcher.calls
+    assert "get_portfolio" in fetcher.calls
+    stored = (tmp_path / "state" / "live_book" / "current.json").read_text(encoding="utf-8")
+    assert "1513.67" in stored
+    for tool in FORBIDDEN_MCP_TOOLS:
+        assert tool not in fetcher.calls
+
+
+def test_live_account_refresh_runs_when_markets_are_closed():
+    spec = specs_by_name()["LIVE_ACCOUNT_REFRESH"]
+    assert MarketPhase.WEEKEND in spec.phases
+    assert MarketPhase.OVERNIGHT in spec.phases
+    assert MarketPhase.AFTER_CLOSE in spec.phases
+    assert MarketPhase.HOLIDAY in spec.phases
+    assert MarketPhase.MARKET_OPEN in spec.phases
+    assert spec.requires_broker is True
+    post = specs_by_name()["POSTMARKET_RECONCILE"]
+    assert post.requires_broker is True
+
+
+def test_mcp_failure_fails_closed_and_keeps_runtime_alive(tmp_path, monkeypatch):
+    from agentic_portfolio.dashboard.queries import dashboard_state, dashboard_view
+    from tests.test_live_mode import _write_paper
+
+    _write_paper(tmp_path, 10000.0)
+
+    def boom(**_kwargs):
+        raise LiveDataUnavailable("mcp unreachable")
+
+    runtime, _unused = _wired_runtime(tmp_path, now=lambda: SATURDAY, bootstrap=boom)
+    row = runtime.orchestrator.run_job("LIVE_ACCOUNT_REFRESH", now=SATURDAY)
+    assert row["status"] == "FAIL_CLOSED"
+    assert row["placement_attempted"] is False
+    assert not (tmp_path / "state" / "live_book" / "current.json").exists()
+    kinds = {item.get("type") for item in read_activity(tmp_path)}
+    assert "LIVE_REFRESH_FAILED" in kinds
+    runtime.max_cycles = 2
+    runtime.run()
+    assert runtime.cycles == 2
+    assert runtime.fatal is False
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    monkeypatch.setenv("DASHBOARD_ENVIRONMENT", "LIVE")
+    view = dashboard_view(dashboard_state(tmp_path))
+    assert view["live_data_unavailable"] is True
+    assert view["nav"] is None
+    assert view["nav"] != 10000.0
+    assert view["kpis"]["portfolio_value"]["display"] == "LIVE DATA UNAVAILABLE"
+
+
+def test_malformed_portfolio_and_missing_positions_fail_closed(tmp_path, monkeypatch):
+    from agentic_portfolio.dashboard.queries import dashboard_state, dashboard_view
+    from tests.test_live_mode import _accounts, _positions, _quotes
+
+    bad = StaticPortfolioFetcher(
+        accounts=_accounts(),
+        portfolio={"data": {"total_value": "not-a-number", "cash": "x", "buying_power": {}}},
+        positions=_positions(),
+        quotes=_quotes(("SPY", 769.39)),
+    )
+    runtime, _ = _wired_runtime(tmp_path, now=lambda: SATURDAY, fetcher=bad)
+    row = runtime.orchestrator.run_job("WEEKEND_PORTFOLIO_REVIEW", now=SATURDAY)
+    assert row["status"] == "FAIL_CLOSED"
+    assert not (tmp_path / "state" / "live_book" / "current.json").exists()
+
+    missing = StaticPortfolioFetcher(
+        accounts=_accounts(),
+        portfolio={"data": {"total_value": "500", "cash": "500", "buying_power": {"buying_power": "500"}}},
+        positions=None,
+        quotes=_quotes(("SPY", 769.39)),
+    )
+    runtime2, _ = _wired_runtime(tmp_path / "pos", now=lambda: SATURDAY, fetcher=missing)
+    row2 = runtime2.orchestrator.run_job("LIVE_ACCOUNT_REFRESH", now=SATURDAY)
+    assert row2["status"] == "FAIL_CLOSED"
+    assert not (tmp_path / "pos" / "state" / "live_book" / "current.json").exists()
+
+    wrong = StaticPortfolioFetcher(
+        accounts=_accounts(number="000000000"),
+        portfolio={"data": {"total_value": "500", "cash": "500", "buying_power": {"buying_power": "500"}}},
+        positions=_positions(),
+        quotes=_quotes(("SPY", 769.39)),
+    )
+    runtime3, _ = _wired_runtime(tmp_path / "id", now=lambda: SATURDAY, fetcher=wrong)
+    row3 = runtime3.orchestrator.run_job("LIVE_ACCOUNT_REFRESH", now=SATURDAY)
+    assert row3["status"] == "FAIL_CLOSED"
+
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    monkeypatch.setenv("DASHBOARD_ENVIRONMENT", "LIVE")
+    view = dashboard_view(dashboard_state(tmp_path))
+    assert view["live_data_unavailable"] is True
+    assert view["nav"] is None
+
+
+def test_paper_portfolio_never_leaks_into_live_dashboard_via_runtime(tmp_path, monkeypatch):
+    from agentic_portfolio.dashboard.queries import dashboard_state, dashboard_view
+    from tests.test_live_mode import _write_paper
+
+    _write_paper(tmp_path, 10000.0)
+    runtime, fetcher = _wired_runtime(tmp_path, now=lambda: SATURDAY)
+    runtime.orchestrator.run_job("WEEKEND_PORTFOLIO_REVIEW", now=SATURDAY)
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    monkeypatch.setenv("DASHBOARD_ENVIRONMENT", "LIVE")
+    view = dashboard_view(dashboard_state(tmp_path))
+    symbols = {p["symbol"] for p in view["positions"]}
+    assert view["nav"] == 1513.67
+    assert view["nav"] != 10000.0
+    assert "NVDA" not in symbols
+    assert "NKE" not in symbols
+    assert "MSFT" in symbols
+    assert view["paper_environment"] is False
+    for tool in WRITE_MARKERS:
+        assert tool not in fetcher.calls
+    assert inspect_agent_packages_for_forbidden_calls() == []
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_refresh_never_invokes_order_or_transfer_tools(tmp_path):
+    class GuardedFetcher(StaticPortfolioFetcher):
+        def __getattr__(self, name):
+            self.calls.append(name)
+            raise AssertionError(f"unexpected MCP surface {name}")
+
+    from tests.test_live_mode import _accounts, _portfolio, _positions, _quotes
+
+    fetcher = GuardedFetcher(
+        accounts=_accounts(),
+        portfolio=_portfolio(nav=500.0, cash=500.0, bp=500.0),
+        positions=_positions(),
+        quotes=_quotes(("SPY", 769.39)),
+        orders={"data": {"orders": []}},
+    )
+    runtime, _ = _wired_runtime(tmp_path, now=lambda: SATURDAY, fetcher=fetcher)
+    runtime.services.refresh_fn()
+    runtime.orchestrator.run_job("LIVE_ACCOUNT_REFRESH", now=SATURDAY)
+    runtime.orchestrator.run_job("WEEKEND_PORTFOLIO_REVIEW", now=SATURDAY)
+    for tool in WRITE_MARKERS:
+        assert tool not in fetcher.calls
+    assert all("place" not in c and "review" not in c and "cancel" not in c for c in fetcher.calls)

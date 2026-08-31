@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
+from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable
 from agentic_portfolio.agent.activity import log_activity
 from agentic_portfolio.agent.connection import ConnectionManager
 from agentic_portfolio.agent.handlers import AgentServices, build_handlers
@@ -15,12 +16,27 @@ from agentic_portfolio.agent.heartbeat import load_health, mark_offline, write_h
 from agentic_portfolio.agent.orchestrator import JobOrchestrator
 from agentic_portfolio.agent.safety import assert_execution_disabled
 from agentic_portfolio.agent.session import classify_market_phase
+from agentic_portfolio.live.engine import refresh_live_portfolio
 from agentic_portfolio.live_approval import LiveApprovalEngine, LiveApprovalStore
 from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.policy import load_account_rules, load_agent_config
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode, get_active_runtime
 from agentic_portfolio.watch import WatchEngine, WatchStore
+
+
+def refresh_live_from_connection(
+    connection: ConnectionManager,
+    *,
+    root: Path,
+    now: datetime | None = None,
+) -> Any:
+    """Ensure the bound READ_ONLY runtime, then persist a LIVE snapshot. Never places."""
+    bound = connection.ensure()
+    fetcher = bound.fetcher
+    if fetcher is None:
+        raise LiveDataUnavailable("bound Robinhood runtime has no fetcher")
+    return refresh_live_portfolio(fetcher, now=now, root=root)
 
 
 class AgentRuntime:
@@ -70,6 +86,10 @@ class AgentRuntime:
             watch_store = WatchStore(self.base, runtime_mode=self.runtime_mode)
             approval_store = LiveApprovalStore(self.base, runtime_mode=self.runtime_mode)
             journal = self.base / "logs" / "agent.jsonl"
+
+            def refresh_live() -> Any:
+                return refresh_live_from_connection(self.connection, root=self.base, now=self.now())
+
             services = AgentServices(
                 root=self.base,
                 runtime_mode=self.runtime_mode,
@@ -80,6 +100,7 @@ class AgentRuntime:
                 notify=self.notify,
                 connection=self.connection,
                 now_fn=self._now,
+                refresh_fn=refresh_live,
                 budget_exhausted=budget_exhausted,
                 ai_allowed=ai_allowed,
             )

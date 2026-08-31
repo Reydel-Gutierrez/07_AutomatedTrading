@@ -97,7 +97,7 @@ def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any
         "OVERNIGHT_WATCH_MAINTAIN": wrap(lambda ctx: _offhours_maintain(services, ctx, "OVERNIGHT_WATCH_MAINTAIN")),
         "WEEKEND_SESSION_ANALYSIS": wrap(lambda ctx: _session_analysis(services, ctx, "WEEKEND_SESSION_ANALYSIS")),
         "WEEKEND_DEEP_RESEARCH": wrap(lambda ctx: _ai_screen(services, ctx, role="research")),
-        "WEEKEND_PORTFOLIO_REVIEW": wrap(lambda ctx: _offhours_maintain(services, ctx, "WEEKEND_PORTFOLIO_REVIEW")),
+        "WEEKEND_PORTFOLIO_REVIEW": wrap(lambda ctx: _portfolio_review(services, ctx, "WEEKEND_PORTFOLIO_REVIEW")),
         "WEEKEND_WATCH_CONSTRUCT": wrap(lambda ctx: _session_analysis(services, ctx, "WEEKEND_WATCH_CONSTRUCT")),
         "WEEKEND_STALE_CLEANUP": wrap(lambda ctx: _watch_cleanup(services, ctx)),
         "WEEKEND_NEXT_SESSION_PREP": wrap(lambda ctx: _prepare_plans(services, ctx)),
@@ -134,10 +134,22 @@ def _refresh_account(services: AgentServices, ctx: dict[str, Any], job: str | No
             services.last_context = getattr(services.last_refresh, "context", services.last_context)
         elif services.context_fn is not None:
             services.last_context = services.context_fn()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001 — fail closed; keep the runtime alive
+        log_activity(services.root, "LIVE_REFRESH_FAILED", job=name, reason=str(exc))
         return {"job": name, "status": "FAIL_CLOSED", "reason": str(exc), "placement_attempted": False}
     nav = getattr(services.last_context, "current_nav", None)
-    return _ok(name, nav=nav)
+    cash = getattr(services.last_context, "cash", None)
+    buying_power = getattr(services.last_context, "buying_power", None)
+    holdings = getattr(services.last_context, "holdings_count", None)
+    return _ok(name, nav=nav, cash=cash, buying_power=buying_power, holdings_count=holdings)
+
+
+def _portfolio_review(services: AgentServices, ctx: dict[str, Any], job: str) -> dict[str, Any]:
+    """Closed-session observation refresh. Markets being closed does not skip MCP reads."""
+    result = _refresh_account(services, ctx, job=job)
+    result["watch_items"] = len(services.watch_store.active())
+    result["executable_liquidity"] = False
+    return result
 
 
 def _quotes(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
