@@ -315,6 +315,43 @@ def test_auth_loss_fails_closed_and_recovery_works(tmp_path):
     recovered = conn.ensure(force=True)
     assert recovered.bound is True
     assert conn.connected is True
+    assert NotificationKind.BROKER_CONNECTION_RESTORED in {n.kind for n in notify.store.all()}
+
+
+def test_healthy_broker_reconnect_does_not_force_reinitialize(tmp_path):
+    from agentic_portfolio.agent.handlers import AgentServices, build_handlers
+    from agentic_portfolio.agent.session import classify_market_phase
+
+    calls = {"n": 0}
+
+    def bootstrap(**kwargs):
+        calls["n"] += 1
+        return ReadonlyBrokerRuntime(bound=True)
+
+    notify = NotificationEngine(NotificationStore(tmp_path), now_fn=lambda: SATURDAY)
+    conn = ConnectionManager(bootstrap=bootstrap, notify=notify, root=tmp_path, now_fn=lambda: SATURDAY)
+    conn.ensure()
+    assert conn.connected is True
+    first = calls["n"]
+    services = AgentServices(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        watch=WatchEngine(WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE), now_fn=lambda: SATURDAY),
+        watch_store=WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE),
+        approvals=LiveApprovalEngine(LiveApprovalStore(tmp_path, runtime_mode=RuntimeMode.LIVE), now_fn=lambda: SATURDAY),
+        approval_store=LiveApprovalStore(tmp_path, runtime_mode=RuntimeMode.LIVE),
+        notify=notify,
+        connection=conn,
+        now_fn=lambda: SATURDAY,
+    )
+    handlers = build_handlers(services)
+    session = classify_market_phase(SATURDAY)
+    row = handlers["BROKER_RECONNECT"]({"job": "BROKER_RECONNECT", "session": session})
+    assert row["status"] == "OK"
+    assert row.get("reconnected") is False
+    assert calls["n"] == first
+    restores = [n for n in notify.store.all() if n.kind is NotificationKind.BROKER_CONNECTION_RESTORED]
+    assert len(restores) == 1
 
 
 def test_ai_budget_exhaustion_does_not_stop_runtime(tmp_path):

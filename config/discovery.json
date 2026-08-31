@@ -241,9 +241,9 @@
     ]
   },
   "universe_construction": {
-    "max_universe_size": 50,
+    "max_universe_size": 80,
     "max_per_source": 25,
-    "max_snapshots_to_score": 36,
+    "max_snapshots_to_score": 48,
     "min_last_price": 5.0,
     "existing_position_exempt_from_min_price": true,
     "baseline_only_if_empty": true,
@@ -260,9 +260,13 @@
     ],
     "popular_watchlist_titles": [
       "100 Most Popular",
+      "100 most popular",
       "Daily Movers",
+      "Daily movers",
       "Upcoming Earnings",
-      "Most Held"
+      "Upcoming earnings",
+      "Most Held",
+      "Trending stocks"
     ],
     "earnings_days": 7,
     "earnings_filter": "high_market_cap",

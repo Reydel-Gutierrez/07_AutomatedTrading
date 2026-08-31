@@ -242,8 +242,10 @@ def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any
 
 def _broker(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
     try:
+        if services.connection.connected and services.connection.probe():
+            return _ok("BROKER_RECONNECT", connected=True, reconnected=False)
         services.connection.ensure(force=True)
-        return _ok("BROKER_RECONNECT", connected=True)
+        return _ok("BROKER_RECONNECT", connected=True, reconnected=True)
     except Exception as exc:  # noqa: BLE001
         return {
             "job": "BROKER_RECONNECT",

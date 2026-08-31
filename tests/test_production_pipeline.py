@@ -1117,9 +1117,64 @@ def test_failed_provider_call_does_not_persist_fake_report(tmp_path):
 def test_research_advances_to_thesis_automatically(tmp_path):
     _seed(tmp_path)
     research, decision = _buy_reasoners()
-    result = _worker(tmp_path, research=research, decision=decision).run_cycle()
+    worker = _worker(tmp_path, research=research, decision=decision)
+    result = worker.run_cycle()
     assert result.theses_created >= 1
     assert result.proposals_created == 1
+    pending = worker.approvals.store.pending()
+    assert len(pending) == 1
+    item = pending[0]
+    assert item.ticker == "QUAL"
+    assert item.status.value == "PENDING"
+    assert item.risk_gate_result
+    thesis = worker.theses.current_for_symbol("QUAL")
+    assert thesis is not None
+    raw = json.loads(worker.theses.path.read_text(encoding="utf-8"))
+    stored = raw["records"][thesis.thesis_id]
+    assert stored["runtime_mode"] == RuntimeMode.LIVE.value
+    cand = worker.candidates.current_for_symbol("QUAL")
+    assert cand.status is CandidateStatus.RESEARCH_COMPLETE
+    batches = worker.decision_store.all_runs()
+    assert batches
+    assert batches[0].get("runtime_mode") == RuntimeMode.LIVE.value
+    assert batches[0].get("gated_actions")
+
+
+def test_need_more_data_earnings_calendar_does_not_skip_cooldown(tmp_path):
+    from agentic_portfolio.discovery.engine import run_discovery
+    from agentic_portfolio.discovery.store import DiscoveryRunStore
+    from tests.test_discovery import _quality_core
+    from agentic_portfolio.schemas import MarketRegime
+
+    snap = _quality_core("QUAL")
+    snap.earnings_upcoming_days = 2
+    _seed(tmp_path, symbol="QUAL")
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="NEED_MORE_DATA", missing=["get_financials"])}),
+    )
+    worker.payload_fn = lambda candidate: _payload(candidate.symbol, rich=False)
+    worker.run_cycle()
+    d = discovery_state_dir(tmp_path, mode=RuntimeMode.LIVE)
+    cstore = CandidateStore(d / "candidates.json", runtime_mode=RuntimeMode.LIVE.value)
+    qstore = ResearchQueue(d / "research_queue.json", runtime_mode=RuntimeMode.LIVE.value)
+    rstore = DiscoveryRunStore(d / "discovery_runs.json", runtime_mode=RuntimeMode.LIVE.value)
+    cand = cstore.current_for_symbol("QUAL")
+    cand.event_flags = list(dict.fromkeys(list(cand.event_flags or []) + ["UPCOMING_EARNINGS"]))
+    cand.reasons = list(dict.fromkeys(list(cand.reasons or []) + ["upcoming_earnings"]))
+    cstore.upsert(cand)
+    run_discovery(
+        [snap],
+        ctx(500),
+        persist=True,
+        promote_shortlist=True,
+        now=NOW + timedelta(hours=1),
+        candidate_store=cstore,
+        queue_store=qstore,
+        run_store=rstore,
+        regime=MarketRegime.unknown(observed_at=NOW.isoformat()),
+    )
+    assert [e for e in qstore.all() if e.status is ResearchQueueStatus.QUEUED] == []
 
 
 def test_unapproved_packet_cannot_execute(tmp_path, monkeypatch):

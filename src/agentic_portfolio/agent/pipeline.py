@@ -228,8 +228,11 @@ class ResearchQueueWorker:
         self.stale_claim_seconds = stale_claim_seconds
         self.reload_stores()
         self.research_store = ResearchStore(self.root)
-        self.decision_store = DecisionStore(self.root)
-        self.theses = ThesisRegistry(self.root / "state" / "thesis_registry.json")
+        self.decision_store = DecisionStore(self.root, runtime_mode=self.runtime_mode.value)
+        self.theses = ThesisRegistry(
+            self.root / "state" / "thesis_registry.json",
+            runtime_mode=self.runtime_mode.value,
+        )
         self.sleeves = SleeveRegistry(self.root / "state" / "sleeve_registry.json")
         self.ai_store = AIArtifactStore(self.root, runtime_mode=self.runtime_mode)
         self.journal = self.root / "logs" / "pipeline.jsonl"
@@ -584,6 +587,7 @@ class ResearchQueueWorker:
             if pending:
                 row["approval_id"] = pending[0].approval_id
                 row["decision"] = "EXISTING_PENDING_APPROVAL"
+                self.candidates.set_status(candidate.candidate_id, CandidateStatus.RESEARCH_COMPLETE)
                 return row
         return self._decide(report, candidate, context, row)
 
@@ -677,6 +681,7 @@ class ResearchQueueWorker:
         row["decision"] = name.decision.value
         row["approval_id"] = approval.approval_id
         row["risk_verdict"] = verdict.value if hasattr(verdict, "value") else str(verdict)
+        self.candidates.set_status(candidate.candidate_id, CandidateStatus.RESEARCH_COMPLETE)
         self._notify(
             NotificationKind.TRADE_PROPOSAL,
             title=f"TRADE APPROVAL REQUIRED — {report.symbol}",

@@ -18,6 +18,17 @@ from agentic_portfolio.policy import load_discovery_config
 
 UNSUPPORTED = {"option", "crypto", "future", "event", "currency_pair"}
 GARBAGE = {"NONE", "NULL", "TEST", "FAKE", "N/A", ""}
+COLLECTION_KEYS = (
+    "results",
+    "lists",
+    "watchlists",
+    "scans",
+    "items",
+    "events",
+    "instruments",
+    "rows",
+    "matches",
+)
 
 
 @dataclass
@@ -136,16 +147,16 @@ def construct_universe(
 
     members = list(by_symbol.values())
     skipped: list[UniverseMember] = []
-    unique: list[str] = []
+    valid_map: dict[str, UniverseMember] = {}
     for member in members:
         if member.symbol in GARBAGE or not member.symbol.isascii() or not member.symbol.replace(".", "").isalnum():
             member.skipped = True
             member.skip_reason = "invalid_symbol"
             skipped.append(member)
             continue
-        unique.append(member.symbol)
+        valid_map[member.symbol] = member
 
-    unique = _bound(unique, max_size, held)
+    unique = _bound_fair(valid_map, attempts, max_size, held)
     kept_members = [by_symbol[s] for s in unique]
 
     quotes = _safe_quotes(fetcher, unique)
@@ -266,6 +277,57 @@ def _bound(symbols: list[str], max_size: int, held: set[str]) -> list[str]:
     return ordered
 
 
+def _bound_fair(
+    by_symbol: dict[str, UniverseMember],
+    attempts: list[SourceAttempt],
+    max_size: int,
+    held: set[str],
+) -> list[str]:
+    """Round-robin across live sources so earnings cannot crowd out core names."""
+    ordered: list[str] = []
+    seen: set[str] = set()
+
+    def take(sym: str) -> bool:
+        if not sym or sym in seen:
+            return False
+        seen.add(sym)
+        ordered.append(sym)
+        return True
+
+    for sym in held:
+        if sym in by_symbol:
+            take(sym)
+        if len(ordered) >= max_size:
+            return ordered
+
+    buckets: list[list[str]] = []
+    for attempt in attempts:
+        bucket: list[str] = []
+        for sym in attempt.symbols:
+            if sym in by_symbol and sym not in held and sym not in bucket:
+                bucket.append(sym)
+        if bucket:
+            buckets.append(bucket)
+
+    idx = 0
+    while len(ordered) < max_size:
+        progressed = False
+        for bucket in buckets:
+            if idx < len(bucket) and take(bucket[idx]):
+                progressed = True
+                if len(ordered) >= max_size:
+                    return ordered
+        if not progressed:
+            break
+        idx += 1
+
+    for member in by_symbol.values():
+        if len(ordered) >= max_size:
+            break
+        take(member.symbol)
+    return ordered
+
+
 def _run_positions(fetcher: Any, held: set[str]) -> list[str]:
     if held:
         return list(held)
@@ -277,10 +339,12 @@ def _run_watchlists(fetcher: Any) -> list[str]:
     lists = _call(fetcher, "watchlists") or _call(fetcher, "get_watchlists") or {}
     out: list[str] = []
     for item in _rows(lists):
-        list_id = item.get("list_id") or item.get("id") or item.get("id")
+        list_id = _list_id(item)
         if not list_id:
             continue
-        items = _call(fetcher, "watchlist_items", list_id=str(list_id)) or _call(fetcher, "get_watchlist_items", list_id=str(list_id))
+        items = _call(fetcher, "watchlist_items", list_id=str(list_id)) or _call(
+            fetcher, "get_watchlist_items", list_id=str(list_id)
+        )
         out.extend(symbols_from_watchlist_items(items))
     return out
 
@@ -288,15 +352,23 @@ def _run_watchlists(fetcher: Any) -> list[str]:
 def _run_popular(fetcher: Any, cfg: Mapping[str, Any]) -> list[str]:
     payload = _call(fetcher, "popular_watchlists") or _call(fetcher, "get_popular_watchlists") or {}
     titles = {str(t).lower() for t in (cfg.get("popular_watchlist_titles") or [])}
+    rows = _rows(payload)
+    matched: list[dict[str, Any]] = []
+    fallback: list[dict[str, Any]] = []
+    for item in rows:
+        title = _list_title(item)
+        fallback.append(item)
+        if not titles or title in titles or any(t in title for t in titles):
+            matched.append(item)
+    chosen = matched or fallback[:4]
     out: list[str] = []
-    for item in _rows(payload):
-        title = str(item.get("title") or item.get("name") or "").lower()
-        if titles and title not in titles and not any(t in title for t in titles):
-            continue
-        list_id = item.get("list_id") or item.get("id")
+    for item in chosen:
+        list_id = _list_id(item)
         if not list_id:
             continue
-        items = _call(fetcher, "watchlist_items", list_id=str(list_id)) or _call(fetcher, "get_watchlist_items", list_id=str(list_id))
+        items = _call(fetcher, "watchlist_items", list_id=str(list_id)) or _call(
+            fetcher, "get_watchlist_items", list_id=str(list_id)
+        )
         out.extend(symbols_from_watchlist_items(items))
     return out
 
@@ -398,10 +470,25 @@ def _rows(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     data = payload.get("data", payload)
     if not isinstance(data, dict):
         return []
-    rows = data.get("results") or data.get("watchlists") or data.get("scans") or data.get("items") or data.get("events") or []
+    rows: list[Any] = []
+    for key in COLLECTION_KEYS:
+        maybe = data.get(key)
+        if isinstance(maybe, list) and maybe:
+            rows = maybe
+            break
     if isinstance(rows, list):
         return [r for r in rows if isinstance(r, dict)]
     return []
+
+
+def _list_id(item: Mapping[str, Any]) -> str | None:
+    raw = item.get("list_id") or item.get("id") or item.get("watchlist_id")
+    text = str(raw or "").strip()
+    return text or None
+
+
+def _list_title(item: Mapping[str, Any]) -> str:
+    return str(item.get("title") or item.get("name") or item.get("display_name") or "").strip().lower()
 
 
 def _index_by_symbol(payload: Mapping[str, Any] | None, *, extra_keys: tuple[str, ...] = ()) -> dict[str, dict[str, Any]]:

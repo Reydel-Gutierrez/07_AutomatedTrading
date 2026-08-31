@@ -5,7 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
-from agentic_portfolio.adapters.portfolio_facts import live_error_code_of, redact_live_error
+from agentic_portfolio.adapters.portfolio_facts import (
+    LiveDataUnavailable,
+    live_error_code_of,
+    redact_live_error,
+)
 from agentic_portfolio.adapters.readonly_runtime import (
     ReadonlyBrokerRuntime,
     bootstrap_readonly_broker_runtime,
@@ -31,6 +35,7 @@ class ConnectionManager:
         self.last_error: str | None = None
         self.connected = False
         self.last_change_at: str | None = None
+        self._notified_lost = False
 
     def now(self) -> datetime:
         stamp = self._now()
@@ -67,22 +72,40 @@ class ConnectionManager:
             self._lost(prior)
             raise LiveDataUnavailable(self.last_error) from exc
         bound = bool(self.runtime and self.runtime.bound)
-        self.connected = bound
         self.last_error = None if bound else (self.runtime.initialization_error if self.runtime else "not bound")
         if self.last_error:
             self.last_error = redact_live_error(self.last_error)
-        self.last_change_at = self.now().isoformat()
+        self.connected = bound
         if bound and not prior:
+            self.last_change_at = self.now().isoformat()
             self._recovered()
         elif not bound:
+            self.last_change_at = self.now().isoformat()
             self._lost(prior)
         if not bound:
             raise LiveDataUnavailable(self.last_error or "authorized Robinhood MCP transport is not bound")
         return self.runtime
 
+    def probe(self) -> bool:
+        """Cheap health check. Does not re-initialize a working MCP session."""
+        if not self.runtime or not self.runtime.bound:
+            return False
+        fetcher = self.runtime.fetcher
+        if fetcher is None:
+            return True
+        method = getattr(fetcher, "get_accounts", None)
+        if not callable(method):
+            return True
+        try:
+            method()
+            return True
+        except Exception:  # noqa: BLE001 — probe failure is not itself a reconnect
+            return False
+
     def _lost(self, prior: bool) -> None:
         log_activity(self.root, "CONNECTION_FAILURE", error=self.last_error)
-        if self.notify is not None and (prior or self.last_error):
+        if self.notify is not None and not self._notified_lost:
+            self._notified_lost = True
             self.notify.emit(
                 NotificationKind.BROKER_CONNECTION_LOST,
                 title="Robinhood connection lost",
@@ -91,6 +114,7 @@ class ConnectionManager:
             )
 
     def _recovered(self) -> None:
+        self._notified_lost = False
         log_activity(self.root, "CONNECTION_RECOVERY")
         if self.notify is not None:
             self.notify.emit(

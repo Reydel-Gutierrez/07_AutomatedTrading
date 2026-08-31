@@ -15,8 +15,9 @@ def decisions_dir(root: Path | None = None) -> Path:
 
 
 class DecisionStore:
-    def __init__(self, root: Path | None = None) -> None:
+    def __init__(self, root: Path | None = None, *, runtime_mode: str | None = None) -> None:
         self.root = decisions_dir(root)
+        self.runtime_mode = str(runtime_mode).upper() if runtime_mode else None
         self.root.mkdir(parents=True, exist_ok=True)
         self._index_path = self.root / "index.json"
         self._index = self._load_index()
@@ -36,7 +37,11 @@ class DecisionStore:
         path = self.path_for(batch_id)
         if path.exists():
             raise FileExistsError(f"portfolio decision already exists: {batch_id}")
-        path.write_text(json.dumps(to_dict(record), indent=2, default=str), encoding="utf-8")
+        payload = dict(record)
+        if self.runtime_mode:
+            payload["runtime_mode"] = self.runtime_mode
+            payload["paper_environment"] = self.runtime_mode != "LIVE"
+        path.write_text(json.dumps(to_dict(payload), indent=2, default=str), encoding="utf-8")
         self._index.setdefault("by_id", {})[batch_id] = {
             "created_at": record.get("created_at"),
             "path": path.name,

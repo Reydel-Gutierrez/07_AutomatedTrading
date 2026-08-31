@@ -22,12 +22,13 @@ LIGHTWEIGHT_DISCOVERY_SOURCES = (
     "account_positions",
     "account_watchlists",
     "popular_watchlists",
+    "saved_scans",
     "earnings_calendar",
     "core_liquid",
     "liquid_etfs",
 )
-LIGHTWEIGHT_MAX_UNIVERSE = 24
-LIGHTWEIGHT_MAX_SNAPSHOTS = 20
+LIGHTWEIGHT_MAX_UNIVERSE = 36
+LIGHTWEIGHT_MAX_SNAPSHOTS = 24
 LIGHTWEIGHT_MAX_PER_SOURCE = 12
 
 

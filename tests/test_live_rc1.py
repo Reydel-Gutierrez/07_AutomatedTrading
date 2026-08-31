@@ -526,3 +526,57 @@ def test_penny_stock_skipped_from_universe():
     assert "PENY" not in universe.unique_symbols
     skipped = [m.symbol for m in universe.skipped]
     assert "PENY" in skipped
+
+
+class CrowdingFetcher(UniverseFetcher):
+    def get_popular_watchlists(self):
+        return {
+            "data": {
+                "lists": [
+                    {"id": "pop1", "display_name": "100 most popular"},
+                    {"id": "pop2", "display_name": "Daily movers"},
+                ]
+            }
+        }
+
+    def get_watchlist_items(self, list_id=None, **kwargs):
+        if str(list_id) == "pop1":
+            return {"data": {"items": [{"symbol": "NVDA", "object_type": "instrument"}]}}
+        if str(list_id) == "pop2":
+            return {"data": {"items": [{"symbol": "TSLA", "object_type": "instrument"}]}}
+        return super().get_watchlist_items(list_id=list_id, **kwargs)
+
+    def get_earnings_calendar(self, **kwargs):
+        return {
+            "data": {
+                "results": [{"symbol": f"ERN{i:02d}", "days": 2} for i in range(25)]
+            }
+        }
+
+
+def test_popular_watchlists_parse_lists_and_display_name():
+    universe = construct_universe(CrowdingFetcher(), held_symbols=[], now=NOW)
+    successful = [s.name for s in universe.sources if s.successful]
+    assert "popular_watchlists" in successful
+    assert "NVDA" in universe.unique_symbols
+    assert "TSLA" in universe.unique_symbols
+    by_source = {s.name: list(s.symbols) for s in universe.sources}
+    assert "NVDA" in by_source.get("popular_watchlists", [])
+
+
+def test_earnings_calendar_cannot_crowd_out_core_liquid():
+    from agentic_portfolio.policy import load_discovery_config
+
+    cfg = dict(load_discovery_config())
+    uc = dict(cfg.get("universe_construction") or {})
+    uc["max_universe_size"] = 18
+    uc["max_per_source"] = 25
+    cfg["universe_construction"] = uc
+    universe = construct_universe(CrowdingFetcher(), held_symbols=[], now=NOW, config=cfg)
+    successful = [s.name for s in universe.sources if s.successful]
+    assert "earnings_calendar" in successful
+    assert "core_liquid" in successful
+    assert "popular_watchlists" in successful
+    assert "AAPL" in universe.unique_symbols or "MSFT" in universe.unique_symbols
+    assert "SPY" in universe.unique_symbols or "QQQ" in universe.unique_symbols
+    assert universe.unique_universe_size <= 18

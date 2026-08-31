@@ -44,6 +44,17 @@ STABLE_CANDIDATE_STATUSES = {
     CandidateStatus.EXPIRED,
 }
 
+LIVE_CANDIDATE_STATUSES = {
+    CandidateStatus.DISCOVERED,
+    CandidateStatus.SHORTLISTED,
+    CandidateStatus.PROMOTED_TO_RESEARCH,
+    CandidateStatus.WATCHING,
+    CandidateStatus.RESEARCH_COMPLETE,
+    CandidateStatus.RESEARCH_INCONCLUSIVE,
+}
+
+CANDIDATE_HISTORY_CAP = 25
+
 
 def candidates_path(root: Path | None = None) -> Path:
     return (root or project_root()) / "state" / "candidates.json"
@@ -65,43 +76,50 @@ class CandidateStore:
     def __init__(self, path: Path | None = None, *, runtime_mode: str | None = None) -> None:
         self.path = path or candidates_path()
         self.runtime_mode = str(runtime_mode).upper() if runtime_mode else None
-        self._data: dict[str, Any] = {"records": {}}
+        self._data: dict[str, Any] = {"records": {}, "current": {}, "history": {}}
         if self.path.exists():
-            self._data = json.loads(self.path.read_text(encoding="utf-8"))
+            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                self._data = loaded
+        self._ensure_current_index()
 
     def save(self) -> Path:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self._data, indent=2, default=str), encoding="utf-8")
         return self.path
 
-    def get(self, candidate_id: str) -> Candidate | None:
-        raw = self._data.get("records", {}).get(candidate_id)
-        return _candidate_from_dict(raw) if raw else None
-
-    def active_for_symbol(self, symbol: str) -> Candidate | None:
-        want = symbol.upper()
-        live = {
-            CandidateStatus.DISCOVERED,
-            CandidateStatus.SHORTLISTED,
-            CandidateStatus.PROMOTED_TO_RESEARCH,
-            CandidateStatus.WATCHING,
-            CandidateStatus.RESEARCH_COMPLETE,
-            CandidateStatus.RESEARCH_INCONCLUSIVE,
-        }
-        found: Candidate | None = None
-        for raw in self._data.get("records", {}).values():
-            if str(raw.get("symbol", "")).upper() != want:
+    def _ensure_current_index(self) -> None:
+        """Collapse legacy UUID-keyed duplicates into one current row per symbol."""
+        current = dict(self._data.get("current") or {})
+        history = dict(self._data.get("history") or {})
+        records = dict(self._data.get("records") or {})
+        if current and all(isinstance(v, dict) and v.get("candidate_id") for v in current.values()):
+            self._data["current"] = {str(k).upper(): v for k, v in current.items()}
+            self._data["history"] = history
+            self._data["records"] = records
+            return
+        by_symbol: dict[str, list[dict[str, Any]]] = {}
+        for raw in records.values():
+            if not isinstance(raw, dict):
                 continue
-            rec = _candidate_from_dict(raw)
-            if rec.status in live:
-                if found is None or rec.discovered_at > found.discovered_at:
-                    found = rec
-        return found
+            sym = str(raw.get("symbol") or "").upper()
+            if not sym:
+                continue
+            by_symbol.setdefault(sym, []).append(raw)
+        rebuilt: dict[str, dict[str, Any]] = {}
+        for sym, rows in by_symbol.items():
+            ranked = sorted(rows, key=lambda r: str(r.get("discovered_at") or ""), reverse=True)
+            rebuilt[sym] = ranked[0]
+            extras = ranked[1:]
+            if extras:
+                hist = list(history.get(sym) or [])
+                hist.extend(extras)
+                history[sym] = hist[-CANDIDATE_HISTORY_CAP:]
+        self._data["current"] = rebuilt
+        self._data["history"] = history
+        self._data["records"] = {str(row["candidate_id"]): row for row in rebuilt.values() if row.get("candidate_id")}
 
-    def all(self) -> list[Candidate]:
-        return [_candidate_from_dict(r) for r in self._data.get("records", {}).values()]
-
-    def upsert(self, candidate: Candidate) -> Candidate:
+    def _stamp(self, candidate: Candidate) -> dict[str, Any]:
         data = to_dict(candidate)
         if self.runtime_mode:
             data["runtime_mode"] = self.runtime_mode
@@ -109,6 +127,72 @@ class CandidateStore:
             data["source_of_truth"] = (
                 LIVE_SOURCE_OF_TRUTH if self.runtime_mode == RuntimeMode.LIVE.value else PAPER_SOURCE_OF_TRUTH
             )
+        return data
+
+    def _archive(self, raw: dict[str, Any]) -> None:
+        symbol = str(raw.get("symbol") or "").upper()
+        if not symbol:
+            return
+        hist = list(self._data.setdefault("history", {}).get(symbol) or [])
+        hist.append(dict(raw))
+        self._data.setdefault("history", {})[symbol] = hist[-CANDIDATE_HISTORY_CAP:]
+
+    def get(self, candidate_id: str) -> Candidate | None:
+        raw = (self._data.get("records") or {}).get(candidate_id)
+        if raw:
+            return _candidate_from_dict(raw)
+        for row in (self._data.get("current") or {}).values():
+            if isinstance(row, dict) and str(row.get("candidate_id")) == candidate_id:
+                return _candidate_from_dict(row)
+        for rows in (self._data.get("history") or {}).values():
+            if not isinstance(rows, list):
+                continue
+            for row in reversed(rows):
+                if isinstance(row, dict) and str(row.get("candidate_id")) == candidate_id:
+                    return _candidate_from_dict(row)
+        return None
+
+    def current_for_symbol(self, symbol: str) -> Candidate | None:
+        self._ensure_current_index()
+        raw = (self._data.get("current") or {}).get(symbol.upper())
+        return _candidate_from_dict(raw) if raw else None
+
+    def history_for_symbol(self, symbol: str) -> list[Candidate]:
+        self._ensure_current_index()
+        rows = (self._data.get("history") or {}).get(symbol.upper()) or []
+        return [_candidate_from_dict(r) for r in rows if isinstance(r, dict)]
+
+    def active_for_symbol(self, symbol: str) -> Candidate | None:
+        rec = self.current_for_symbol(symbol)
+        if rec is not None and rec.status in LIVE_CANDIDATE_STATUSES:
+            return rec
+        return None
+
+    def all(self) -> list[Candidate]:
+        """Current LIVE candidate per symbol only. History is stored separately."""
+        self._ensure_current_index()
+        return [_candidate_from_dict(r) for r in (self._data.get("current") or {}).values() if isinstance(r, dict)]
+
+    def upsert(self, candidate: Candidate) -> Candidate:
+        self._ensure_current_index()
+        symbol = candidate.symbol.upper()
+        existing_raw = (self._data.get("current") or {}).get(symbol)
+        if existing_raw and existing_raw.get("candidate_id"):
+            candidate.candidate_id = str(existing_raw["candidate_id"])
+            if str(existing_raw.get("status") or "") != candidate.status.value:
+                self._archive(existing_raw)
+        data = self._stamp(candidate)
+        stale_ids = [
+            cid
+            for cid, row in (self._data.get("records") or {}).items()
+            if isinstance(row, dict)
+            and str(row.get("symbol") or "").upper() == symbol
+            and cid != candidate.candidate_id
+        ]
+        for cid in stale_ids:
+            row = self._data["records"].pop(cid)
+            self._archive(row)
+        self._data.setdefault("current", {})[symbol] = data
         self._data.setdefault("records", {})[candidate.candidate_id] = data
         self.save()
         return candidate

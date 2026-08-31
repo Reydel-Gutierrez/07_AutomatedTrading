@@ -45,6 +45,18 @@ PRIORITY_ORDER = [
     DiscoveryPriority.URGENT_RESEARCH,
 ]
 
+# Discrete new events that may reopen NEED_MORE_DATA before the cooldown.
+# Membership on the earnings calendar (UPCOMING_EARNINGS / "earnings" in reasons)
+# is not a material change — that is how the name was found in the first place.
+MATERIAL_RETRY_FLAGS = {
+    "MAJOR_NEWS",
+    "MATERIAL_FILING",
+    "REGIME_CHANGE",
+    "HUMAN_REQUEST",
+    "EARNINGS_EVENT",
+    "POST_EARNINGS_MOVE",
+}
+
 
 @dataclass
 class DiscoveryResult:
@@ -106,13 +118,23 @@ def run_discovery(
     if persist:
         cstore = candidate_store or CandidateStore()
         for c in created + rejected:
-            existing = cstore.active_for_symbol(c.symbol)
-            if existing and existing.status != CandidateStatus.REJECTED:
+            existing = cstore.current_for_symbol(c.symbol)
+            if existing is not None:
                 c.candidate_id = existing.candidate_id
-                if existing.status is CandidateStatus.PROMOTED_TO_RESEARCH:
-                    # Keep the promoted row. Hourly MARKET_OPEN discovery must not
-                    # reset status and re-enqueue a name already in research.
-                    c.status = CandidateStatus.PROMOTED_TO_RESEARCH
+                if (
+                    existing.status
+                    in {
+                        CandidateStatus.PROMOTED_TO_RESEARCH,
+                        CandidateStatus.WATCHING,
+                        CandidateStatus.RESEARCH_COMPLETE,
+                    }
+                    and c.status != CandidateStatus.REJECTED
+                ):
+                    # One current row per symbol. Do not reset a finished
+                    # research outcome just because discovery re-scored it.
+                    # RESEARCH_INCONCLUSIVE stays as this cycle's score so
+                    # NEED_MORE_DATA can re-promote after cooldown.
+                    c.status = existing.status
             cstore.upsert(c)
 
     queue_entries: list[ResearchQueueEntry] = []
@@ -539,14 +561,7 @@ def may_reopen_research(
     retry = dict(cfg.get("reassessment") or {})
     sleeve = candidate.provisional_sleeve.value if candidate.provisional_sleeve else "CORE_GROWTH"
     flags = {str(f).upper() for f in (candidate.event_flags or [])}
-    material = bool(
-        flags
-        & {"EARNINGS", "EARNINGS_EVENT", "MAJOR_NEWS", "MATERIAL_FILING", "REGIME_CHANGE", "HUMAN_REQUEST"}
-        or any(
-            "earnings" in str(r).lower() or "filing" in str(r).lower() or "news" in str(r).lower()
-            for r in (candidate.reasons or [])
-        )
-    )
+    material = bool(flags & MATERIAL_RETRY_FLAGS)
     last = _parse(prior.last_attempt_at or prior.enqueued_at) if (prior.last_attempt_at or prior.enqueued_at) else None
     elapsed_h = ((now - last).total_seconds() / 3600.0) if last else 10**9
     if prior.status in {ResearchQueueStatus.NEED_MORE_DATA, ResearchQueueStatus.INCONCLUSIVE}:

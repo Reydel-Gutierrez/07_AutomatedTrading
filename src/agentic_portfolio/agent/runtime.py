@@ -303,6 +303,10 @@ class AgentRuntime:
         self.fatal = False
         self.started_at = self.now().isoformat()
         write_pid(self.base, config=self.config)
+        try:
+            self.connection.ensure()
+        except Exception:  # noqa: BLE001 — first bind is recorded in health; runtime continues
+            pass
         write_health(
             self.base,
             started_at=self.started_at,

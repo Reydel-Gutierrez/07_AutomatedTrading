@@ -574,13 +574,17 @@ def bootstrap_readonly_broker_runtime(
     cannot initialize. Never binds place/review/cancel.
     """
     global _BOUND
+    previous = _BOUND
     if transport is not None:
         return _bind(transport, account_number=account_number)
-    if _BOUND is not None and not force:
+    if _BOUND is not None and _BOUND.bound and not force:
         return _BOUND
     env = environ if environ is not None else os.environ
     token, token_error = _read_token(environ=env)
     if token_error:
+        if previous is not None and previous.bound and not force:
+            _BOUND = previous
+            return previous
         return _bind(None, error=token_error)
     url = resolve_readonly_mcp_url(environ=env)
     http = _make_http_transport(url, token, environ=env)
@@ -588,9 +592,15 @@ def bootstrap_readonly_broker_runtime(
         http.initialize()
     except LiveDataUnavailable as exc:
         if getattr(exc, "code", None) != LiveErrorCode.MCP_HTTP_401 and "401" not in str(exc):
+            if previous is not None and previous.bound and not force:
+                _BOUND = previous
+                return previous
             return _bind(None, error=_coded_error(exc))
         refreshed, refresh_error = load_or_refresh_access_token(environ=env, force_refresh=True)
         if not refreshed:
+            if previous is not None and previous.bound and not force:
+                _BOUND = previous
+                return previous
             return _bind(
                 None,
                 error=(
@@ -603,8 +613,14 @@ def bootstrap_readonly_broker_runtime(
         try:
             http.initialize()
         except LiveDataUnavailable as retry_exc:
+            if previous is not None and previous.bound and not force:
+                _BOUND = previous
+                return previous
             return _bind(None, error=_coded_error(retry_exc))
         except Exception as retry_exc:
+            if previous is not None and previous.bound and not force:
+                _BOUND = previous
+                return previous
             return _bind(
                 None,
                 error=(
@@ -613,6 +629,9 @@ def bootstrap_readonly_broker_runtime(
                 ),
             )
     except Exception as exc:
+        if previous is not None and previous.bound and not force:
+            _BOUND = previous
+            return previous
         return _bind(
             None,
             error=(

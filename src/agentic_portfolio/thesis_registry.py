@@ -33,8 +33,9 @@ def _now() -> str:
 
 
 class ThesisRegistry:
-    def __init__(self, path: Path | None = None) -> None:
+    def __init__(self, path: Path | None = None, *, runtime_mode: str | None = None) -> None:
         self.path = path or thesis_registry_path()
+        self.runtime_mode = str(runtime_mode).upper() if runtime_mode else None
         self._data: dict[str, Any] = {"records": {}}
         if self.path.exists():
             self._data = json.loads(self.path.read_text(encoding="utf-8"))
@@ -43,6 +44,13 @@ class ThesisRegistry:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(json.dumps(self._data, indent=2, default=str), encoding="utf-8")
         return self.path
+
+    def _write(self, rec: ThesisRecord) -> None:
+        data = to_dict(rec)
+        if self.runtime_mode:
+            data["runtime_mode"] = self.runtime_mode
+            data["paper_environment"] = self.runtime_mode != "LIVE"
+        self._data.setdefault("records", {})[rec.thesis_id] = data
 
     def get(self, thesis_id: str) -> ThesisRecord | None:
         raw = self._data.get("records", {}).get(thesis_id)
@@ -143,7 +151,7 @@ class ThesisRegistry:
             supporting_evidence_refs=list(supporting_evidence_refs or []),
             review_history=[],
         )
-        self._data.setdefault("records", {})[rec.thesis_id] = to_dict(rec)
+        self._write(rec)
         self.save()
         return rec
 
@@ -153,7 +161,7 @@ class ThesisRegistry:
             raise KeyError(thesis_id)
         rec.status = status
         rec.updated_at = _now()
-        self._data["records"][thesis_id] = to_dict(rec)
+        self._write(rec)
         self.save()
         return rec
 
@@ -181,7 +189,7 @@ class ThesisRegistry:
         )
         rec.review_history.append(review)
         rec.updated_at = ts
-        self._data["records"][thesis_id] = to_dict(rec)
+        self._write(rec)
         self.save()
         return rec
 
@@ -193,7 +201,7 @@ class ThesisRegistry:
         rec.last_price_observed = price
         rec.last_price_observed_at = observed_at or _now()
         rec.updated_at = rec.last_price_observed_at
-        self._data["records"][thesis_id] = to_dict(rec)
+        self._write(rec)
         self.save()
         return rec
 

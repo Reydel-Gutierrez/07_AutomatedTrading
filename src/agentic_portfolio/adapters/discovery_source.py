@@ -276,11 +276,18 @@ def symbols_from_search(payload: Mapping[str, Any] | None) -> list[str]:
 def symbols_from_scan(payload: Mapping[str, Any] | None) -> list[str]:
     out: list[str] = []
     data = _data(payload)
-    rows = data.get("results") or data.get("rows") or data.get("instruments") or []
+    rows = data.get("results") or data.get("rows") or data.get("instruments") or data.get("matches") or []
     if isinstance(rows, list):
         for row in rows:
             if isinstance(row, dict):
-                sym = str(row.get("symbol") or row.get("ticker") or "").upper()
+                cells = row.get("cells") if isinstance(row.get("cells"), dict) else {}
+                sym = str(
+                    row.get("symbol")
+                    or row.get("ticker")
+                    or cells.get("symbol")
+                    or cells.get("Symbol")
+                    or ""
+                ).upper()
                 if sym:
                     out.append(sym)
     return out
@@ -373,7 +380,18 @@ def _data(payload: Mapping[str, Any] | None) -> dict[str, Any]:
 
 def _results(payload: Mapping[str, Any] | None) -> list[dict[str, Any]]:
     data = _data(payload)
-    results = data.get("results") or data.get("items") or data.get("events") or data.get("articles") or []
+    results = (
+        data.get("results")
+        or data.get("items")
+        or data.get("events")
+        or data.get("articles")
+        or data.get("lists")
+        or data.get("watchlists")
+        or data.get("scans")
+        or data.get("rows")
+        or data.get("instruments")
+        or []
+    )
     if isinstance(results, list):
         return [r for r in results if isinstance(r, dict)]
     return []

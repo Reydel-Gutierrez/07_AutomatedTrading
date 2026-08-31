@@ -413,6 +413,31 @@ def test_repeat_discovery_does_not_duplicate_candidates_or_queue(tmp_path):
     assert LIVE_ORDER_PLACEMENT is False
 
 
+def test_rejected_symbol_does_not_accumulate_duplicate_rows(tmp_path):
+    cstore = CandidateStore(tmp_path / "c.json", runtime_mode="LIVE")
+    qstore = ResearchQueue(tmp_path / "q.json", runtime_mode="LIVE")
+    rstore = DiscoveryRunStore(tmp_path / "r.json", runtime_mode="LIVE")
+    snap = _snap(symbol="JUNK", tradable=False, name="Junk Co")
+    kwargs = dict(
+        snapshots=[snap],
+        context=ctx(10_000),
+        persist=True,
+        promote_shortlist=True,
+        now=NOW,
+        candidate_store=cstore,
+        queue_store=qstore,
+        run_store=rstore,
+        regime=MarketRegime.unknown(observed_at=TS),
+    )
+    run_discovery(**kwargs)
+    run_discovery(**kwargs)
+    run_discovery(**kwargs)
+    current = [c for c in cstore.all() if c.symbol == "JUNK"]
+    assert len(current) == 1
+    assert cstore.current_for_symbol("JUNK") is not None
+    assert len(cstore.history_for_symbol("JUNK")) >= 0
+
+
 def test_empty_universe_is_no_high_quality_candidates():
     out = _run([], ctx(10_000))
     assert out.conclusion == "NO_HIGH_QUALITY_CANDIDATES"
