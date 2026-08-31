@@ -1,0 +1,100 @@
+"""AI Gateway adapters for the existing Research and Decision reasoner protocols.
+
+The engines stay unchanged. These wrappers are the only production path that
+may call a model, and they always go through AIGateway.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from agentic_portfolio.ai.errors import AIError, BudgetDenied, BudgetExhausted
+from agentic_portfolio.ai.gateway import AIGateway
+from agentic_portfolio.ai.schemas import RESEARCH_REPORT_SCHEMA, THESIS_DECISION_SCHEMA
+from agentic_portfolio.ai.types import ModelRole
+from agentic_portfolio.decision.reasoner import DecisionReasoner, build_reasoning_prompt as build_decision_prompt
+from agentic_portfolio.decision.types import DecisionReasoningRequest
+from agentic_portfolio.research.reasoner import ResearchReasoner, build_reasoning_prompt
+from agentic_portfolio.research.types import ResearchReasoningRequest
+from agentic_portfolio.decision.validate import DecisionValidationError
+from agentic_portfolio.research.validate import ResearchValidationError
+
+
+class GatewayResearchReasoner:
+    """ResearchReasoner backed by the production AI Gateway."""
+
+    def __init__(self, gateway: AIGateway, *, role: ModelRole | str = ModelRole.RESEARCH) -> None:
+        self.gateway = gateway
+        self.role = role
+        self.last_result = None
+
+    def reason(self, request: ResearchReasoningRequest) -> dict[str, Any]:
+        prompt = build_reasoning_prompt(request)
+        ticker = str((request.candidate or {}).get("symbol") or "") or None
+        try:
+            result = self.gateway.complete_structured(
+                role=self.role,
+                purpose="deep_research",
+                schema_name="research_report",
+                schema=RESEARCH_REPORT_SCHEMA,
+                messages=[
+                    {"role": "system", "content": request.instructions or "Return JSON only."},
+                    {"role": "user", "content": prompt},
+                ],
+                ticker=ticker,
+                critical=False,
+            )
+        except (BudgetDenied, BudgetExhausted) as exc:
+            raise ResearchValidationError(f"AI budget blocked research: {exc}") from exc
+        except AIError as exc:
+            raise ResearchValidationError(f"AI research call failed: {exc}") from exc
+        self.last_result = result
+        payload = dict(result.payload)
+        payload.setdefault("provider", result.provider)
+        payload.setdefault("model", result.model)
+        return payload
+
+
+class GatewayDecisionReasoner:
+    """DecisionReasoner backed by the production AI Gateway."""
+
+    def __init__(self, gateway: AIGateway, *, role: ModelRole | str = ModelRole.RESEARCH) -> None:
+        self.gateway = gateway
+        self.role = role
+        self.last_result = None
+
+    def reason(self, request: DecisionReasoningRequest) -> dict[str, Any]:
+        prompt = build_decision_prompt(request)
+        ticker = None
+        for item in request.reports or []:
+            if isinstance(item, dict) and item.get("symbol"):
+                ticker = str(item["symbol"])
+                break
+        try:
+            result = self.gateway.complete_structured(
+                role=self.role,
+                purpose="portfolio_decision",
+                schema_name="thesis_decision",
+                schema=THESIS_DECISION_SCHEMA,
+                messages=[
+                    {"role": "system", "content": request.instructions or "Return JSON only."},
+                    {"role": "user", "content": prompt},
+                ],
+                ticker=ticker,
+                critical=False,
+            )
+        except (BudgetDenied, BudgetExhausted) as exc:
+            raise DecisionValidationError(f"AI budget blocked decision: {exc}") from exc
+        except AIError as exc:
+            raise DecisionValidationError(f"AI decision call failed: {exc}") from exc
+        self.last_result = result
+        return dict(result.payload)
+
+
+# Protocol satisfaction for type checkers.
+def _research_protocol(reasoner: GatewayResearchReasoner) -> ResearchReasoner:
+    return reasoner
+
+
+def _decision_protocol(reasoner: GatewayDecisionReasoner) -> DecisionReasoner:
+    return reasoner

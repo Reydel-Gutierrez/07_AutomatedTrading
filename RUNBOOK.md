@@ -40,6 +40,8 @@ Proposal-only LIVE AI check: `PYTHONPATH=src python scripts/run_live_ai_check.py
 
 The Raspberry Pi scheduler (`scripts/run_scheduler.py`) is an internal orchestrator inside the 24/7 Agent Runtime (`scripts/run_service.py`). The process never exits after one cycle. PREMARKET / MARKET HOURS / POSTMARKET / OVERNIGHT / WEEKEND / HOLIDAY jobs run according to session phase. Duplicate jobs are skipped. AI is not called on every tick.
 
+Overnight/premarket now consume the research queue (`RESEARCH_QUEUE_WORKER`) and persisted watches/theses. Discovery ending in `CANDIDATES_READY_FOR_RESEARCH` is no longer a terminal stop. Read-only dump: `PYTHONPATH=src python scripts/diagnose_pipeline.py`. `LIVE_ORDER_PLACEMENT` stays false.
+
 $10/month AI cap: `config/ai.json` + persisted `state/ai_budget/`. $0–$8 normal, $8+ conserving, $9.50+ critical reassessment only, $10 blocks all external AI until next calendar month. Market monitoring, broker sync, Risk Gate, dashboard, watch conditions, and logs continue when AI is blocked.
 
 ## Drawdown / daily halt

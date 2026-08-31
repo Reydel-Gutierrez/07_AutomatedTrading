@@ -26,6 +26,30 @@
 </section>
 
 <section class="card">
+  <h2>Research queue</h2>
+  <p class="meta">queued {{ view.queue_counts.queued if view.queue_counts else 0 }} · researching {{ view.queue_counts.researching if view.queue_counts else 0 }} · completed {{ view.queue_counts.completed if view.queue_counts else 0 }} · rejected {{ view.queue_counts.rejected if view.queue_counts else 0 }}</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Symbol</th><th>Status</th><th>Priority</th><th>Score</th><th>Enqueued</th><th>Deadline</th></tr></thead>
+      <tbody>
+        {% for q in view.queue %}
+        <tr>
+          <td>{{ q.symbol }}</td>
+          <td>{{ q.status }}</td>
+          <td>{{ q.priority }}</td>
+          <td>{{ '%.1f'|format(q.discovery_score or 0) }}</td>
+          <td>{{ (q.enqueued_at or '')[:16].replace('T', ' ') }}</td>
+          <td>{{ (q.freshness_deadline or '')[:16].replace('T', ' ') }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">Queue is empty.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section class="card">
   <h2>Research reports</h2>
   <div class="table-wrap">
     <table>

@@ -105,6 +105,13 @@ class WatchItem:
     approval_id: str | None = None
     paper_environment: bool = False
     LIVE_ORDER_PLACEMENT: bool = False
+    candidate_id: str | None = None
+    research_id: str | None = None
+    thesis_id: str | None = None
+    sleeve: str | None = None
+    catalysts: list[str] = field(default_factory=list)
+    price_levels: dict[str, Any] = field(default_factory=dict)
+    reason_for_watch: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = to_dict(self)
@@ -172,6 +179,13 @@ def _watch_kwargs(data: dict[str, Any]) -> dict[str, Any]:
         "approval_id",
         "paper_environment",
         "LIVE_ORDER_PLACEMENT",
+        "candidate_id",
+        "research_id",
+        "thesis_id",
+        "sleeve",
+        "catalysts",
+        "price_levels",
+        "reason_for_watch",
     }
     out: dict[str, Any] = {}
     for key, value in data.items():

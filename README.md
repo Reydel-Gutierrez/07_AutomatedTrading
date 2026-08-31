@@ -155,6 +155,10 @@ Paper/live-shaped run: `PYTHONPATH=src python scripts/run_paper_review.py` (one 
 
 Switch: `AGENTIC_RUNTIME_MODE=LIVE` or `DASHBOARD_ENVIRONMENT=LIVE` (see `config/runtime.json`). Dashboard shows **LIVE**. It does not fall back to paper $10,000 NAV.
 
+The overnight `RESEARCH_QUEUE_WORKER` job consumes promoted candidates in `state/research_queue.json` (and `state/live_ai/` when present) through the existing Research Engine and AI Gateway. Successful research can create DRAFT theses, persistent watches, or human approval packets. `LIVE_ORDER_PLACEMENT` remains **false**. Approving a packet still does not place an order.
+
+Read-only pipeline dump: `PYTHONPATH=src python scripts/diagnose_pipeline.py`.
+
 Read-only launch check: `PYTHONPATH=src python scripts/run_live_launch_check.py` (confirms Agentic account, refreshes `state/live_book`, fails if paper state leaks). Does **not** call `place_equity_order`. `review_equity_order` remains behind the existing approval/review gate.
 
 ## Production AI (proposal-only)

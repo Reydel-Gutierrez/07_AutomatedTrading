@@ -51,6 +51,7 @@ def catalog() -> list[JobSpec]:
         JobSpec("POSTMARKET_CANDIDATE_RANK", POST, "once_per_session", description="Candidate ranking from completed session"),
         JobSpec("LUNA_SCREEN", POST | CLOSED_DAYS, "once_per_day", allow_ai=True, description="Cheap Luna screening when warranted"),
         JobSpec("TERRA_RESEARCH", POST | CLOSED_DAYS, "once_per_day", allow_ai=True, description="Terra research when warranted"),
+        JobSpec("RESEARCH_QUEUE_WORKER", NIGHT | PRE | POST | CLOSED_DAYS, "interval", every_minutes=30, allow_ai=True, description="Consume research queue through AI Gateway"),
         JobSpec("THESIS_WATCH_CREATE", POST | CLOSED_DAYS, "once_per_day", description="Thesis/watchlist creation"),
         JobSpec("NEXT_SESSION_PLANS", POST | CLOSED_DAYS, "once_per_day", description="Conditional next-session plans"),
         JobSpec("OVERNIGHT_NEWS", NIGHT, "interval", every_minutes=120, description="News/catalyst monitoring"),

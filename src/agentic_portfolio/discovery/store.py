@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from agentic_portfolio.agent.persist import atomic_write_json
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.runtime import LIVE_SOURCE_OF_TRUTH, PAPER_SOURCE_OF_TRUTH, RuntimeMode
 from agentic_portfolio.schemas import (
@@ -113,7 +114,7 @@ class ResearchQueue:
 
     def save(self) -> Path:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(self._data, indent=2, default=str), encoding="utf-8")
+        atomic_write_json(self.path, self._data)
         return self.path
 
     def get(self, queue_id: str) -> ResearchQueueEntry | None:
@@ -124,10 +125,13 @@ class ResearchQueue:
         return [_queue_from_dict(r) for r in self._data.get("records", {}).values()]
 
     def enqueue(self, entry: ResearchQueueEntry) -> ResearchQueueEntry:
+        from agentic_portfolio.discovery.freshness import normalize_queue_freshness
+
         if not entry.queue_id:
             entry.queue_id = str(uuid4())
         if not entry.enqueued_at:
             entry.enqueued_at = _now()
+        entry = normalize_queue_freshness(entry)
         data = to_dict(entry)
         if self.runtime_mode:
             data["runtime_mode"] = self.runtime_mode
@@ -136,14 +140,26 @@ class ResearchQueue:
         self.save()
         return entry
 
-    def set_status(self, queue_id: str, status: ResearchQueueStatus) -> ResearchQueueEntry:
+    def save_entry(self, entry: ResearchQueueEntry) -> ResearchQueueEntry:
+        if not entry.queue_id:
+            raise ValueError("queue entry requires queue_id")
+        data = to_dict(entry)
+        if self.runtime_mode:
+            data["runtime_mode"] = self.runtime_mode
+            data["paper_environment"] = self.runtime_mode != RuntimeMode.LIVE.value
+        self._data.setdefault("records", {})[entry.queue_id] = data
+        self.save()
+        return entry
+
+    def set_status(self, queue_id: str, status: ResearchQueueStatus, **fields: Any) -> ResearchQueueEntry:
         rec = self.get(queue_id)
         if rec is None:
             raise KeyError(queue_id)
         rec.status = status
-        self._data["records"][queue_id] = to_dict(rec)
-        self.save()
-        return rec
+        for key, value in fields.items():
+            if hasattr(rec, key):
+                setattr(rec, key, value)
+        return self.save_entry(rec)
 
 
 class DiscoveryRunStore:
@@ -247,6 +263,11 @@ def _candidate_from_dict(raw: dict[str, Any]) -> Candidate:
 
 
 def _queue_from_dict(raw: dict[str, Any]) -> ResearchQueueEntry:
+    status_raw = str(raw.get("status") or "QUEUED")
+    try:
+        status = ResearchQueueStatus(status_raw)
+    except ValueError:
+        status = ResearchQueueStatus.QUEUED
     return ResearchQueueEntry(
         queue_id=raw["queue_id"],
         candidate_id=raw["candidate_id"],
@@ -257,7 +278,7 @@ def _queue_from_dict(raw: dict[str, Any]) -> ResearchQueueEntry:
         why_research_warranted=raw.get("why_research_warranted") or "",
         required_research_areas=list(raw.get("required_research_areas") or []),
         freshness_deadline=raw.get("freshness_deadline"),
-        status=ResearchQueueStatus(raw.get("status") or "QUEUED"),
+        status=status,
         enqueued_at=raw.get("enqueued_at"),
         notes=raw.get("notes"),
         comparison_group_id=raw.get("comparison_group_id"),
@@ -265,6 +286,12 @@ def _queue_from_dict(raw: dict[str, Any]) -> ResearchQueueEntry:
         deferred_due_to_research_queue_overlap=bool(
             raw.get("deferred_due_to_research_queue_overlap") or False
         ),
+        research_id=raw.get("research_id"),
+        attempt_count=int(raw.get("attempt_count") or 0),
+        last_error=raw.get("last_error"),
+        last_attempt_at=raw.get("last_attempt_at"),
+        claimed_at=raw.get("claimed_at"),
+        skipped_reason=raw.get("skipped_reason"),
     )
 
 

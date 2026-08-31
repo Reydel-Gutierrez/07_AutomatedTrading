@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from agentic_portfolio.discovery.channels import ChannelNomination, run_channels
 from agentic_portfolio.discovery.eligibility import hard_reject, liquidity_status
+from agentic_portfolio.discovery.freshness import freshness_deadline_at
 from agentic_portfolio.discovery.safety import DISCOVERY_FORBIDDEN_TOOLS, assert_no_forbidden_tools
 from agentic_portfolio.discovery.scoring import score_signals
 from agentic_portfolio.discovery.signals import merge_signals
@@ -121,7 +122,7 @@ def run_discovery(
             # it does not discard a shortlisted candidate from the queue.
             if c.priority in {DiscoveryPriority.LOW} and not c.deferred_due_to_overlap:
                 continue
-            entry = _queue_entry(c, cfg)
+            entry = _queue_entry(c, cfg, now=now)
             c.status = CandidateStatus.PROMOTED_TO_RESEARCH
             promoted_ids.append(c.candidate_id)
             queue_entries.append(entry)
@@ -189,7 +190,11 @@ def expire_candidates(
             expired.append(rec)
             if queue:
                 for q in queue.all():
-                    if q.candidate_id == rec.candidate_id and q.status == ResearchQueueStatus.QUEUED:
+                    if q.candidate_id == rec.candidate_id and q.status in {
+                        ResearchQueueStatus.QUEUED,
+                        ResearchQueueStatus.IN_PROGRESS,
+                        ResearchQueueStatus.RESEARCHING,
+                    }:
                         queue.set_status(q.queue_id, ResearchQueueStatus.EXPIRED)
     return expired
 
@@ -490,8 +495,10 @@ def _apply_overlap_priority(candidates: list[Candidate], cfg: dict) -> list[Cand
     return candidates
 
 
-def _queue_entry(cand: Candidate, cfg: dict) -> ResearchQueueEntry:
+def _queue_entry(cand: Candidate, cfg: dict, *, now: datetime) -> ResearchQueueEntry:
     why = "; ".join(cand.reasons[:4]) or "shortlisted_for_research"
+    stamp = now if now.tzinfo else now.replace(tzinfo=timezone.utc)
+    enqueued_at = stamp.isoformat()
     return ResearchQueueEntry(
         queue_id=str(uuid4()),
         candidate_id=cand.candidate_id,
@@ -501,8 +508,9 @@ def _queue_entry(cand: Candidate, cfg: dict) -> ResearchQueueEntry:
         priority=cand.priority,
         why_research_warranted=why,
         required_research_areas=list(cand.required_research_areas or cfg["research_areas"].get(cand.provisional_sleeve.value, [])),
-        freshness_deadline=cand.expires_at,
+        freshness_deadline=freshness_deadline_at(cand.provisional_sleeve, stamp, cfg),
         status=ResearchQueueStatus.QUEUED,
+        enqueued_at=enqueued_at,
         notes="Research priority is not trade urgency. Do not buy from this queue.",
         comparison_group_id=cand.comparison_group_id,
         overlap_warnings=list(cand.overlap_warnings),

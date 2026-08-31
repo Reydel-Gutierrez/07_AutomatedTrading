@@ -10,10 +10,10 @@
         <tr>
           <th>Ticker</th>
           <th>Status</th>
+          <th>Sleeve</th>
           <th>Score</th>
           <th>Thesis</th>
-          <th>Entry / max price</th>
-          <th>Last reassessed</th>
+          <th>Invalidation</th>
           <th>Next review</th>
           <th>Expires</th>
         </tr>
@@ -23,10 +23,10 @@
         <tr>
           <td class="symbol">{{ w.ticker }}</td>
           <td><span class="pill">{{ w.status }}</span></td>
+          <td>{{ w.sleeve or '—' }}</td>
           <td>{{ w.score if w.score is not none else '—' }}</td>
-          <td>{{ w.thesis or '—' }}</td>
-          <td>{% if w.max_price %}≤ {{ w.max_price }} / {{ w.max_spread_bps }} bps{% else %}{{ (w.entry_conditions or [])|join('; ') or '—' }}{% endif %}</td>
-          <td class="meta">{{ (w.last_reassessed or '')[:16].replace('T', ' ') or '—' }}</td>
+          <td>{{ w.thesis or w.reason_for_watch or '—' }}</td>
+          <td>{{ (w.invalidation or w.invalidating_conditions or [])|join('; ') or '—' }}</td>
           <td class="meta">{{ (w.next_review_at or '')[:16].replace('T', ' ') or '—' }}</td>
           <td class="meta">{{ (w.expiration or '')[:16].replace('T', ' ') or '—' }}</td>
         </tr>

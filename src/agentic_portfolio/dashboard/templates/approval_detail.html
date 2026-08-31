@@ -43,6 +43,12 @@
     <dt>Why not cash</dt><dd>{{ packet.why_not_cash or '—' }}</dd>
     <dt>Why not SPY</dt><dd>{{ packet.why_not_spy or '—' }}</dd>
     <dt>Horizon</dt><dd>{{ packet.expected_horizon or '—' }}</dd>
+    <dt>Catalysts</dt><dd>{{ (packet.catalysts or [])|join('; ') or '—' }}</dd>
+    <dt>Risks</dt><dd>{{ (packet.key_risks or [])|join('; ') or '—' }}</dd>
+    <dt>Invalidation</dt><dd>{{ packet.invalidation_exit_policy or '—' }}</dd>
+    <dt>AI provenance</dt><dd>{{ packet.ai_provenance or '—' }}</dd>
+    <dt>NAV at proposal</dt><dd>{{ packet.nav_at_proposal or '—' }}</dd>
+    <dt>Research summary</dt><dd>{{ packet.research_summary or '—' }}</dd>
     <dt>Portfolio effect</dt><dd>{{ packet.portfolio_effect or '—' }}</dd>
     <dt>Sector / concentration</dt><dd>{{ packet.sector_concentration_effect or '—' }}</dd>
     <dt>Monitoring</dt><dd>{{ packet.monitoring_state or '—' }}</dd>

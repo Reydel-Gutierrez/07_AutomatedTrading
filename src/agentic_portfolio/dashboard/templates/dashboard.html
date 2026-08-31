@@ -92,6 +92,31 @@
   </article>
 </section>
 
+{% if view.pipeline %}
+<section class="kpis" aria-label="Autonomous pipeline">
+  <article class="kpi">
+    <h2>Discovery</h2>
+    <p class="figure">{{ view.pipeline.discovery.promoted or 0 }}</p>
+    <p class="meta">evaluated {{ view.pipeline.discovery.symbols_evaluated or 0 }} · created {{ view.pipeline.discovery.candidates_created or 0 }} · rejected {{ view.pipeline.discovery.rejected or 0 }}</p>
+  </article>
+  <article class="kpi">
+    <h2>Research queue</h2>
+    <p class="figure">{{ view.pipeline.research.queued or 0 }}</p>
+    <p class="meta">researching {{ view.pipeline.research.researching or 0 }} · done {{ view.pipeline.research.completed or 0 }} · rejected {{ view.pipeline.research.rejected or 0 }}{% if view.pipeline.research.current_symbol %} · now {{ view.pipeline.research.current_symbol }}{% endif %}</p>
+  </article>
+  <article class="kpi">
+    <h2>Watch / theses</h2>
+    <p class="figure">{{ view.pipeline.watchlist.active or 0 }}</p>
+    <p class="meta">{{ view.pipeline.watchlist.count or 0 }} stored · reports {{ view.pipeline.research.reports or 0 }}</p>
+  </article>
+  <article class="kpi">
+    <h2>Approvals</h2>
+    <p class="figure">{{ view.pipeline.approvals.pending or 0 }}</p>
+    <p class="meta">LIVE_ORDER_PLACEMENT OFF · human required</p>
+  </article>
+</section>
+{% endif %}
+
 <section class="decision-band" id="decisions" aria-label="Human decision">
   <article class="card decision-card">
     <div class="card-head">

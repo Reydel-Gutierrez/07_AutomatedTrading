@@ -552,7 +552,11 @@ class Freshness(str, Enum):
 class ResearchQueueStatus(str, Enum):
     QUEUED = "QUEUED"
     IN_PROGRESS = "IN_PROGRESS"
+    RESEARCHING = "RESEARCHING"
     COMPLETED = "COMPLETED"
+    REJECTED = "REJECTED"
+    NEED_MORE_DATA = "NEED_MORE_DATA"
+    INCONCLUSIVE = "INCONCLUSIVE"
     DROPPED = "DROPPED"
     EXPIRED = "EXPIRED"
 
@@ -680,6 +684,12 @@ class ResearchQueueEntry:
     comparison_group_id: str | None = None
     overlap_warnings: list[str] = field(default_factory=list)
     deferred_due_to_research_queue_overlap: bool = False
+    research_id: str | None = None
+    attempt_count: int = 0
+    last_error: str | None = None
+    last_attempt_at: str | None = None
+    claimed_at: str | None = None
+    skipped_reason: str | None = None
 
 
 @dataclass

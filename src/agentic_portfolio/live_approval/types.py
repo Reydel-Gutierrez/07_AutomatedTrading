@@ -60,6 +60,19 @@ class LiveApproval:
     LIVE_ORDER_PLACEMENT: bool = False
     execution_attempted: bool = False
     paper_environment: bool = False
+    sleeve: str | None = None
+    research_id: str | None = None
+    thesis_id: str | None = None
+    research_summary: str | None = None
+    catalysts: list[str] = field(default_factory=list)
+    key_risks: list[str] = field(default_factory=list)
+    invalidation: list[str] = field(default_factory=list)
+    expected_horizon: str | None = None
+    evidence_freshness: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    quote_at_proposal: float | None = None
+    nav_at_proposal: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = to_dict(self)

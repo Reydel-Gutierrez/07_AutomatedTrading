@@ -108,6 +108,23 @@ class AgentRuntime:
                 payload = fetcher.get_equity_quotes(list(tickers))
                 return watch_quotes_from_payload(payload)
 
+            from agentic_portfolio.ai.gateway import build_gateway
+
+            gateway = build_gateway(self.base, runtime_mode=self.runtime_mode, now_fn=self._now)
+
+            def ai_status() -> dict[str, Any]:
+                status = gateway.budget.status()
+                if status.mode.value == "EXHAUSTED":
+                    self.services.budget_exhausted = True
+                return {
+                    "mode": status.mode.value,
+                    "cap": float(status.cap),
+                    "spent": float(status.spent),
+                    "remaining": float(status.remaining),
+                    "pct_used": status.pct_used,
+                    "calls_month": status.calls_month,
+                }
+
             services = AgentServices(
                 root=self.base,
                 runtime_mode=self.runtime_mode,
@@ -120,6 +137,8 @@ class AgentRuntime:
                 now_fn=self._now,
                 refresh_fn=refresh_live,
                 quotes_fn=quotes_live,
+                gateway=gateway,
+                ai_status_fn=ai_status,
                 budget_exhausted=budget_exhausted,
                 ai_allowed=ai_allowed,
             )

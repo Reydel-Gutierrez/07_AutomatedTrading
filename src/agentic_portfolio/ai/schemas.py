@@ -91,10 +91,152 @@ PORTFOLIO_DECISION_SCHEMA = _object(
     ],
 )
 
+_CASE = _object(
+    {
+        "case": {"type": "string"},
+        "summary": {"type": "string"},
+        "major_assumptions": {"type": "array", "items": {"type": "string"}},
+        "expected_business_outcome": {"type": ["string", "null"]},
+        "major_risk": {"type": ["string", "null"]},
+        "attractiveness_implication": {"type": ["string", "null"]},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+        "price_target": {"type": ["number", "null", "string"]},
+        "notes": {"type": "array", "items": {"type": "string"}},
+    },
+    ["summary"],
+)
+
+_DISLOCATION = _object(
+    {
+        "verdict": {"type": "string"},
+        "reasoning": {"type": "string"},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    },
+    ["verdict", "reasoning"],
+)
+
+_INTERP = _object(
+    {
+        "name": {"type": "string"},
+        "value": {"type": ["string", "number", "null"]},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+    },
+    ["name"],
+)
+
+RESEARCH_REPORT_SCHEMA = _object(
+    {
+        "executive_summary": {"type": "string"},
+        "business_summary": {"type": "string"},
+        "investment_question": {"type": "string"},
+        "fundamental_analysis": {"type": "string"},
+        "financial_analysis": {"type": "string"},
+        "valuation_analysis": {"type": "string"},
+        "earnings_analysis": {"type": "string"},
+        "competitive_analysis": {"type": "string"},
+        "technical_context": {"type": "string"},
+        "market_context": {"type": "string"},
+        "sector_context": {"type": "string"},
+        "news_analysis": {"type": "string"},
+        "filing_analysis": {"type": "string"},
+        "catalyst_analysis": {"type": "string"},
+        "risk_analysis": {"type": "string"},
+        "bull_case": _CASE,
+        "base_case": _CASE,
+        "bear_case": _CASE,
+        "temporary_dislocation_assessment": _DISLOCATION,
+        "fundamental_deterioration_assessment": _DISLOCATION,
+        "key_catalysts": {"type": "array", "items": {"type": "string"}},
+        "key_risks": {"type": "array", "items": {"type": "string"}},
+        "invalidation_candidates": {"type": "array", "items": {"type": "string"}},
+        "expected_horizon": {"type": "string"},
+        "missing_information": {"type": "array", "items": {"type": "string"}},
+        "conflicting_evidence": {"type": "array", "items": {"type": "string"}},
+        "evidence_refs": {"type": "array", "items": {"type": "string"}},
+        "ai_interpretations": {"type": "array", "items": _INTERP},
+        "confidence": {"type": "string", "enum": _CONF},
+        "research_conclusion": {
+            "type": "string",
+            "enum": ["ADVANCE_TO_THESIS", "KEEP_WATCHING", "REJECT", "NEED_MORE_DATA"],
+        },
+        "recommended_next_step": {"type": "string"},
+        "earnings_effect_kind": {"type": ["string", "null"]},
+    },
+    ["research_conclusion", "confidence", "executive_summary"],
+)
+
+_EXIT = _object(
+    {
+        "thesis_based": {"type": "boolean"},
+        "mandatory_fixed_stop_loss": {"type": "boolean"},
+        "price_invalidation": {"type": ["string", "null"]},
+        "event_invalidation": {"type": ["string", "null"]},
+        "technical_invalidation": {"type": ["string", "null"]},
+        "risk_invalidation": {"type": ["string", "null"]},
+        "broker_stop_orders_created": {"type": "boolean"},
+        "notes": {"type": ["string", "null"]},
+    },
+    ["thesis_based", "mandatory_fixed_stop_loss", "broker_stop_orders_created"],
+)
+
+_THESIS_ITEM = _object(
+    {
+        "symbol": {"type": "string"},
+        "research_id": {"type": ["string", "null"]},
+        "sleeve": {"type": "string"},
+        "thesis_summary": {"type": "string"},
+        "bull_case": {"type": "string"},
+        "base_case": {"type": "string"},
+        "bear_case": {"type": "string"},
+        "catalysts": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}},
+        "horizon": {"type": "string"},
+        "invalidation_conditions": {"type": "array", "items": {"type": "string"}},
+        "review_triggers": {"type": "array", "items": {"type": "string"}},
+        "why_position_should_exist": {"type": "string"},
+        "confidence": {"type": "string", "enum": _CONF},
+        "exit_policy": _EXIT,
+        "status": {"type": ["string", "null"]},
+    },
+    ["symbol", "thesis_summary", "sleeve"],
+)
+
+_DECISION_ITEM = _object(
+    {
+        "symbol": {"type": "string"},
+        "decision": {"type": "string"},
+        "desired_allocation_pct": {"type": ["number", "null"]},
+        "rationale": {"type": "string"},
+        "why_preferable_to_cash": {"type": "string"},
+        "why_preferable_to_spy": {"type": "string"},
+        "why_preferable_to_alternatives": {"type": "string"},
+    },
+    ["symbol", "decision", "rationale"],
+)
+
+THESIS_DECISION_SCHEMA = _object(
+    {
+        "theses": {"type": "array", "items": _THESIS_ITEM},
+        "comparison": _object(
+            {
+                "ranking": {"type": "array", "items": {"type": "string"}},
+                "vs_cash": {"type": "string"},
+                "vs_spy": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+            ["vs_cash", "vs_spy"],
+        ),
+        "decisions": {"type": "array", "items": _DECISION_ITEM},
+    },
+    ["decisions", "comparison"],
+)
+
 SCHEMAS = {
     "screening": SCREENING_SCHEMA,
     "deep_research": DEEP_RESEARCH_SCHEMA,
     "portfolio_decision": PORTFOLIO_DECISION_SCHEMA,
+    "research_report": RESEARCH_REPORT_SCHEMA,
+    "thesis_decision": THESIS_DECISION_SCHEMA,
 }
 
 
@@ -136,6 +278,24 @@ def _check_value(value: Any, spec: dict[str, Any], *, path: str) -> Any:
         return float(value)
     if "boolean" in types and isinstance(value, bool):
         return value
+    if "object" in types and isinstance(value, dict):
+        props = dict(spec.get("properties") or {})
+        if not props:
+            return dict(value)
+        required = list(spec.get("required") or [])
+        missing = [key for key in required if key not in value]
+        if missing:
+            raise SchemaViolation(f"{path}: missing fields {missing}")
+        if spec.get("additionalProperties") is False:
+            extra = [key for key in value if key not in props]
+            if extra:
+                raise SchemaViolation(f"{path}: unexpected fields {extra}")
+        out: dict[str, Any] = {}
+        for key, child in props.items():
+            if key not in value:
+                continue
+            out[key] = _check_value(value[key], child, path=f"{path}.{key}")
+        return out
     if "array" in types and isinstance(value, list):
         item_spec = spec.get("items") or {"type": "string"}
         return [_check_value(item, item_spec, path=f"{path}[]") for item in value]

@@ -106,7 +106,7 @@ def run_research(
     report = _blank_report(research_id, candidate, packet, started, subject_kind, existing_thesis_id)
     report.research_status = ResearchStatus.RESEARCHING
     if queue_entry and persist and queue_store:
-        queue_store.set_status(queue_entry.queue_id, ResearchQueueStatus.IN_PROGRESS)
+        queue_store.set_status(queue_entry.queue_id, ResearchQueueStatus.RESEARCHING)
 
     request = ResearchReasoningRequest(
         candidate=to_dict(candidate),

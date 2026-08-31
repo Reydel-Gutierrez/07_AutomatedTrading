@@ -9,6 +9,7 @@ from typing import Any
 
 from agentic_portfolio.agent.activity import read_activity
 from agentic_portfolio.agent.heartbeat import load_health
+from agentic_portfolio.agent.pipeline import resolve_queue_stores
 from agentic_portfolio.approval.engine import record_human_decision
 from agentic_portfolio.approval.report import render_packet
 from agentic_portfolio.approval.store import ApprovalStore
@@ -116,9 +117,10 @@ def dashboard_state(root: Path | None = None) -> DashboardState:
     paper_queue = ResearchQueue(state_dir / "research_queue.json", runtime_mode=RuntimeMode.PAPER.value)
     paper_discovery = DiscoveryRunStore(state_dir / "discovery_runs.json", runtime_mode=RuntimeMode.PAPER.value)
     if runtime is RuntimeMode.LIVE:
-        active_candidates = CandidateStore(discovery_dir / "candidates.json", runtime_mode=RuntimeMode.LIVE.value)
-        active_queue = ResearchQueue(discovery_dir / "research_queue.json", runtime_mode=RuntimeMode.LIVE.value)
-        active_discovery = DiscoveryRunStore(discovery_dir / "discovery_runs.json", runtime_mode=RuntimeMode.LIVE.value)
+        active_candidates, active_queue = resolve_queue_stores(base, runtime_mode=runtime)
+        live_runs = DiscoveryRunStore(discovery_dir / "discovery_runs.json", runtime_mode=RuntimeMode.LIVE.value)
+        paper_runs_as_fallback = DiscoveryRunStore(state_dir / "discovery_runs.json", runtime_mode=RuntimeMode.LIVE.value)
+        active_discovery = live_runs if live_runs.all() else paper_runs_as_fallback
     else:
         active_candidates = paper_candidates
         active_queue = paper_queue
@@ -497,6 +499,16 @@ def _live_approval_row(item: LiveApproval) -> dict[str, Any]:
         "current_spread_bps": item.current_spread_bps,
         "portfolio_impact": item.portfolio_impact,
         "risk_gate_result": item.risk_gate_result,
+        "sleeve": item.sleeve or (item.portfolio_impact or {}).get("sleeve"),
+        "research_summary": item.research_summary,
+        "catalysts": list(item.catalysts or []),
+        "key_risks": list(item.key_risks or []),
+        "invalidation": list(item.invalidation or []),
+        "expected_horizon": item.expected_horizon,
+        "provider": item.provider,
+        "model": item.model,
+        "nav_at_proposal": item.nav_at_proposal,
+        "quote_at_proposal": item.quote_at_proposal or item.current_quote,
     }
 
 
@@ -506,14 +518,17 @@ def live_approval_detail(item: LiveApproval) -> dict[str, Any]:
         {
             "thesis_summary": item.supporting_thesis,
             "why_now": item.reason,
+            "research_summary": item.research_summary or item.ai_rationale,
             "why_not_cash": None,
             "why_not_spy": None,
             "bull_case": None,
             "base_case": item.ai_rationale,
             "bear_case": None,
-            "key_risks": [],
-            "invalidation_exit_policy": None,
-            "expected_horizon": None,
+            "key_risks": list(item.key_risks or []),
+            "catalysts": list(item.catalysts or []),
+            "invalidation_exit_policy": "; ".join(item.invalidation or []) or None,
+            "expected_horizon": item.expected_horizon,
+            "ai_provenance": f"{item.provider or '—'} / {item.model or '—'}",
             "portfolio_effect": str(item.portfolio_impact or "—"),
             "sector_concentration_effect": None,
             "enhanced_review_requirements": [],
@@ -561,6 +576,12 @@ def watchlist_view(state: DashboardState) -> dict[str, Any]:
                 "max_spread_bps": plan.max_spread_bps if plan else None,
                 "last_updated": item.last_updated,
                 "approval_id": item.approval_id,
+                "sleeve": item.sleeve,
+                "catalysts": list(item.catalysts or []),
+                "invalidation": list(item.invalidating_conditions or []),
+                "reason_for_watch": item.reason_for_watch,
+                "research_id": item.research_id,
+                "thesis_id": item.thesis_id,
             }
         )
     return {
@@ -737,15 +758,18 @@ def _merge_theses(state: DashboardState, flags: dict[str, Any] | None = None) ->
 
 def _live_research_rows(state: DashboardState) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for row in _ai_store(state, RuntimeMode.LIVE.value).research_reports():
         if artifact_environment(row) != RuntimeMode.LIVE.value:
             continue
         ticker = str(row.get("ticker") or row.get("symbol") or "").upper()
+        rid = str(row.get("research_id") or "")
+        seen.add(rid)
         rows.append(
             {
                 "research_id": row.get("research_id"),
                 "symbol": ticker,
-                "research_conclusion": row.get("recommended_action"),
+                "research_conclusion": row.get("recommended_action") or row.get("research_conclusion"),
                 "research_status": "COMPLETE" if row.get("research_id") else "NONE",
                 "executive_summary": row.get("thesis") or row.get("executive_summary"),
                 "freshness": row.get("freshness") or "FRESH",
@@ -762,6 +786,11 @@ def _live_research_rows(state: DashboardState) -> list[dict[str, Any]]:
                 "source_of_truth": get_active_portfolio_source(),
             }
         )
+    for report in state.research.all_reports():
+        if report.research_id in seen:
+            continue
+        seen.add(report.research_id)
+        rows.append(to_dict(report))
     rows.sort(key=lambda r: str(r.get("completed_at") or r.get("started_at") or ""), reverse=True)
     return rows
 
@@ -780,9 +809,16 @@ def research_view(state: DashboardState) -> dict[str, Any]:
         reports.sort(key=lambda r: str(r.get("completed_at") or r.get("started_at") or ""), reverse=True)
     theses = _merge_theses(state, flags)
     queue = [to_dict(q) for q in state.queue.all()]
+    counts = {
+        "queued": sum(1 for q in queue if q.get("status") == "QUEUED"),
+        "researching": sum(1 for q in queue if q.get("status") in {"RESEARCHING", "IN_PROGRESS"}),
+        "completed": sum(1 for q in queue if q.get("status") == "COMPLETED"),
+        "rejected": sum(1 for q in queue if q.get("status") in {"REJECTED", "NEED_MORE_DATA", "INCONCLUSIVE", "EXPIRED", "DROPPED"}),
+    }
     return {
         "candidates": candidates,
         "queue": queue,
+        "queue_counts": counts,
         "reports": reports,
         "theses": theses,
         "active_or_draft": [t for t in theses if t["active_or_draft"]],
@@ -790,6 +826,7 @@ def research_view(state: DashboardState) -> dict[str, Any]:
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "runtime_mode": env,
         "live_order_placement_enabled": False,
+        "pipeline": pipeline_status(state),
     }
 
 
@@ -1657,6 +1694,56 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
             else None
         ),
         "autonomous_activity": activity_log_view(state, limit=40)["entries"][:12],
+        "pipeline": pipeline_status(state),
+    }
+
+
+def pipeline_status(state: DashboardState) -> dict[str, Any]:
+    """Compact autonomous pipeline snapshot for the dashboard."""
+    flags = resolve_ui_flags()
+    queue = list(state.queue.all())
+    latest = max(state.discovery.all(), key=lambda r: r.started_at) if state.discovery.all() else None
+    watches = watchlist_view(state)
+    approvals = list_approvals(state)
+    reports = _live_research_rows(state) if flags["environment"] == "LIVE" else [to_dict(r) for r in state.research.all_reports()]
+    agent = agent_runtime_view(state)
+    current = None
+    for entry in queue:
+        if entry.status.value in {"RESEARCHING", "IN_PROGRESS"}:
+            current = entry.symbol
+            break
+    return {
+        "discovery": {
+            "last_run": latest.completed_at if latest else None,
+            "symbols_evaluated": len(latest.symbols_evaluated) if latest else 0,
+            "candidates_created": len(latest.candidates_created) if latest else 0,
+            "promoted": len(latest.candidates_promoted) if latest else 0,
+            "rejected": len(latest.candidates_rejected) if latest else 0,
+            "conclusion": latest.conclusion if latest else None,
+        },
+        "research": {
+            "queue_count": len(queue),
+            "queued": sum(1 for q in queue if q.status.value == "QUEUED"),
+            "researching": sum(1 for q in queue if q.status.value in {"RESEARCHING", "IN_PROGRESS"}),
+            "completed": sum(1 for q in queue if q.status.value == "COMPLETED"),
+            "rejected": sum(1 for q in queue if q.status.value in {"REJECTED", "NEED_MORE_DATA", "INCONCLUSIVE", "EXPIRED", "DROPPED"}),
+            "current_symbol": current,
+            "reports": len(reports),
+        },
+        "watchlist": {
+            "active": watches.get("active") or 0,
+            "count": watches.get("count") or 0,
+        },
+        "approvals": {
+            "pending": approvals.get("pending_count") or 0,
+        },
+        "runtime": {
+            "phase": (agent.get("market") or {}).get("phase") if agent else None,
+            "alive": agent.get("alive") if agent else False,
+            "cycles": agent.get("cycles") if agent else 0,
+            "LIVE_ORDER_PLACEMENT": False,
+        },
+        "live_order_placement_enabled": False,
     }
 
 

@@ -37,7 +37,7 @@ def main() -> int:
 
     root = project_root()
     bootstrap_readonly_broker_runtime()
-    runtime = AgentRuntime(root, max_cycles=1 if args.once else args.cycles)
+    runtime = AgentRuntime(root, max_cycles=1 if args.once else args.cycles, ai_allowed=not args.once)
 
     if not args.no_dashboard:
         bind = resolve_bind()

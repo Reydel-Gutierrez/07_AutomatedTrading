@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from agentic_portfolio.discovery.live_readonly import LIVE_DISCOVERY_SKIP_REASON
@@ -37,6 +38,10 @@ class AgentServices:
     ai_status_fn: Callable[[], dict[str, Any]] | None = None
     ai_call_fn: Callable[..., dict[str, Any]] | None = None
     candidates_fn: Callable[[], list[dict[str, Any]]] | None = None
+    payload_fn: Callable[..., Any] | None = None
+    gateway: Any = None
+    research_reasoner: Any = None
+    decision_reasoner: Any = None
     budget_exhausted: bool = False
     ai_allowed: bool = True
     last_refresh: Any = None
@@ -74,6 +79,107 @@ def _skipped(services: AgentServices, job: str, reason: str, **extra: Any) -> di
     return payload
 
 
+def _skipped_no_work(job: str, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "job": job,
+        "status": "SKIPPED_NO_WORK",
+        "skipped": extra.get("skipped") or "no_work",
+        "placement_attempted": False,
+        "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _blocked(job: str, reason: str, **extra: Any) -> dict[str, Any]:
+    payload = {
+        "job": job,
+        "status": "BLOCKED",
+        "skipped": reason,
+        "placement_attempted": False,
+        "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+        "ai_calls": 0,
+    }
+    payload.update(extra)
+    return payload
+
+
+def _pipeline_worker(services: AgentServices):
+    existing = getattr(services, "_pipeline_worker", None)
+    if existing is not None:
+        return existing
+
+    from agentic_portfolio.agent.pipeline import ResearchQueueWorker, load_live_context
+
+    def context_fn():
+        if services.last_context is not None:
+            return services.last_context
+        if services.context_fn is not None:
+            return services.context_fn()
+        return load_live_context(Path(services.root), runtime_mode=services.runtime_mode)
+
+    def payload_fn(candidate):
+        if services.payload_fn is not None:
+            return services.payload_fn(candidate)
+        from agentic_portfolio.research.collect import collect_research_payload
+
+        bound = services.connection.ensure()
+        fetcher = getattr(bound, "fetcher", None)
+        if fetcher is None:
+            raise RuntimeError("bound Robinhood runtime has no fetcher")
+        return collect_research_payload(candidate.symbol, fetcher, now=_now(services))
+
+    worker = ResearchQueueWorker(
+        Path(services.root),
+        runtime_mode=services.runtime_mode,
+        gateway=services.gateway,
+        research_reasoner=services.research_reasoner,
+        decision_reasoner=services.decision_reasoner,
+        payload_fn=payload_fn,
+        context_fn=context_fn,
+        watch=services.watch,
+        approvals=services.approvals,
+        notify=services.notify,
+        now_fn=services.now_fn,
+    )
+    services._pipeline_worker = worker
+    return worker
+
+
+def _research_queue(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
+    job = str(ctx.get("job") or "RESEARCH_QUEUE_WORKER")
+    blocked, reason = _ai_blocked(services)
+    if blocked:
+        log_activity(services.root, "AI_SKIPPED", job=job, reason=reason)
+        return _blocked(job, reason, runtime_continues=True)
+    if services.gateway is None and services.research_reasoner is None:
+        return {
+            "job": job,
+            "status": "DEGRADED",
+            "skipped": "no_ai_gateway",
+            "ai_calls": 0,
+            "placement_attempted": False,
+            "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+        }
+    result = _pipeline_worker(services).run_cycle(job=job)
+    row = result.as_dict()
+    row["job"] = job
+    return row
+
+
+def _overnight_thesis(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
+    return _pipeline_worker(services).revalidate_watches(job="OVERNIGHT_THESIS", allow_ai=False)
+
+
+def _premarket_revalidate(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
+    worker = _pipeline_worker(services)
+    watches = worker.revalidate_watches(job="PREMARKET_THESIS_REVALIDATE", allow_ai=False)
+    quotes = _quotes_for(services, [item.ticker for item in services.watch_store.active()])
+    approvals = worker.revalidate_approvals(quotes=quotes, context=services.last_context)
+    watches.update({"approvals_expired": approvals.get("expired", 0), "approvals_superseded": approvals.get("superseded", 0)})
+    return watches
+
+
 def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
     def wrap(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
         def inner(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -96,23 +202,24 @@ def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any
         "MARKET_OPEN_CONDITIONAL_VALIDATE": wrap(lambda ctx: _validate_plans(services, ctx)),
         "AI_REASSESS_IF_WARRANTED": wrap(lambda ctx: _ai_reassess(services, ctx)),
         "PREMARKET_NEWS": wrap(lambda ctx: _offhours_maintain(services, ctx, "PREMARKET_NEWS")),
-        "PREMARKET_THESIS_REVALIDATE": wrap(lambda ctx: _offhours_maintain(services, ctx, "PREMARKET_THESIS_REVALIDATE")),
+        "PREMARKET_THESIS_REVALIDATE": wrap(lambda ctx: _premarket_revalidate(services, ctx)),
         "PREMARKET_PREPARE_CONDITIONAL": wrap(lambda ctx: _prepare_plans(services, ctx)),
         "POSTMARKET_CLOSE_ANALYSIS": wrap(lambda ctx: _session_analysis(services, ctx, "POSTMARKET_CLOSE_ANALYSIS")),
         "POSTMARKET_RECONCILE": wrap(lambda ctx: _refresh_account(services, ctx, job="POSTMARKET_RECONCILE")),
         "POSTMARKET_DAILY_SNAPSHOT": wrap(lambda ctx: _ok("POSTMARKET_DAILY_SNAPSHOT", snapshot=True)),
         "POSTMARKET_CANDIDATE_RANK": wrap(lambda ctx: _session_analysis(services, ctx, "POSTMARKET_CANDIDATE_RANK")),
         "LUNA_SCREEN": wrap(lambda ctx: _ai_screen(services, ctx, role="screening")),
-        "TERRA_RESEARCH": wrap(lambda ctx: _ai_screen(services, ctx, role="research")),
+        "TERRA_RESEARCH": wrap(lambda ctx: _research_queue(services, ctx)),
+        "RESEARCH_QUEUE_WORKER": wrap(lambda ctx: _research_queue(services, ctx)),
         "THESIS_WATCH_CREATE": wrap(lambda ctx: _session_analysis(services, ctx, "THESIS_WATCH_CREATE")),
         "NEXT_SESSION_PLANS": wrap(lambda ctx: _prepare_plans(services, ctx)),
         "OVERNIGHT_NEWS": wrap(lambda ctx: _offhours_maintain(services, ctx, "OVERNIGHT_NEWS")),
-        "OVERNIGHT_THESIS": wrap(lambda ctx: _offhours_maintain(services, ctx, "OVERNIGHT_THESIS")),
+        "OVERNIGHT_THESIS": wrap(lambda ctx: _overnight_thesis(services, ctx)),
         "OVERNIGHT_FUNDAMENTALS": wrap(lambda ctx: _offhours_maintain(services, ctx, "OVERNIGHT_FUNDAMENTALS")),
         "OVERNIGHT_RISK": wrap(lambda ctx: _risk_monitor(services, ctx)),
         "OVERNIGHT_WATCH_MAINTAIN": wrap(lambda ctx: _offhours_maintain(services, ctx, "OVERNIGHT_WATCH_MAINTAIN")),
         "WEEKEND_SESSION_ANALYSIS": wrap(lambda ctx: _session_analysis(services, ctx, "WEEKEND_SESSION_ANALYSIS")),
-        "WEEKEND_DEEP_RESEARCH": wrap(lambda ctx: _ai_screen(services, ctx, role="research")),
+        "WEEKEND_DEEP_RESEARCH": wrap(lambda ctx: _research_queue(services, ctx)),
         "WEEKEND_PORTFOLIO_REVIEW": wrap(lambda ctx: _portfolio_review(services, ctx, "WEEKEND_PORTFOLIO_REVIEW")),
         "WEEKEND_WATCH_CONSTRUCT": wrap(lambda ctx: _session_analysis(services, ctx, "WEEKEND_WATCH_CONSTRUCT")),
         "WEEKEND_STALE_CLEANUP": wrap(lambda ctx: _watch_cleanup(services, ctx)),
@@ -136,10 +243,14 @@ def _broker(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 def _expire_approvals(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
-    expired = services.approvals.expire_due()
-    for item in expired:
-        log_activity(services.root, "APPROVAL_EXPIRED", ticker=item.ticker, approval_id=item.approval_id)
-    return _ok("APPROVAL_EXPIRY", expired=len(expired))
+    try:
+        tickers = [item.ticker for item in services.watch_store.active()] + [a.ticker for a in services.approval_store.pending()]
+        quotes = _quotes_for(services, tickers)
+    except Exception:  # noqa: BLE001 — expiry must not die on a quote outage
+        quotes = {}
+    extra = _pipeline_worker(services).revalidate_approvals(quotes=quotes, context=services.last_context)
+    expired = int(extra.get("expired") or 0)
+    return _ok("APPROVAL_EXPIRY", expired=expired, superseded=int(extra.get("superseded") or 0))
 
 
 def _watch_cleanup(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
@@ -261,8 +372,11 @@ def _session_analysis(services: AgentServices, ctx: dict[str, Any], job: str) ->
 
 def _prepare_plans(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
     session = _session(ctx)
+    items = list(services.watch_store.active())
+    if not items:
+        return _skipped_no_work(ctx.get("job") or "NEXT_SESSION_PLANS", prepared=0, watch_items=0, skipped="no_watch_items")
     prepared = 0
-    for item in services.watch_store.active():
+    for item in items:
         services.watch.upsert_from_candidate(
             ticker=item.ticker,
             score=item.source_candidate_score,
@@ -274,12 +388,15 @@ def _prepare_plans(services: AgentServices, ctx: dict[str, Any]) -> dict[str, An
             status=WatchStatus.WAITING_FOR_OPEN,
         )
         prepared += 1
-    return _ok(ctx.get("job") or "NEXT_SESSION_PLANS", prepared=prepared, executable_liquidity=False)
+    return _ok(ctx.get("job") or "NEXT_SESSION_PLANS", prepared=prepared, watch_items=len(items), executable_liquidity=False)
 
 
 def _offhours_maintain(services: AgentServices, ctx: dict[str, Any], job: str) -> dict[str, Any]:
-    count = len(services.watch_store.active())
-    return _ok(job, watch_items=count, executable_liquidity=False)
+    extra = _pipeline_worker(services).revalidate_watches(job=job, allow_ai=False)
+    extra.setdefault("executable_liquidity", False)
+    extra.setdefault("placement_attempted", False)
+    extra.setdefault("LIVE_ORDER_PLACEMENT", LIVE_ORDER_PLACEMENT)
+    return extra
 
 
 def _quotes_for(services: AgentServices, tickers: list[str]) -> dict[str, dict[str, Any]]:
