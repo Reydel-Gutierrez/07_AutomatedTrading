@@ -42,6 +42,6 @@
   },
   "raspberry_pi": {
     "intended_runtime": true,
-    "notes": "Same localhost bind. Use systemd + optional Cloudflare Tunnel; do not port-forward the origin."
+    "notes": "Same localhost bind (127.0.0.1:3100). Use systemd as a dedicated non-root user. Reach the dashboard with SSH port forwarding: ssh -L 3100:127.0.0.1:3100 <pi>. Do not expose the origin publicly."
   }
 }

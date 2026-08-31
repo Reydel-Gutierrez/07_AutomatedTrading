@@ -69,4 +69,6 @@ $env:DASHBOARD_ENVIRONMENT = "LIVE"
 python scripts/run_service.py
 ```
 
-Dashboard: `http://127.0.0.1:3100`. APPROVE does not place an order. Pi systemd unit: `deploy/systemd/agentic-portfolio.service`.
+Dashboard: `http://127.0.0.1:3100` (localhost only). APPROVE does not place an order.
+
+Raspberry Pi production: install as dedicated user `agentic` (or replace `User=`/`Group=` in the unit), venv at `/opt/agentic-portfolio/.venv`, secrets in `/etc/agentic-portfolio/env`. OAuth must be created as the same user that runs systemd. Full procedure: `deploy/README.md`. Unit: `deploy/systemd/agentic-portfolio.service`. Do not run as root. SSH tunnel: `ssh -L 3100:127.0.0.1:3100 <pi>`.

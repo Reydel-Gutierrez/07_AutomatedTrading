@@ -6,18 +6,29 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Dedicated non-root Linux user. Replace User=/Group= with the actual Pi
+# service username if it is not "agentic". Robinhood OAuth is stored in that
+# user's home (~/.agentic-portfolio/readonly-mcp/) and MUST be created as the
+# same account that runs this unit. Do not use User=root.
+User=agentic
+Group=agentic
 WorkingDirectory=/opt/agentic-portfolio
+# OPENAI_API_KEY lives only in /etc/agentic-portfolio/env (EnvironmentFile).
+# Never put the key in this unit, the repo, logs, or state. See deploy/env.example.
+EnvironmentFile=/etc/agentic-portfolio/env
 Environment=PYTHONPATH=src
 Environment=AGENTIC_RUNTIME_MODE=LIVE
 Environment=DASHBOARD_ENVIRONMENT=LIVE
-ExecStart=/usr/bin/python3 scripts/run_service.py
+ExecStart=/opt/agentic-portfolio/.venv/bin/python scripts/run_service.py
 Restart=always
 RestartSec=10
 TimeoutStopSec=20
 KillMode=mixed
+NoNewPrivileges=true
+# Do not set ProtectHome=true: OAuth tokens live in the service user's home.
 
 # Read-only observation. Never places or cancels orders.
-# OAuth tokens live outside the repo (user-level store or env).
+# Dashboard stays on 127.0.0.1:3100. Do not bind publicly.
 
 [Install]
 WantedBy=multi-user.target

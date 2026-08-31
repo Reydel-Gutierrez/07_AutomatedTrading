@@ -343,6 +343,18 @@ Invariants unchanged: `auto_execution=false`, `live_trade_actions_allowed=false`
 
 ---
 
+## 2026-08-30 — Raspberry Pi deployment hardening (LIVE, proposal-only)
+
+**Type:** `config_change` / `ops`
+
+Production systemd unit now runs as a dedicated non-root user (`User=agentic` / `Group=agentic`; replace with the actual Pi service username). Python lives in `/opt/agentic-portfolio/.venv`. `OPENAI_API_KEY` is loaded only from `/etc/agentic-portfolio/env` (`root:agentic` `640`). Robinhood OAuth remains user-specific (`~/.agentic-portfolio/readonly-mcp/`) and must be bootstrapped as the same account that runs systemd. Dashboard stays on `127.0.0.1:3100`; operator access is SSH port forwarding, not public exposure.
+
+Invariants unchanged: `auto_execution=false`, `live_trade_actions_allowed=false`, `LIVE_ORDER_PLACEMENT=false`. No new broker mutation path. `--once` smoke test does not wire paid AI.
+
+**MCP NOT called:** `place_equity_order`, `cancel_equity_order`, option/crypto trading, deposits/withdrawals/transfers.
+
+---
+
 ## Template
 
 ```

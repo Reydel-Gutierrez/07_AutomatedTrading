@@ -28,7 +28,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="24/7 Agentic Portfolio service. Never places orders.")
     parser.add_argument("--no-dashboard", action="store_true", help="Run the agent runtime without the dashboard thread")
     parser.add_argument("--cycles", type=int, default=None, help="Stop after N cycles (tests/dev only)")
-    parser.add_argument("--once", action="store_true", help="Run one orchestration cycle and exit")
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="Smoke test: one orchestration cycle then exit. Does not wire paid AI calls.",
+    )
     args = parser.parse_args()
 
     root = project_root()

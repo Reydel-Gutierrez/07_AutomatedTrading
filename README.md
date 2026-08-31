@@ -49,6 +49,7 @@ config/review.json
 config/runtime.json
 config/ai.json
 config/dashboard.json
+deploy/                  ← Raspberry Pi systemd unit, env example, install procedure
 src/agentic_portfolio/   ← context, LIVE Robinhood snapshot, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, deep research, thesis+portfolio decision, position monitoring, risk gate, paper execution controller, paper fill/blotter, human approval packet, Robinhood review-only (no place/cancel)
 tests/
 logs/  reports/  state/
@@ -171,7 +172,9 @@ $env:DASHBOARD_ENVIRONMENT = "LIVE"
 python scripts/run_service.py
 ```
 
-Dashboard control room: `http://127.0.0.1:3100`. APPROVE does not place an order.
+Dashboard control room: `http://127.0.0.1:3100` (localhost only). APPROVE does not place an order.
+
+Raspberry Pi LIVE install: dedicated non-root user, `/opt/agentic-portfolio/.venv`, secrets in `/etc/agentic-portfolio/env`. Procedure: `deploy/README.md`. Unit: `deploy/systemd/agentic-portfolio.service`. Do not run as root. Reach the dashboard with `ssh -L 3100:127.0.0.1:3100 <pi>`.
 
 AI never has unrestricted trading authority. LIVE invariants: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, `LIVE_ORDER_PLACEMENT=false`. Combined spend is capped at **$10/month**. The budget ledger is persisted so a restart cannot reset it.
 
