@@ -234,6 +234,12 @@ def report_from_dict(raw: dict[str, Any]) -> ResearchReport:
         portfolio_facts_unchanged=raw.get("portfolio_facts_unchanged", True),
         classification_unchanged=raw.get("classification_unchanged", True),
         stale_after=raw.get("stale_after"),
+        research_source=raw.get("research_source"),
+        provider=raw.get("provider"),
+        model=raw.get("model"),
+        ai_call_id=raw.get("ai_call_id"),
+        estimated_cost=float(raw["estimated_cost"]) if raw.get("estimated_cost") is not None else None,
+        actual_cost=float(raw["actual_cost"]) if raw.get("actual_cost") is not None else None,
     )
 
 

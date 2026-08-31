@@ -31,27 +31,26 @@ class GatewayResearchReasoner:
     def reason(self, request: ResearchReasoningRequest) -> dict[str, Any]:
         prompt = build_reasoning_prompt(request)
         ticker = str((request.candidate or {}).get("symbol") or "") or None
-        try:
-            result = self.gateway.complete_structured(
-                role=self.role,
-                purpose="deep_research",
-                schema_name="research_report",
-                schema=RESEARCH_REPORT_SCHEMA,
-                messages=[
-                    {"role": "system", "content": request.instructions or "Return JSON only."},
-                    {"role": "user", "content": prompt},
-                ],
-                ticker=ticker,
-                critical=False,
-            )
-        except (BudgetDenied, BudgetExhausted) as exc:
-            raise ResearchValidationError(f"AI budget blocked research: {exc}") from exc
-        except AIError as exc:
-            raise ResearchValidationError(f"AI research call failed: {exc}") from exc
+        result = self.gateway.complete_structured(
+            role=self.role,
+            purpose="deep_research",
+            schema_name="research_report",
+            schema=RESEARCH_REPORT_SCHEMA,
+            messages=[
+                {"role": "system", "content": request.instructions or "Return JSON only."},
+                {"role": "user", "content": prompt},
+            ],
+            ticker=ticker,
+            critical=False,
+        )
         self.last_result = result
         payload = dict(result.payload)
         payload.setdefault("provider", result.provider)
         payload.setdefault("model", result.model)
+        payload.setdefault("ai_call_id", result.reservation_id)
+        payload.setdefault("estimated_cost", float(result.estimated_cost))
+        payload.setdefault("actual_cost", float(result.actual_cost))
+        payload.setdefault("research_source", "scripted" if result.provider == "scripted" else "AI")
         return payload
 
 

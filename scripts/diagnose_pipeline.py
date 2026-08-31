@@ -6,10 +6,11 @@ import argparse
 import json
 import sys
 from datetime import datetime, timezone
+from typing import Any
 
 from agentic_portfolio.agent.jobs import catalog_preview
 from agentic_portfolio.agent.heartbeat import load_health
-from agentic_portfolio.agent.pipeline import resolve_queue_stores
+from agentic_portfolio.agent.pipeline import inspect_research_queues
 from agentic_portfolio.agent.session import classify_market_phase
 from agentic_portfolio.ai.budget import BudgetManager
 from agentic_portfolio.ai.config import load_ai_config
@@ -23,6 +24,7 @@ from agentic_portfolio.live_execution.store import ExecutionStore
 from agentic_portfolio.notify import NotificationStore
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.research.store import ResearchStore
+from agentic_portfolio.research.types import ResearchReport
 from agentic_portfolio.runtime import (
     AUTO_EXECUTION,
     LIVE_ORDER_PLACEMENT,
@@ -31,13 +33,116 @@ from agentic_portfolio.runtime import (
     get_active_runtime,
     live_placement_enabled,
 )
-from agentic_portfolio.schemas import ResearchQueueStatus, to_dict
+from agentic_portfolio.schemas import ResearchQueueEntry, ResearchQueueStatus, to_dict
 from agentic_portfolio.thesis_registry import ThesisRegistry
 
 
 def _print(title: str, payload: dict) -> None:
     print(f"\n=== {title} ===")
     print(json.dumps(payload, indent=2, default=str))
+
+
+def _queue_snapshot(queue) -> dict:
+    rows = list(queue.all())
+    return {
+        "path": str(queue.path),
+        "total": len(rows),
+        "queued": sum(1 for e in rows if e.status is ResearchQueueStatus.QUEUED),
+        "working": sum(1 for e in rows if e.status.value in {"RESEARCHING", "IN_PROGRESS"}),
+        "symbols": [e.symbol for e in rows],
+        "statuses": {e.symbol: e.status.value for e in rows},
+    }
+
+
+def _lookup_queue_entry(
+    report: ResearchReport,
+    *queues: Any,
+) -> tuple[ResearchQueueEntry | None, str | None]:
+    for label, queue in queues:
+        if queue is None:
+            continue
+        by_cid = {e.candidate_id: e for e in queue.all() if e.candidate_id}
+        if report.candidate_id and report.candidate_id in by_cid:
+            return by_cid[report.candidate_id], label
+        by_symbol = {e.symbol.upper(): e for e in queue.all()}
+        hit = by_symbol.get(report.symbol.upper())
+        if hit is not None:
+            return hit, label
+    return None, None
+
+
+def research_report_diagnostics(root, runtime_mode) -> list[dict]:
+    from pathlib import Path
+
+    inspected = inspect_research_queues(Path(root), runtime_mode=runtime_mode)
+    reports = ResearchStore(root).all_reports()
+    rows = []
+    for report in reports:
+        entry, queue_label = _lookup_queue_entry(
+            report,
+            ("production", inspected["production"]),
+            ("worker_bound", inspected["worker"]),
+            ("legacy", inspected["legacy"] if inspected["legacy_distinct"] else None),
+        )
+        rows.append(
+            {
+                "symbol": report.symbol,
+                "research_id": report.research_id,
+                "conclusion": report.research_conclusion.value if report.research_conclusion else None,
+                "research_status": report.research_status.value if report.research_status else None,
+                "research_source": report.research_source,
+                "provider": report.provider,
+                "model": report.model,
+                "ai_call_id": report.ai_call_id,
+                "estimated_cost": report.estimated_cost,
+                "actual_cost": report.actual_cost,
+                "originating_candidate_id": report.candidate_id,
+                "queue_status": entry.status.value if entry is not None else None,
+                "queue_id": entry.queue_id if entry is not None else None,
+                "queue_source": queue_label,
+            }
+        )
+    return rows
+
+
+def budget_diagnostic(root) -> dict:
+    cfg = load_ai_config()
+    ledger = UsageLedger(root, config=cfg)
+    budget = BudgetManager(ledger, cfg).status()
+    accounted = float(budget.spent) + float(budget.reserved)
+    remaining = float(budget.cap) - accounted
+    research = dict((cfg.get("roles") or {}).get("research") or {})
+    return {
+        "cap": float(budget.cap),
+        "spent": float(budget.spent),
+        "reserved": float(budget.reserved),
+        "accounted_usage": accounted,
+        "remaining": float(budget.remaining),
+        "remaining_formula": "cap - spent - reserved",
+        "remaining_reconciles": abs(float(budget.remaining) - remaining) < 1e-9,
+        "mode": budget.mode.value,
+        "calls_month": budget.calls_month,
+        "ledger_path": str(ledger.root),
+        "configured_research_provider": research.get("provider"),
+        "configured_research_model": research.get("model"),
+    }
+
+
+def collect_pipeline_diagnostic(root) -> dict:
+    from pathlib import Path
+
+    mode = get_active_runtime()
+    inspected = inspect_research_queues(Path(root), runtime_mode=mode)
+    return {
+        "runtime_mode": mode.value if isinstance(mode, RuntimeMode) else str(mode),
+        "production_queue": _queue_snapshot(inspected["production"]),
+        "legacy_queue": _queue_snapshot(inspected["legacy"]) if inspected["legacy_distinct"] else None,
+        "worker_bound_queue": _queue_snapshot(inspected["worker"]),
+        "worker_uses_legacy_fallback": inspected["worker_uses_legacy_fallback"],
+        "reports": research_report_diagnostics(root, mode),
+        "budget": budget_diagnostic(root),
+        "observed_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def main() -> int:
@@ -49,14 +154,12 @@ def main() -> int:
     health = load_health(root) or {}
     book = LivePortfolioStore(root).current_book() or {}
     ctx = book.get("context") if isinstance(book.get("context"), dict) else {}
-    candidates, queue = resolve_queue_stores(root, runtime_mode=mode)
-    queued = [e for e in queue.all() if e.status is ResearchQueueStatus.QUEUED]
-    reports = ResearchStore(root).all_reports()
+    inspected = inspect_research_queues(root, runtime_mode=mode)
+    report_rows = research_report_diagnostics(root, mode)
     theses = ThesisRegistry(root / "state" / "thesis_registry.json").all_records()
     watches = watchlist_view(dashboard_state(root))
     approvals = list_approvals(dashboard_state(root))
-    cfg = load_ai_config()
-    budget = BudgetManager(UsageLedger(root, config=cfg), cfg).status()
+    budget = budget_diagnostic(root)
     errors = list((health.get("job_skips") or []))[-8:]
     live_err = LivePortfolioStore(root).last_error()
     notes = [n.to_dict() for n in NotificationStore(root).all()[-8:]]
@@ -122,17 +225,15 @@ def main() -> int:
     })
     _print("DISCOVERY UNIVERSE", universe or {"unique_universe_size": 0, "note": "no persisted universe"})
     _print("RESEARCH QUEUE", {
-        "path": str(queue.path),
-        "total": len(queue.all()),
-        "queued": len(queued),
-        "working": sum(1 for e in queue.all() if e.status.value in {"RESEARCHING", "IN_PROGRESS"}),
-        "symbols": [e.symbol for e in queue.all()],
-        "statuses": {e.symbol: e.status.value for e in queue.all()},
+        "production": _queue_snapshot(inspected["production"]),
+        "legacy": _queue_snapshot(inspected["legacy"]) if inspected["legacy_distinct"] else None,
+        "worker_bound": _queue_snapshot(inspected["worker"]),
+        "worker_uses_legacy_fallback": inspected["worker_uses_legacy_fallback"],
+        "note": "LIVE production is state/live_ai. Worker may bind recovered state/ rows only when live_ai has no QUEUED entries.",
     })
     _print("RESEARCH REPORTS", {
-        "count": len(reports),
-        "symbols": [r.symbol for r in reports],
-        "conclusions": {r.symbol: (r.research_conclusion.value if r.research_conclusion else None) for r in reports},
+        "count": len(report_rows),
+        "reports": report_rows,
     })
     _print("THESES", {
         "count": len(theses),
@@ -140,7 +241,7 @@ def main() -> int:
         "statuses": {t.symbol: (t.status.value if t.status else None) for t in theses},
     })
     _print("WATCHES", watches)
-    decisions = [r for r in reports if getattr(r, "research_conclusion", None)]
+    decisions = [r for r in report_rows if r.get("conclusion")]
     _print("DECISIONS", {"research_conclusions": len(decisions)})
     _print("PROPOSALS", {"pending_count": approvals.get("pending_count"), "pending": approvals.get("pending")})
     _print("RISK GATE", {"risk_state": ctx.get("risk_state"), "daily_risk_halt": ctx.get("daily_risk_halt")})
@@ -173,13 +274,7 @@ def main() -> int:
         "holdings": ctx.get("positions") or [],
         "count": ctx.get("holdings_count"),
     })
-    _print("AI BUDGET", {
-        "cap": float(budget.cap),
-        "spent": float(budget.spent),
-        "remaining": float(budget.remaining),
-        "mode": budget.mode.value,
-        "calls_month": budget.calls_month,
-    })
+    _print("AI BUDGET", budget)
     _print("RECENT NOTIFICATIONS", {"notifications": notes})
     _print("RECENT FAILURES", {"live_error": live_err, "job_skips": errors})
     _print("BROKER MUTATION SURFACE", {

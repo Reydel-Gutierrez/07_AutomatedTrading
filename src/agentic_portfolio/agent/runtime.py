@@ -135,6 +135,7 @@ class AgentRuntime:
                     "mode": status.mode.value,
                     "cap": float(status.cap),
                     "spent": float(status.spent),
+                    "reserved": float(status.reserved),
                     "remaining": float(status.remaining),
                     "pct_used": status.pct_used,
                     "calls_month": status.calls_month,
@@ -227,7 +228,7 @@ class AgentRuntime:
         try:
             status = BudgetManager(UsageLedger(self.base), load_ai_config()).status()
         except Exception:  # noqa: BLE001
-            return {"mode": "UNKNOWN", "cap": 10, "spent": 0, "remaining": 10}
+            return {"mode": "UNKNOWN", "cap": 10, "spent": 0, "reserved": 0, "remaining": 10, "calls_month": 0}
         if status.mode.value == "EXHAUSTED":
             self.services.budget_exhausted = True
             self.notify.emit(
@@ -245,8 +246,10 @@ class AgentRuntime:
             "mode": status.mode.value,
             "cap": float(status.cap),
             "spent": float(status.spent),
+            "reserved": float(status.reserved),
             "remaining": float(status.remaining),
             "pct_used": status.pct_used,
+            "calls_month": status.calls_month,
         }
 
     def _openai_state(self) -> dict[str, Any]:

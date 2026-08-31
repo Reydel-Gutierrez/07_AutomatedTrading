@@ -13,13 +13,20 @@ from pathlib import Path
 from agentic_portfolio.agent.handlers import AgentServices, build_handlers
 from agentic_portfolio.agent.jobs import specs_by_name
 from agentic_portfolio.agent.orchestrator import JobOrchestrator
-from agentic_portfolio.agent.pipeline import ResearchQueueWorker, resolve_queue_stores
+from agentic_portfolio.agent.pipeline import (
+    ResearchQueueWorker,
+    inspect_research_queues,
+    primary_queue_stores,
+    resolve_queue_stores,
+)
 from agentic_portfolio.agent.safety import inspect_agent_packages_for_forbidden_calls
 from agentic_portfolio.ai.budget import BudgetManager
 from agentic_portfolio.ai.config import load_ai_config
 from agentic_portfolio.ai.errors import BudgetExhausted
 from agentic_portfolio.ai.gateway import AIGateway, build_gateway
 from agentic_portfolio.ai.ledger import UsageLedger
+from agentic_portfolio.ai.providers.anthropic import AnthropicProvider
+from agentic_portfolio.ai.providers.openai import OpenAIProvider
 from agentic_portfolio.ai.providers.scripted import ScriptedProvider
 from agentic_portfolio.ai.reasoners import GatewayResearchReasoner
 from agentic_portfolio.ai.types import BudgetMode
@@ -30,7 +37,7 @@ from agentic_portfolio.discovery.safety import candidate_cannot_become_buy
 from agentic_portfolio.discovery.store import CandidateStore, ResearchQueue
 from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.live_approval import LiveApprovalEngine, LiveApprovalStatus, LiveApprovalStore
-from agentic_portfolio.notify import NotificationEngine, NotificationStore
+from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
 from agentic_portfolio.research.reasoner import ScriptedResearchReasoner
 from agentic_portfolio.research.types import ResearchConclusion, ResearchStatus
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode, discovery_state_dir
@@ -775,4 +782,190 @@ def test_market_open_discovery_is_lightweight_and_live_placement_off(tmp_path):
     assert post_row["mode"] == "broad"
     assert calls[0]["lightweight"] is True
     assert calls[1]["lightweight"] is False
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_live_ai_outage_defers_without_persisting_research_report(tmp_path):
+    _seed(tmp_path, symbol="SBSW")
+    gw = build_gateway(
+        tmp_path,
+        providers={"openai": OpenAIProvider(api_key=None), "anthropic": AnthropicProvider(api_key=None)},
+        runtime_mode=RuntimeMode.LIVE,
+        now_fn=lambda: NOW,
+    )
+    worker = _worker(tmp_path, gateway=gw)
+    result = worker.run_cycle()
+    assert worker.research_store.by_symbol("SBSW") == []
+    assert gw.budget.status().calls_month == 0
+    assert gw.budget.status().spent == Decimal("0")
+    _, queue = primary_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    assert queue.all()[0].status is ResearchQueueStatus.QUEUED
+    assert queue.all()[0].skipped_reason == "ai_unavailable"
+    kinds = [n.kind for n in worker.notify.store.all()]
+    assert NotificationKind.RESEARCH_COMPLETED not in kinds
+    assert result.status == "DEGRADED"
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_live_missing_api_key_does_not_use_scripted_or_spend(tmp_path):
+    _seed(tmp_path, symbol="SBSW")
+    gw = build_gateway(tmp_path, runtime_mode=RuntimeMode.LIVE, now_fn=lambda: NOW, environ={})
+    assert "scripted" not in gw.providers
+    worker = _worker(tmp_path, gateway=gw)
+    worker.run_cycle()
+    assert worker.research_store.all_reports() == []
+    assert gw.budget.status().calls_month == 0
+
+
+def test_live_gateway_does_not_silently_fallback_to_scripted(tmp_path):
+    _seed(tmp_path, symbol="SBSW")
+    scripted = ScriptedProvider({"*": _ai("SBSW", conclusion="NEED_MORE_DATA")}, name="scripted")
+    gw = build_gateway(
+        tmp_path,
+        providers={
+            "openai": OpenAIProvider(api_key=None),
+            "anthropic": AnthropicProvider(api_key=None),
+            "scripted": scripted,
+        },
+        runtime_mode=RuntimeMode.LIVE,
+        now_fn=lambda: NOW,
+    )
+    worker = _worker(tmp_path, gateway=gw)
+    worker.run_cycle()
+    assert scripted.calls == []
+    assert worker.research_store.by_symbol("SBSW") == []
+    assert gw.budget.status().calls_month == 0
+
+
+def test_gateway_research_stamps_ai_provenance_and_charges_ledger(tmp_path):
+    _seed(tmp_path, symbol="SBSW")
+    scripted = ScriptedProvider({"research_report:SBSW": _ai("SBSW", conclusion="NEED_MORE_DATA")}, name="openai")
+    gw = build_gateway(tmp_path, providers={"openai": scripted}, runtime_mode=RuntimeMode.LIVE, now_fn=lambda: NOW)
+    worker = _worker(tmp_path, gateway=gw)
+    worker.run_cycle()
+    report = worker.research_store.by_symbol("SBSW")[0]
+    assert report.research_source == "AI"
+    assert report.provider == "openai"
+    assert report.model
+    assert report.ai_call_id
+    assert report.actual_cost is not None
+    assert gw.budget.status().calls_month == 1
+    assert gw.budget.status().spent > Decimal("0")
+    kinds = [n.kind for n in worker.notify.store.all()]
+    assert NotificationKind.RESEARCH_COMPLETED in kinds
+
+
+def test_scripted_reasoner_report_is_labeled_and_does_not_touch_ledger(tmp_path):
+    _seed(tmp_path, symbol="SBSW")
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"SBSW": _ai("SBSW", conclusion="NEED_MORE_DATA")}),
+    )
+    worker.run_cycle()
+    report = worker.research_store.by_symbol("SBSW")[0]
+    assert report.research_source == "scripted"
+    assert report.provider is None
+    cfg = load_ai_config()
+    status = BudgetManager(UsageLedger(tmp_path, config=cfg), cfg, now_fn=lambda: NOW).status()
+    assert status.calls_month == 0
+    assert status.spent == Decimal("0")
+
+
+def test_diagnostics_show_production_queue_even_when_worker_binds_legacy(tmp_path):
+    cand, entry = _seed(tmp_path, symbol="SBSW")
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"SBSW": _ai("SBSW", conclusion="NEED_MORE_DATA")}),
+    )
+    worker.run_cycle()
+    legacy = ResearchQueue(tmp_path / "state" / "research_queue.json", runtime_mode=RuntimeMode.LIVE.value)
+    for i in range(21):
+        legacy.enqueue(
+            ResearchQueueEntry(
+                queue_id=f"legacy-{i}",
+                candidate_id=f"legacy-c-{i}",
+                symbol=f"LEG{i:02d}",
+                provisional_sleeve=Sleeve.CORE_GROWTH,
+                discovery_score=60.0,
+                priority=DiscoveryPriority.LOW,
+                why_research_warranted="recovered Pi queue",
+                required_research_areas=["business_quality"],
+                enqueued_at=NOW.isoformat(),
+                freshness_deadline=(NOW + timedelta(hours=72)).isoformat(),
+                status=ResearchQueueStatus.QUEUED,
+            )
+        )
+    inspected = inspect_research_queues(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    assert inspected["worker_uses_legacy_fallback"] is True
+    assert any(e.symbol == "SBSW" for e in inspected["production"].all())
+    assert inspected["production"].all()[0].status is ResearchQueueStatus.NEED_MORE_DATA
+    assert "SBSW" not in [e.symbol for e in inspected["worker"].all()]
+    assert inspected["legacy"].all() and all(e.status is ResearchQueueStatus.QUEUED for e in inspected["legacy"].all())
+    from scripts.diagnose_pipeline import budget_diagnostic, research_report_diagnostics
+
+    rows = research_report_diagnostics(tmp_path, RuntimeMode.LIVE)
+    sbsw = next(r for r in rows if r["symbol"] == "SBSW")
+    assert sbsw["research_source"] == "scripted"
+    assert sbsw["originating_candidate_id"] == cand.candidate_id
+    assert sbsw["queue_status"] == ResearchQueueStatus.NEED_MORE_DATA.value
+    assert sbsw["queue_source"] == "production"
+    budget = budget_diagnostic(tmp_path)
+    accounted = budget["spent"] + budget["reserved"]
+    assert budget["remaining_reconciles"] is True
+    assert abs(budget["remaining"] - (budget["cap"] - accounted)) < 1e-9
+    assert budget["calls_month"] == 0
+    assert budget["configured_research_provider"] == "openai"
+    assert budget["configured_research_model"] == "gpt-5.6-terra"
+    assert LIVE_ORDER_PLACEMENT is False
+    del entry
+
+
+def test_budget_remaining_accounts_for_reservations(tmp_path):
+    cfg = load_ai_config()
+    ledger = UsageLedger(tmp_path, config=cfg)
+    now = datetime.now(timezone.utc)
+    mgr = BudgetManager(ledger, cfg, now_fn=lambda: now)
+    reservation = mgr.authorize(
+        Decimal("1.50"),
+        purpose="deep_research",
+        role="research",
+        provider="openai",
+        model="gpt-5.6-terra",
+        ticker="SBSW",
+        runtime_mode=RuntimeMode.LIVE.value,
+    )
+    status = mgr.status()
+    assert status.reserved == Decimal("1.50")
+    assert status.remaining == status.cap - status.spent - status.reserved
+    assert status.remaining == Decimal("8.50")
+    from scripts.diagnose_pipeline import budget_diagnostic
+
+    row = budget_diagnostic(tmp_path)
+    assert row["reserved"] == 1.5
+    assert row["remaining_reconciles"] is True
+    assert row["calls_month"] == 0
+    assert row["remaining_formula"] == "cap - spent - reserved"
+    del reservation
+
+
+def test_ai_disabled_once_flag_does_not_create_report(tmp_path):
+    _seed(tmp_path, symbol="SBSW")
+    now = lambda: NOW
+    services = _orch_services(tmp_path, now=now, gateway=build_gateway(tmp_path, runtime_mode=RuntimeMode.LIVE, now_fn=now, environ={}))
+    services.ai_allowed = False
+    orch = JobOrchestrator(tmp_path, handlers=build_handlers(services), now_fn=now)
+    row = orch.run_job("RESEARCH_QUEUE_WORKER", now=NOW)
+    assert row["status"] == "BLOCKED"
+    assert row["skipped"] == "ai_disabled"
+    worker = ResearchQueueWorker(tmp_path, runtime_mode=RuntimeMode.LIVE, now_fn=now)
+    assert worker.research_store.all_reports() == []
+
+
+def test_live_runtime_does_not_inject_scripted_research_reasoner(tmp_path):
+    from agentic_portfolio.agent.runtime import AgentRuntime
+
+    runtime = AgentRuntime(tmp_path, runtime_mode=RuntimeMode.LIVE, max_cycles=0, sleep_fn=lambda _s: None)
+    assert runtime.services.research_reasoner is None
+    assert runtime.services.gateway is not None
+    assert "scripted" not in runtime.services.gateway.providers
     assert LIVE_ORDER_PLACEMENT is False

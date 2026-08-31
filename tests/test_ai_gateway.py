@@ -192,6 +192,21 @@ def test_fallback_provider_uses_same_global_budget(tmp_path):
     assert after.cap == Decimal("10")
 
 
+def test_live_gateway_refuses_scripted_fallback(tmp_path):
+    scripted = ScriptedProvider({"screening": SCREEN}, name="scripted")
+    gw = build_gateway(
+        tmp_path,
+        providers={"openai": OpenAIProvider(api_key=None), "scripted": scripted},
+        runtime_mode=RuntimeMode.LIVE,
+        now_fn=lambda: NOW,
+        config={**load_ai_config(), "roles": {**(load_ai_config().get("roles") or {}), "fallback": {"provider": "scripted", "model": "scripted"}}},
+    )
+    with pytest.raises(ProviderOutage, match="scripted provider is not allowed as a LIVE fallback|unavailable"):
+        _screen(gw)
+    assert scripted.calls == []
+    assert gw.budget.status().calls_month == 0
+
+
 def test_openai_key_only_from_openai_api_key():
     adapter = OpenAIProvider(environ={"OPENAI_API_KEY": "sk-from-env", "OPENAI_KEY": "nope"})
     assert adapter.available() is True

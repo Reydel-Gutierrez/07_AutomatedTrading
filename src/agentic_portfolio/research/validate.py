@@ -268,6 +268,18 @@ def apply_validated_payload(
     report.proposed_actions_created = 0
     report.buy_actions_created = 0
     report.execution_attempted = False
+    if payload.get("provider"):
+        report.provider = str(payload.get("provider"))
+    if payload.get("model"):
+        report.model = str(payload.get("model"))
+    if payload.get("ai_call_id"):
+        report.ai_call_id = str(payload.get("ai_call_id"))
+    if payload.get("estimated_cost") is not None:
+        report.estimated_cost = float(payload.get("estimated_cost"))
+    if payload.get("actual_cost") is not None:
+        report.actual_cost = float(payload.get("actual_cost"))
+    if payload.get("research_source"):
+        report.research_source = str(payload.get("research_source"))
     return report
 
 

@@ -828,6 +828,13 @@ def _live_research_rows(state: DashboardState) -> list[dict[str, Any]]:
                 "started_at": row.get("created_at"),
                 "runtime_mode": RuntimeMode.LIVE.value,
                 "source_of_truth": get_active_portfolio_source(),
+                "research_source": row.get("research_source"),
+                "provider": row.get("provider"),
+                "model": row.get("model"),
+                "ai_call_id": row.get("ai_call_id"),
+                "estimated_cost": row.get("estimated_cost"),
+                "actual_cost": row.get("actual_cost"),
+                "originating_candidate_id": row.get("candidate_id"),
             }
         )
     for report in state.research.all_reports():
@@ -1870,7 +1877,10 @@ def ai_summary(state: DashboardState, ui: dict[str, Any] | None = None) -> dict[
         "budget_mode": status.mode.value,
         "cap": float(status.cap),
         "spent": float(status.spent),
+        "reserved": float(status.reserved),
+        "accounted_usage": float(status.spent) + float(status.reserved),
         "remaining": float(status.remaining),
+        "remaining_formula": "cap - spent - reserved",
         "pct_used": status.pct_used,
         "calls_month": status.calls_month,
         "calls_today": status.calls_today,

@@ -313,6 +313,31 @@ def test_malformed_ai_response_rejected(tmp_path):
     assert out.proposed_actions_created == 0
 
 
+def test_provider_outage_does_not_persist_synthetic_report(tmp_path):
+    from agentic_portfolio.ai.errors import ProviderOutage
+
+    class Boom:
+        def reason(self, request):
+            raise ProviderOutage("OpenAI API key is not configured")
+
+    store = ResearchStore(tmp_path)
+    try:
+        run_research(
+            _candidate(),
+            _payload(),
+            ctx(10_000),
+            Boom(),
+            persist=True,
+            now=NOW,
+            store=store,
+            journal=tmp_path / "j.jsonl",
+        )
+        raise AssertionError("expected ProviderOutage")
+    except ProviderOutage:
+        pass
+    assert store.all_reports() == []
+
+
 def test_unsupported_ai_fact_detected():
     extra = {"facts": [{"name": "secret_revenue_from_nowhere", "value": 99e9}]}
     out = _run(response=_ai(extra=extra))

@@ -162,7 +162,9 @@ class AIGateway:
         if allow_fallback:
             fallback_spec = role_spec(self.config, ModelRole.FALLBACK.value)
             fb_provider = str(fallback_spec["provider"])
-            if fb_provider not in tried:
+            if self._is_live_scripted(fb_provider, self.providers.get(fb_provider)):
+                last_error = ProviderOutage("scripted provider is not allowed as a LIVE fallback")
+            elif fb_provider not in tried:
                 fb_adapter = self.providers.get(fb_provider)
                 if fb_adapter is not None and fb_adapter.available():
                     fb_request = ProviderRequest(
@@ -251,6 +253,16 @@ class AIGateway:
         del allow_fallback
         return str(spec["provider"]), str(spec["model"])
 
+    def _is_live(self) -> bool:
+        return str(self.runtime_mode).upper() == RuntimeMode.LIVE.value
+
+    def _is_live_scripted(self, provider_name: str | None, adapter: ProviderAdapter | None) -> bool:
+        if not self._is_live():
+            return False
+        if str(provider_name or "").lower() == "scripted":
+            return True
+        return bool(adapter is not None and str(getattr(adapter, "name", "") or "").lower() == "scripted")
+
 
 def default_providers(
     config: dict[str, Any] | None = None,
@@ -295,6 +307,9 @@ def build_gateway(
     ledger = UsageLedger(base, config=cfg)
     budget = BudgetManager(ledger, cfg, now_fn=now_fn)
     adapters = dict(providers) if providers is not None else default_providers(cfg, environ=environ, scripted=scripted)
+    mode_name = runtime_mode.value if isinstance(runtime_mode, RuntimeMode) else str(runtime_mode).upper()
+    if mode_name == RuntimeMode.LIVE.value and providers is None:
+        adapters.pop("scripted", None)
     return AIGateway(budget=budget, providers=adapters, config=cfg, runtime_mode=runtime_mode)
 
 

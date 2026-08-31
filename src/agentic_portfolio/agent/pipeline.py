@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from agentic_portfolio.ai.config import load_ai_config, pipeline_limits
-from agentic_portfolio.ai.errors import BudgetDenied, BudgetExhausted
+from agentic_portfolio.ai.errors import AIError, BudgetDenied, BudgetExhausted
 from agentic_portfolio.ai.gateway import AIGateway
 from agentic_portfolio.ai.reasoners import GatewayDecisionReasoner, GatewayResearchReasoner
 from agentic_portfolio.ai.store import AIArtifactStore
@@ -143,6 +143,45 @@ def resolve_queue_stores(
                 if paper_cand.all():
                     candidates = paper_cand
     return candidates, queue
+
+
+def primary_queue_stores(
+    root: Path,
+    *,
+    runtime_mode: RuntimeMode | str,
+) -> tuple[CandidateStore, ResearchQueue]:
+    """LIVE production queue under state/live_ai. Never falls back to recovered state/ rows."""
+    mode = runtime_mode.value if isinstance(runtime_mode, RuntimeMode) else str(runtime_mode).upper()
+    base = Path(root)
+    primary_dir = discovery_state_dir(base, mode=RuntimeMode(mode))
+    return (
+        CandidateStore(primary_dir / "candidates.json", runtime_mode=mode),
+        ResearchQueue(primary_dir / "research_queue.json", runtime_mode=mode),
+    )
+
+
+def inspect_research_queues(root: Path, *, runtime_mode: RuntimeMode | str) -> dict[str, Any]:
+    """Show production, recovered-legacy, and worker-bound queues without mutating them."""
+    mode = runtime_mode.value if isinstance(runtime_mode, RuntimeMode) else str(runtime_mode).upper()
+    base = Path(root)
+    prod_candidates, prod_queue = primary_queue_stores(base, runtime_mode=mode)
+    worker_candidates, worker_queue = resolve_queue_stores(base, runtime_mode=mode)
+    legacy_queue = ResearchQueue(base / "state" / "research_queue.json", runtime_mode=mode)
+    prod_path = prod_queue.path.resolve()
+    worker_path = worker_queue.path.resolve()
+    legacy_path = legacy_queue.path.resolve()
+    return {
+        "production_path": str(prod_queue.path),
+        "legacy_path": str(legacy_queue.path),
+        "worker_bound_path": str(worker_queue.path),
+        "worker_uses_legacy_fallback": worker_path != prod_path,
+        "legacy_distinct": legacy_path != prod_path,
+        "production": prod_queue,
+        "legacy": legacy_queue,
+        "worker": worker_queue,
+        "production_candidates": prod_candidates,
+        "worker_candidates": worker_candidates,
+    }
 
 
 def load_live_context(root: Path, *, runtime_mode: RuntimeMode | str) -> PortfolioContext | None:
@@ -428,6 +467,21 @@ class ResearchQueueWorker:
                 payload={"symbol": candidate.symbol, "reason": str(exc)},
             )
             return {"symbol": candidate.symbol, "status": "DEGRADED", "reason": str(exc), "ai_calls": 1, "rejected": 1}
+        except AIError as exc:
+            self.queue.set_status(
+                entry.queue_id,
+                ResearchQueueStatus.QUEUED,
+                last_error=f"{type(exc).__name__}: {exc}",
+                claimed_at=None,
+                skipped_reason="ai_unavailable",
+            )
+            return {
+                "symbol": candidate.symbol,
+                "status": "FAILED",
+                "reason": f"{type(exc).__name__}: {exc}",
+                "ai_calls": 0,
+                "skipped_reason": "ai_unavailable",
+            }
         except Exception as exc:  # noqa: BLE001 — one candidate must not kill the cycle
             self.queue.set_status(
                 entry.queue_id,
@@ -450,7 +504,14 @@ class ResearchQueueWorker:
             NotificationKind.RESEARCH_COMPLETED,
             title=f"Research completed — {report.symbol}",
             body=f"{report.symbol}: {report.research_conclusion.value if report.research_conclusion else report.research_status.value}",
-            payload={"symbol": report.symbol, "research_id": report.research_id},
+            payload={
+                "symbol": report.symbol,
+                "research_id": report.research_id,
+                "research_source": report.research_source,
+                "provider": report.provider,
+                "model": report.model,
+                "ai_call_id": report.ai_call_id,
+            },
         )
         return self._apply_report(report, candidate, context, entry, ai_calls=1, duplicate=False)
 
@@ -761,6 +822,12 @@ class ResearchQueueWorker:
                     "provisional_sleeve": candidate.provisional_sleeve.value if candidate.provisional_sleeve else None,
                     "candidate_id": candidate.candidate_id,
                     "runtime_mode": self.runtime_mode.value,
+                    "research_source": report.research_source,
+                    "provider": report.provider,
+                    "model": report.model,
+                    "ai_call_id": report.ai_call_id,
+                    "estimated_cost": report.estimated_cost,
+                    "actual_cost": report.actual_cost,
                 },
             )
         except FileExistsError:

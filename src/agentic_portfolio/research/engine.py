@@ -118,10 +118,14 @@ def run_research(
         comparison_peers=[{"symbol": s} for s in (comparison_peer_symbols or [])],
     )
 
+    # Fail closed: if the reasoner/gateway never returns, do not persist a synthetic report.
+    raw = reasoner.reason(request)
+    apply_research_provenance(report, reasoner, raw if isinstance(raw, dict) else None)
+
     try:
-        raw = reasoner.reason(request)
         normalized, unsupported, errors = validate_reasoning(raw, packet)
         report = apply_validated_payload(report, normalized, packet, unsupported=unsupported)
+        apply_research_provenance(report, reasoner, normalized)
         report.validation_errors = list(errors)
         report.completed_at = now.isoformat()
         report.observed_at = payload.observed_at
@@ -137,6 +141,7 @@ def run_research(
         report.derived_metrics = list(packet.derived_metrics)
         report.executive_summary = "Reasoner output failed schema validation."
         report.recommended_next_step = "NEED_MORE_DATA"
+        apply_research_provenance(report, reasoner, raw if isinstance(raw, dict) else None)
         _journal(
             {
                 "type": "RESEARCH_INCONCLUSIVE",
@@ -144,6 +149,9 @@ def run_research(
                 "candidate_id": candidate.candidate_id,
                 "symbol": candidate.symbol,
                 "reason": str(exc),
+                "research_source": report.research_source,
+                "provider": report.provider,
+                "model": report.model,
             },
             journal,
             persist=persist,
@@ -171,6 +179,10 @@ def run_research(
             "confidence": report.confidence.value,
             "packet_id": packet.packet_id,
             "unsupported_claim_count": len(report.unsupported_claims),
+            "research_source": report.research_source,
+            "provider": report.provider,
+            "model": report.model,
+            "ai_call_id": report.ai_call_id,
         },
         journal,
         persist=persist,
@@ -253,6 +265,50 @@ def _empty_packet_anchor(report: ResearchReport) -> ResearchEvidencePacket:
         facts=list(report.facts),
         derived_metrics=list(report.derived_metrics),
     )
+
+
+def apply_research_provenance(
+    report: ResearchReport,
+    reasoner: ResearchReasoner,
+    payload: dict | None = None,
+) -> ResearchReport:
+    """Stamp AI vs scripted vs deterministic source. Never invent a provider."""
+    result = getattr(reasoner, "last_result", None)
+    if result is not None:
+        report.provider = getattr(result, "provider", None)
+        report.model = getattr(result, "model", None)
+        report.ai_call_id = getattr(result, "reservation_id", None)
+        estimated = getattr(result, "estimated_cost", None)
+        actual = getattr(result, "actual_cost", None)
+        report.estimated_cost = float(estimated) if estimated is not None else None
+        report.actual_cost = float(actual) if actual is not None else None
+        report.research_source = "scripted" if str(report.provider or "").lower() == "scripted" else "AI"
+        return report
+    if payload:
+        if payload.get("provider"):
+            report.provider = str(payload.get("provider"))
+        if payload.get("model"):
+            report.model = str(payload.get("model"))
+        if payload.get("ai_call_id"):
+            report.ai_call_id = str(payload.get("ai_call_id"))
+        if payload.get("estimated_cost") is not None:
+            report.estimated_cost = float(payload.get("estimated_cost"))
+        if payload.get("actual_cost") is not None:
+            report.actual_cost = float(payload.get("actual_cost"))
+        if payload.get("research_source"):
+            report.research_source = str(payload.get("research_source"))
+            return report
+        if report.provider:
+            report.research_source = "scripted" if report.provider.lower() == "scripted" else "AI"
+            return report
+    name = type(reasoner).__name__
+    if name == "ScriptedResearchReasoner":
+        report.research_source = "scripted"
+    elif name == "GatewayResearchReasoner":
+        report.research_source = "AI"
+    else:
+        report.research_source = "deterministic"
+    return report
 
 
 def _blank_report(

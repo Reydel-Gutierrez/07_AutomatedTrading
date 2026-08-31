@@ -266,6 +266,12 @@ class ResearchReport:
     portfolio_facts_unchanged: bool = True
     classification_unchanged: bool = True
     stale_after: str | None = None
+    research_source: str | None = None
+    provider: str | None = None
+    model: str | None = None
+    ai_call_id: str | None = None
+    estimated_cost: float | None = None
+    actual_cost: float | None = None
 
 
 @dataclass
