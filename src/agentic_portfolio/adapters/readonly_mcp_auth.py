@@ -89,12 +89,18 @@ def oauth_home(*, environ: Mapping[str, str] | None = None) -> Path:
     override = _truthy(env, ["AGENTIC_READONLY_MCP_HOME"])
     if override:
         return Path(override)
-    local = str(env.get("LOCALAPPDATA") or "").strip()
-    if local:
-        return Path(local) / "agentic-portfolio" / "readonly-mcp"
+    # LOCALAPPDATA is Windows-only. systemd on the Pi must not follow a stray
+    # Windows path if that variable is accidentally exported.
+    if os.name == "nt":
+        local = str(env.get("LOCALAPPDATA") or "").strip()
+        if local:
+            return Path(local) / "agentic-portfolio" / "readonly-mcp"
     xdg = str(env.get("XDG_STATE_HOME") or "").strip()
     if xdg:
         return Path(xdg) / "agentic-portfolio" / "readonly-mcp"
+    home = str(env.get("HOME") or "").strip()
+    if home:
+        return Path(home) / ".agentic-portfolio" / "readonly-mcp"
     return Path.home() / ".agentic-portfolio" / "readonly-mcp"
 
 

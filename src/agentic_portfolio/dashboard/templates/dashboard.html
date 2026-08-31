@@ -2,7 +2,7 @@
 {% block title %}Dashboard · Agentic Portfolio{% endblock %}
 {% block content %}
 {% if view.live_data_unavailable %}
-<div class="halt-banner">LIVE DATA UNAVAILABLE</div>
+<div class="halt-banner">LIVE DATA UNAVAILABLE{% if view.live_error_code %} · {{ view.live_error_code }}{% endif %}</div>
 {% endif %}
 {% if view.approval_banner %}
 <div class="halt-banner approval-banner">{{ view.approval_banner }}</div>

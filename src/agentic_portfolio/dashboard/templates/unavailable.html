@@ -1,8 +1,8 @@
 {% extends "base.html" %}
 {% block title %}LIVE data unavailable · Agentic Portfolio{% endblock %}
 {% block content %}
-<div class="halt-banner">LIVE DATA UNAVAILABLE</div>
+<div class="halt-banner">LIVE DATA UNAVAILABLE{% if view is defined and view.live_error_code %} · {{ view.live_error_code }}{% elif message is defined and message and message != 'LIVE DATA UNAVAILABLE' %} · {{ message }}{% endif %}</div>
 <p class="lede">Active runtime is LIVE. Required LIVE account state is missing. The dashboard did not fall back to the PAPER book.</p>
-<p class="meta">Live order placement remains disabled. Paper artifacts are unchanged on disk for tests/dev.</p>
+<p class="meta">{% if view is defined and view.live_error_code %}{{ view.live_error_code }}{% if view.live_error_message %} — {{ view.live_error_message }}{% endif %}. {% endif %}Live order placement remains disabled. Paper artifacts are unchanged on disk for tests/dev.</p>
 <p><a class="text-link" href="{{ url_for('system_page') }}">Open System</a></p>
 {% endblock %}

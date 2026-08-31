@@ -429,6 +429,8 @@ def test_production_runtime_wires_live_refresh_fn(tmp_path):
     assert "refresh_live_portfolio" in refresh_src
     runtime, _fetcher = _wired_runtime(tmp_path, now=lambda: SATURDAY)
     assert runtime.services.refresh_fn is not None
+    assert runtime.services.quotes_fn is not None
+    assert runtime.services.candidates_fn is None
     assert LIVE_ORDER_PLACEMENT is False
     assert runtime.runtime_mode is RuntimeMode.LIVE
 

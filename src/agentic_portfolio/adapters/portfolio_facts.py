@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Protocol
 
@@ -17,12 +18,63 @@ from agentic_portfolio.sleeve_registry import SleeveRegistry
 from agentic_portfolio.thesis_registry import ThesisRegistry
 
 
+class LiveErrorCode:
+    """Stable production diagnostic codes. Safe to show on the dashboard."""
+
+    MCP_INITIALIZE_FAILED = "MCP_INITIALIZE_FAILED"
+    MCP_GET_ACCOUNTS_FAILED = "MCP_GET_ACCOUNTS_FAILED"
+    MCP_GET_PORTFOLIO_FAILED = "MCP_GET_PORTFOLIO_FAILED"
+    MCP_GET_POSITIONS_FAILED = "MCP_GET_POSITIONS_FAILED"
+    MCP_QUOTES_FAILED = "MCP_QUOTES_FAILED"
+    MCP_ORDERS_FAILED = "MCP_ORDERS_FAILED"
+    MCP_TOOLS_CALL_FAILED = "MCP_TOOLS_CALL_FAILED"
+    MCP_HTTP_TIMEOUT = "MCP_HTTP_TIMEOUT"
+    MCP_HTTP_401 = "MCP_HTTP_401"
+    MCP_HTTP_ERROR = "MCP_HTTP_ERROR"
+    OAUTH_TOKEN_UNAVAILABLE = "OAUTH_TOKEN_UNAVAILABLE"
+    OAUTH_REFRESH_FAILED = "OAUTH_REFRESH_FAILED"
+    ACCOUNT_IDENTITY_MISMATCH = "ACCOUNT_IDENTITY_MISMATCH"
+    LIVE_SNAPSHOT_PERSIST_FAILED = "LIVE_SNAPSHOT_PERSIST_FAILED"
+    LIVE_DATA_UNAVAILABLE = "LIVE_DATA_UNAVAILABLE"
+
+
+_SECRET_RE = re.compile(r"Bearer\s+\S+", re.I)
+_SECRET_KV_RE = re.compile(
+    r"(access_token|refresh_token|client_secret|password)([\"']?\s*[:=]\s*[\"']?)[^,\s\"']+",
+    re.I,
+)
+
+
+def redact_live_error(message: str) -> str:
+    """Strip tokens/credentials from diagnostic strings. Never log secrets."""
+    text = _SECRET_RE.sub("Bearer [redacted]", str(message or ""))
+    return _SECRET_KV_RE.sub(r"\1\2[redacted]", text)
+
+
+def live_error_code_of(exc: BaseException | None, *, default: str = LiveErrorCode.LIVE_DATA_UNAVAILABLE) -> str:
+    code = getattr(exc, "code", None)
+    if code:
+        return str(code)
+    if isinstance(exc, LiveAccountError):
+        return LiveErrorCode.ACCOUNT_IDENTITY_MISMATCH
+    return default
+
+
 class LiveDataUnavailable(RuntimeError):
     """Required LIVE Robinhood data is missing or unusable."""
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        cleaned = redact_live_error(message)
+        super().__init__(cleaned)
+        self.code = code or LiveErrorCode.LIVE_DATA_UNAVAILABLE
 
 
 class LiveAccountError(RuntimeError):
     """Configured Agentic account was not confirmed."""
+
+    def __init__(self, message: str, *, code: str = LiveErrorCode.ACCOUNT_IDENTITY_MISMATCH) -> None:
+        super().__init__(redact_live_error(message))
+        self.code = code
 
 
 class PortfolioFetcher(Protocol):
@@ -34,9 +86,24 @@ class PortfolioFetcher(Protocol):
 
     def get_equity_positions(self, account_number: str) -> Mapping[str, Any] | None: ...
 
-    def get_equity_quotes(self, symbols: list[str]) -> Mapping[str, Any] | None: ...
+    def get_equity_quotes(self, symbols: str | list[str]) -> Mapping[str, Any] | None: ...
 
     def get_equity_orders(self, account_number: str, *, state: str | None = None) -> Mapping[str, Any] | None: ...
+
+
+def as_symbol_list(symbols: str | list[str] | tuple[str, ...] | None) -> list[str]:
+    """Normalize quote/tradability symbol arguments. MCP always wants symbols: list[str]."""
+    if symbols is None:
+        return []
+    if isinstance(symbols, str):
+        token = symbols.strip().upper()
+        return [token] if token else []
+    out: list[str] = []
+    for item in symbols:
+        token = str(item or "").strip().upper()
+        if token:
+            out.append(token)
+    return list(dict.fromkeys(out))
 
 
 @dataclass
@@ -70,7 +137,7 @@ class StaticPortfolioFetcher:
         del account_number
         return self._check("get_equity_positions", self.positions)
 
-    def get_equity_quotes(self, symbols: list[str]) -> Mapping[str, Any]:
+    def get_equity_quotes(self, symbols: str | list[str]) -> Mapping[str, Any]:
         del symbols
         return self._check("get_equity_quotes", self.quotes)
 
@@ -174,7 +241,7 @@ def parse_portfolio(payload: Mapping[str, Any] | None) -> dict[str, float]:
     }
 
 
-def _quote_map(payload: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+def quote_map(payload: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
     if not payload:
         return {}
     data = payload.get("data", payload)
@@ -202,7 +269,7 @@ def quote_price(quote: Mapping[str, Any] | None) -> float | None:
 
 
 def parse_spy(payload: Mapping[str, Any] | None) -> SpyBenchmark | None:
-    quote = _quote_map(payload).get("SPY")
+    quote = quote_map(payload).get("SPY")
     if not quote:
         return None
     price = quote_price(quote)
@@ -255,7 +322,7 @@ def parse_positions(
         raise LiveDataUnavailable("get_equity_positions returned no positions field")
     if not isinstance(rows, list):
         raise LiveDataUnavailable("get_equity_positions positions is not a list")
-    quote_by_symbol = _quote_map(quotes)
+    quote_by_symbol = quote_map(quotes)
     positions: list[Position] = []
     for item in rows:
         if not isinstance(item, dict):
@@ -292,3 +359,23 @@ def parse_positions(
             )
         )
     return positions
+
+
+def watch_quotes_from_payload(payload: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    """Normalize MCP quote payloads into the watch/condition {symbol: {price, ...}} map."""
+    out: dict[str, dict[str, Any]] = {}
+    for symbol, quote in quote_map(payload).items():
+        price = quote_price(quote)
+        bid = _optional_float(quote.get("bid_price"))
+        ask = _optional_float(quote.get("ask_price"))
+        spread_bps = None
+        if bid is not None and ask is not None and (bid + ask) > 0:
+            spread_bps = ((ask - bid) / ((ask + bid) / 2.0)) * 10_000.0
+        out[symbol] = {
+            "price": price,
+            "last": price,
+            "spread_bps": spread_bps,
+            "bid": bid,
+            "ask": ask,
+        }
+    return out

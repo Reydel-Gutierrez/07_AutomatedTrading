@@ -279,6 +279,25 @@ def live_data_unavailable(state: DashboardState, flags: dict[str, Any] | None = 
     return not book or ctx.get("current_nav") is None
 
 
+def live_error_state(state: DashboardState) -> dict[str, Any]:
+    try:
+        payload = LivePortfolioStore(state.root).last_error() or {}
+    except (OSError, json.JSONDecodeError):
+        payload = {}
+    health = load_health(state.root)
+    if not payload:
+        payload = dict(health.get("live_error") or {})
+    broker = dict(health.get("robinhood") or {})
+    code = payload.get("code") or broker.get("error_code")
+    message = payload.get("message") or broker.get("error")
+    return {
+        "code": code,
+        "message": message,
+        "observed_at": payload.get("observed_at"),
+        "job_skips": list(health.get("job_skips") or []),
+    }
+
+
 def active_book(state: DashboardState, flags: dict[str, Any] | None = None) -> dict[str, Any]:
     flags = _ui(flags)
     if get_active_runtime() is RuntimeMode.LIVE or flags.get("environment") == "LIVE":
@@ -561,6 +580,7 @@ def notifications_view(state: DashboardState) -> dict[str, Any]:
 
 def agent_runtime_view(state: DashboardState) -> dict[str, Any]:
     health = load_health(state.root)
+    err = live_error_state(state)
     return {
         "agent": health.get("agent") or "OFFLINE",
         "alive": bool(health.get("alive")),
@@ -573,6 +593,9 @@ def agent_runtime_view(state: DashboardState) -> dict[str, Any]:
         "openai": health.get("openai") or {},
         "ai_budget": health.get("ai_budget") or {},
         "cycles": health.get("cycles") or 0,
+        "live_error_code": err.get("code"),
+        "live_error_message": err.get("message"),
+        "job_skips": err.get("job_skips") or [],
         "LIVE_ORDER_PLACEMENT": False,
     }
 
@@ -1210,6 +1233,8 @@ def system_view(state: DashboardState) -> dict[str, Any]:
             else (f"{risk_state} on {ui['risk_book_label']}" if risk_state else "—")
         ),
         "live_data_unavailable": unavailable,
+        "live_error_code": live_error_state(state).get("code") if unavailable else None,
+        "live_error_message": live_error_state(state).get("message") if unavailable else None,
         "paper_context": {
             "nav": paper_ctx.get("current_nav"),
             "cash": paper_ctx.get("cash"),
@@ -1548,6 +1573,8 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
         "paper_book_status": ui["paper_book_status"],
         "live_order_placement_enabled": False,
         "live_data_unavailable": unavailable,
+        "live_error_code": live_error_state(state).get("code") if unavailable else None,
+        "live_error_message": live_error_state(state).get("message") if unavailable else None,
         "health": health_status(state),
         "paper_environment": False if live else bool(book.get("paper_environment", True)),
         "live_book_untouched": False if live else bool(book.get("live_book_untouched", True)),

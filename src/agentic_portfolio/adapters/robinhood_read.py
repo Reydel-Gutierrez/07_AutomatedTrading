@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Mapping, Protocol
 
-from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable
+from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable, LiveErrorCode, as_symbol_list
 from agentic_portfolio.policy import load_account_rules, load_policy
 from agentic_portfolio.schemas import (
     ClassificationEvidence,
@@ -106,7 +106,51 @@ class ReadOnlyFetcher(Protocol):
 
     def search_instrument(self, symbol: str) -> Mapping[str, Any] | None: ...
 
-    def get_equity_quotes(self, symbol: str) -> Mapping[str, Any] | None: ...
+    def get_equity_quotes(self, symbols: str | list[str]) -> Mapping[str, Any] | None: ...
+
+
+class ProductionReadFetcher(ReadOnlyFetcher, Protocol):
+    """Production LIVE adapter: instrument facts plus portfolio observation."""
+
+    def get_accounts(self) -> Mapping[str, Any] | None: ...
+
+    def get_portfolio(self, account_number: str) -> Mapping[str, Any] | None: ...
+
+    def get_equity_positions(self, account_number: str) -> Mapping[str, Any] | None: ...
+
+    def get_equity_orders(self, account_number: str, *, state: str | None = None) -> Mapping[str, Any] | None: ...
+
+
+# Verified Robinhood MCP tools/call argument names (2026-08-31). Do not invent keys.
+MCP_TOOL_ARGUMENTS = {
+    "get_accounts": frozenset(),
+    "get_portfolio": frozenset({"account_number"}),
+    "get_equity_positions": frozenset({"account_number", "cursor"}),
+    "get_equity_quotes": frozenset({"symbols"}),
+    "get_equity_orders": frozenset({"account_number", "order_id", "state", "symbol", "created_at_gte", "placed_agent", "cursor"}),
+    "get_equity_tradability": frozenset({"account_number", "symbols"}),
+    "get_equity_fundamentals": frozenset({"symbols", "bounds"}),
+    "search": frozenset({"query", "asset_type", "limit"}),
+}
+
+MCP_TOOL_REQUIRED = {
+    "get_accounts": frozenset(),
+    "get_portfolio": frozenset({"account_number"}),
+    "get_equity_positions": frozenset({"account_number"}),
+    "get_equity_quotes": frozenset({"symbols"}),
+    "get_equity_orders": frozenset({"account_number"}),
+    "get_equity_tradability": frozenset({"account_number", "symbols"}),
+    "get_equity_fundamentals": frozenset({"symbols"}),
+    "search": frozenset({"query"}),
+}
+
+_TOOL_ERROR_CODES = {
+    "get_accounts": LiveErrorCode.MCP_GET_ACCOUNTS_FAILED,
+    "get_portfolio": LiveErrorCode.MCP_GET_PORTFOLIO_FAILED,
+    "get_equity_positions": LiveErrorCode.MCP_GET_POSITIONS_FAILED,
+    "get_equity_quotes": LiveErrorCode.MCP_QUOTES_FAILED,
+    "get_equity_orders": LiveErrorCode.MCP_ORDERS_FAILED,
+}
 
 
 INSTRUMENT_READ_TOOLS = CLASSIFICATION_READ_TOOLS
@@ -156,8 +200,8 @@ class MappingReadOnlyFetcher:
         del symbol
         return self._check("search", self.search)
 
-    def get_equity_quotes(self, symbol: str) -> Mapping[str, Any] | None:
-        del symbol
+    def get_equity_quotes(self, symbols: str | list[str]) -> Mapping[str, Any] | None:
+        del symbols
         return self._check("get_equity_quotes", self.quotes)
 
 
@@ -178,21 +222,55 @@ class AuthorizedMcpReadAdapter:
             raise LiveDataUnavailable(f"refused forbidden MCP tool: {tool}")
         self.calls.append(tool)
         if self.transport is None:
-            raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: authorized Robinhood MCP transport is not bound for {tool}")
-        result = self.transport(tool, **kwargs)
+            raise LiveDataUnavailable(
+                f"{READONLY_MCP_UNREACHABLE}: authorized Robinhood MCP transport is not bound for {tool}",
+                code=_TOOL_ERROR_CODES.get(tool, LiveErrorCode.MCP_TOOLS_CALL_FAILED),
+            )
+        try:
+            result = self.transport(tool, **kwargs)
+        except LiveDataUnavailable as exc:
+            if exc.code in {
+                LiveErrorCode.MCP_HTTP_401,
+                LiveErrorCode.MCP_HTTP_TIMEOUT,
+                LiveErrorCode.OAUTH_TOKEN_UNAVAILABLE,
+                LiveErrorCode.OAUTH_REFRESH_FAILED,
+                LiveErrorCode.MCP_INITIALIZE_FAILED,
+            }:
+                raise
+            raise LiveDataUnavailable(str(exc), code=_TOOL_ERROR_CODES.get(tool, exc.code)) from exc
+        except Exception as exc:  # noqa: BLE001 — map transport failures to the failing tool
+            raise LiveDataUnavailable(
+                f"{tool} failed: {type(exc).__name__}: {exc}",
+                code=_TOOL_ERROR_CODES.get(tool, LiveErrorCode.MCP_TOOLS_CALL_FAILED),
+            ) from exc
         return dict(result) if isinstance(result, Mapping) else result
 
     def get_equity_tradability(self, symbol: str) -> Mapping[str, Any] | None:
-        return self._invoke("get_equity_tradability", account_number=self.account_number, symbols=[str(symbol).upper()])
+        return self._invoke("get_equity_tradability", account_number=self.account_number, symbols=as_symbol_list(symbol))
 
     def get_equity_fundamentals(self, symbol: str) -> Mapping[str, Any] | None:
-        return self._invoke("get_equity_fundamentals", symbols=[str(symbol).upper()])
+        return self._invoke("get_equity_fundamentals", symbols=as_symbol_list(symbol))
 
     def search_instrument(self, symbol: str) -> Mapping[str, Any] | None:
         return self._invoke("search", query=str(symbol).upper(), asset_type="instrument", limit=10)
 
-    def get_equity_quotes(self, symbol: str) -> Mapping[str, Any] | None:
-        return self._invoke("get_equity_quotes", symbols=[str(symbol).upper()])
+    def get_equity_quotes(self, symbols: str | list[str]) -> Mapping[str, Any] | None:
+        tickers = as_symbol_list(symbols)
+        if not tickers:
+            return {"data": {"results": []}}
+        return self._invoke("get_equity_quotes", symbols=tickers)
+
+    def get_accounts(self) -> Mapping[str, Any] | None:
+        return self._invoke("get_accounts")
+
+    def get_portfolio(self, account_number: str) -> Mapping[str, Any] | None:
+        return self._invoke("get_portfolio", account_number=str(account_number))
+
+    def get_equity_positions(self, account_number: str) -> Mapping[str, Any] | None:
+        return self._invoke("get_equity_positions", account_number=str(account_number))
+
+    def get_equity_orders(self, account_number: str, *, state: str | None = None) -> Mapping[str, Any] | None:
+        return self._invoke("get_equity_orders", account_number=str(account_number), state=state)
 
 
 def authorized_readonly_fetcher(*, transport: Any | None = None, account_number: str | None = None) -> ReadOnlyFetcher:

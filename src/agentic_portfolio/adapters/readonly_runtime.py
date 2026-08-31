@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Mapping
 from urllib.request import Request
 
-from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable
+from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable, LiveErrorCode
 from agentic_portfolio.adapters.readonly_mcp_auth import LOGIN_HINT, load_or_refresh_access_token
 from agentic_portfolio.adapters.robinhood_read import (
     CLASSIFICATION_READ_TOOLS,
@@ -105,8 +105,16 @@ def _read_token(*, environ: Mapping[str, str]) -> tuple[str, str | None]:
     if access:
         return access, None
     if oauth_error:
-        return "", oauth_error
-    return "", f"{READONLY_MCP_UNREACHABLE}: authorized Robinhood MCP token is not configured ({LOGIN_HINT})"
+        code = (
+            LiveErrorCode.OAUTH_REFRESH_FAILED
+            if "refresh_token" in oauth_error or "expired" in oauth_error.lower()
+            else LiveErrorCode.OAUTH_TOKEN_UNAVAILABLE
+        )
+        return "", f"{code}: {oauth_error}"
+    return "", (
+        f"{LiveErrorCode.OAUTH_TOKEN_UNAVAILABLE}: {READONLY_MCP_UNREACHABLE}: "
+        f"authorized Robinhood MCP token is not configured ({LOGIN_HINT})"
+    )
 
 
 def is_forbidden_observation_tool(tool: str) -> bool:
@@ -191,12 +199,12 @@ def unwrap_mcp_tool_result(payload: Any) -> Any:
             message = err.get("message") or err
         else:
             message = err
-        raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: {message}")
+        raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: {message}", code=LiveErrorCode.MCP_TOOLS_CALL_FAILED)
     result = data.get("result", data)
     if not isinstance(result, Mapping):
         return result
     if result.get("isError"):
-        raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: tool error")
+        raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: tool error", code=LiveErrorCode.MCP_TOOLS_CALL_FAILED)
     structured = result.get("structuredContent")
     if isinstance(structured, Mapping):
         return dict(structured)
@@ -222,16 +230,22 @@ def unwrap_mcp_tool_result(payload: Any) -> Any:
 def _parse_http_body(raw: bytes, content_type: str) -> dict[str, Any]:
     text = raw.decode("utf-8", errors="replace")
     ctype = (content_type or "").lower()
-    if "text/event-stream" in ctype or text.lstrip().startswith(("event:", "data:")):
-        for line in text.splitlines():
-            if line.startswith("data:"):
-                chunk = line[5:].strip()
-                if chunk:
-                    return json.loads(chunk)
-        return {}
-    if not text.strip():
-        return {}
-    return json.loads(text)
+    try:
+        if "text/event-stream" in ctype or text.lstrip().startswith(("event:", "data:")):
+            for line in text.splitlines():
+                if line.startswith("data:"):
+                    chunk = line[5:].strip()
+                    if chunk:
+                        return json.loads(chunk)
+            return {}
+        if not text.strip():
+            return {}
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise LiveDataUnavailable(
+            f"{READONLY_MCP_UNREACHABLE}: MCP response is not JSON",
+            code=LiveErrorCode.MCP_TOOLS_CALL_FAILED,
+        ) from exc
 
 
 class StreamableHttpMcpTransport:
@@ -244,6 +258,7 @@ class StreamableHttpMcpTransport:
         *,
         timeout: float = 30.0,
         post: Any | None = None,
+        refresh_token_fn: Any | None = None,
     ) -> None:
         self.url = str(url).rstrip("/")
         self._token = token
@@ -252,6 +267,12 @@ class StreamableHttpMcpTransport:
         self._next_id = 0
         self._initialized = False
         self._post = post or self._default_post
+        self._refresh_token_fn = refresh_token_fn
+
+    def update_token(self, token: str) -> None:
+        self._token = token
+        self.session_id = None
+        self._initialized = False
 
     def _headers(self) -> dict[str, str]:
         headers = {
@@ -273,29 +294,84 @@ class StreamableHttpMcpTransport:
         except urllib.error.HTTPError as exc:
             headers = {str(k): str(v) for k, v in (exc.headers.items() if exc.headers else [])}
             return int(exc.code), headers, exc.read() or b""
+        except TimeoutError as exc:
+            raise LiveDataUnavailable(
+                f"{READONLY_MCP_UNREACHABLE}: MCP HTTP timeout",
+                code=LiveErrorCode.MCP_HTTP_TIMEOUT,
+            ) from exc
         except urllib.error.URLError as exc:
-            raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: HTTP transport failed: {exc.reason}") from exc
+            reason = exc.reason
+            if isinstance(reason, TimeoutError) or "timed out" in str(reason).lower():
+                raise LiveDataUnavailable(
+                    f"{READONLY_MCP_UNREACHABLE}: MCP HTTP timeout: {reason}",
+                    code=LiveErrorCode.MCP_HTTP_TIMEOUT,
+                ) from exc
+            raise LiveDataUnavailable(
+                f"{READONLY_MCP_UNREACHABLE}: HTTP transport failed: {reason}",
+                code=LiveErrorCode.MCP_TOOLS_CALL_FAILED,
+            ) from exc
 
-    def _rpc(self, method: str, params: Mapping[str, Any] | None = None, *, notification: bool = False) -> Any:
+    def _try_refresh_token(self) -> bool:
+        if not callable(self._refresh_token_fn):
+            return False
+        try:
+            token = self._refresh_token_fn()
+        except LiveDataUnavailable:
+            return False
+        except Exception:  # noqa: BLE001
+            return False
+        if not str(token or "").strip():
+            return False
+        self.update_token(str(token).strip())
+        return True
+
+    def _http_status_error(self, status: int, method: str) -> LiveDataUnavailable:
+        if status == 401:
+            return LiveDataUnavailable(
+                f"{READONLY_MCP_UNREACHABLE}: MCP HTTP 401 for {method}",
+                code=LiveErrorCode.MCP_HTTP_401,
+            )
+        if method == "initialize":
+            return LiveDataUnavailable(
+                f"{READONLY_MCP_UNREACHABLE}: MCP HTTP {status} for {method}",
+                code=LiveErrorCode.MCP_INITIALIZE_FAILED,
+            )
+        return LiveDataUnavailable(
+            f"{READONLY_MCP_UNREACHABLE}: MCP HTTP {status} for {method}",
+            code=LiveErrorCode.MCP_HTTP_ERROR if status >= 400 else LiveErrorCode.MCP_TOOLS_CALL_FAILED,
+        )
+
+    def _rpc(self, method: str, params: Mapping[str, Any] | None = None, *, notification: bool = False, _retried: bool = False) -> Any:
         self._next_id += 1
         body: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
         if not notification:
             body["id"] = self._next_id
         if params is not None:
             body["params"] = dict(params)
-        status, headers, raw = self._post(body)
+        try:
+            status, headers, raw = self._post(body)
+        except TimeoutError as exc:
+            raise LiveDataUnavailable(
+                f"{READONLY_MCP_UNREACHABLE}: MCP HTTP timeout",
+                code=LiveErrorCode.MCP_HTTP_TIMEOUT,
+            ) from exc
         session = headers.get("Mcp-Session-Id") or headers.get("mcp-session-id")
         if session:
             self.session_id = session
+        if status == 401 and not _retried and self._try_refresh_token():
+            if method != "initialize" and not self._initialized:
+                self.initialize()
+            return self._rpc(method, params, notification=notification, _retried=True)
         if status >= 400:
-            raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: MCP HTTP {status} for {method}")
+            raise self._http_status_error(status, method)
         if notification:
             return None
         parsed = _parse_http_body(raw, headers.get("Content-Type") or headers.get("content-type") or "")
         if isinstance(parsed, Mapping) and parsed.get("error"):
             err = parsed["error"]
             message = err.get("message") if isinstance(err, Mapping) else err
-            raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: {message}")
+            code = LiveErrorCode.MCP_INITIALIZE_FAILED if method == "initialize" else LiveErrorCode.MCP_TOOLS_CALL_FAILED
+            raise LiveDataUnavailable(f"{READONLY_MCP_UNREACHABLE}: {message}", code=code)
         return unwrap_mcp_tool_result(parsed) if method == "tools/call" else parsed
 
     def initialize(self) -> None:
@@ -392,6 +468,27 @@ def reconnect_readonly_broker_runtime(
     return bootstrap_readonly_broker_runtime(environ=environ, account_number=account_number, force=True)
 
 
+def _make_http_transport(url: str, token: str, *, environ: Mapping[str, str]) -> StreamableHttpMcpTransport:
+    def refresh() -> str:
+        access, error = load_or_refresh_access_token(environ=environ, force_refresh=True)
+        if not access:
+            raise LiveDataUnavailable(
+                error or f"{READONLY_MCP_UNREACHABLE}: refresh_token grant failed",
+                code=LiveErrorCode.OAUTH_REFRESH_FAILED,
+            )
+        return access
+
+    return StreamableHttpMcpTransport(url, token, refresh_token_fn=refresh)
+
+
+def _coded_error(exc: BaseException, *, default: str = LiveErrorCode.MCP_INITIALIZE_FAILED) -> str:
+    code = getattr(exc, "code", None) or default
+    text = str(exc)
+    if text.startswith(str(code)):
+        return text
+    return f"{code}: {text}"
+
+
 def bootstrap_readonly_broker_runtime(
     *,
     transport: Any | None = None,
@@ -414,25 +511,41 @@ def bootstrap_readonly_broker_runtime(
     if token_error:
         return _bind(None, error=token_error)
     url = resolve_readonly_mcp_url(environ=env)
-    http = StreamableHttpMcpTransport(url, token)
+    http = _make_http_transport(url, token, environ=env)
     try:
         http.initialize()
     except LiveDataUnavailable as exc:
-        if "401" not in str(exc):
-            return _bind(None, error=str(exc))
+        if getattr(exc, "code", None) != LiveErrorCode.MCP_HTTP_401 and "401" not in str(exc):
+            return _bind(None, error=_coded_error(exc))
         refreshed, refresh_error = load_or_refresh_access_token(environ=env, force_refresh=True)
         if not refreshed:
-            return _bind(None, error=refresh_error or str(exc))
-        http = StreamableHttpMcpTransport(url, refreshed)
+            return _bind(
+                None,
+                error=(
+                    f"{LiveErrorCode.OAUTH_REFRESH_FAILED}: {refresh_error}"
+                    if refresh_error
+                    else _coded_error(exc, default=LiveErrorCode.OAUTH_REFRESH_FAILED)
+                ),
+            )
+        http = _make_http_transport(url, refreshed, environ=env)
         try:
             http.initialize()
         except LiveDataUnavailable as retry_exc:
-            return _bind(None, error=str(retry_exc))
+            return _bind(None, error=_coded_error(retry_exc))
         except Exception as retry_exc:
             return _bind(
                 None,
-                error=f"{READONLY_MCP_UNREACHABLE}: authorized Robinhood MCP initialize failed: {type(retry_exc).__name__}: {retry_exc}",
+                error=(
+                    f"{LiveErrorCode.MCP_INITIALIZE_FAILED}: {READONLY_MCP_UNREACHABLE}: "
+                    f"authorized Robinhood MCP initialize failed: {type(retry_exc).__name__}: {retry_exc}"
+                ),
             )
     except Exception as exc:
-        return _bind(None, error=f"{READONLY_MCP_UNREACHABLE}: authorized Robinhood MCP initialize failed: {type(exc).__name__}: {exc}")
+        return _bind(
+            None,
+            error=(
+                f"{LiveErrorCode.MCP_INITIALIZE_FAILED}: {READONLY_MCP_UNREACHABLE}: "
+                f"authorized Robinhood MCP initialize failed: {type(exc).__name__}: {exc}"
+            ),
+        )
     return _bind(http, account_number=account_number)

@@ -5,11 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
-from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable
+from agentic_portfolio.adapters.portfolio_facts import live_error_code_of, redact_live_error
 from agentic_portfolio.adapters.readonly_runtime import (
     ReadonlyBrokerRuntime,
     bootstrap_readonly_broker_runtime,
-    reset_readonly_broker_runtime,
 )
 from agentic_portfolio.agent.activity import log_activity
 from agentic_portfolio.notify import NotificationEngine, NotificationKind
@@ -40,10 +39,17 @@ class ConnectionManager:
         return stamp
 
     def snapshot(self) -> dict[str, Any]:
+        error = redact_live_error(self.last_error) if self.last_error else None
+        code = None
+        if error:
+            token = error.split(":", 1)[0].strip()
+            if token.isupper() and "_" in token:
+                code = token
         return {
             "connected": self.connected,
             "bound": bool(self.runtime and self.runtime.bound),
-            "error": self.last_error,
+            "error": error,
+            "error_code": code,
             "mode": "READ_ONLY",
             "last_change_at": self.last_change_at,
             "LIVE_ORDER_PLACEMENT": False,
@@ -56,13 +62,15 @@ class ConnectionManager:
         except Exception as exc:  # noqa: BLE001 — fail closed, stay alive
             self.runtime = None
             self.connected = False
-            self.last_error = f"{type(exc).__name__}: {exc}"
+            self.last_error = f"{live_error_code_of(exc)}: {redact_live_error(str(exc))}"
             self.last_change_at = self.now().isoformat()
             self._lost(prior)
             raise LiveDataUnavailable(self.last_error) from exc
         bound = bool(self.runtime and self.runtime.bound)
         self.connected = bound
         self.last_error = None if bound else (self.runtime.initialization_error if self.runtime else "not bound")
+        if self.last_error:
+            self.last_error = redact_live_error(self.last_error)
         self.last_change_at = self.now().isoformat()
         if bound and not prior:
             self._recovered()

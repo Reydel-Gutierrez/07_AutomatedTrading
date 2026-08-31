@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import re
+from pathlib import Path
 
 from agentic_portfolio.adapters.readonly_mcp_auth import oauth_home, oauth_store_path
 from agentic_portfolio.dashboard.app import PUBLIC_ENDPOINTS, create_app
@@ -156,6 +158,17 @@ def test_oauth_store_is_per_user_home_on_linux(monkeypatch, tmp_path):
     assert xdg == tmp_path / "xdg" / "agentic-portfolio" / "readonly-mcp"
     override = oauth_home(environ={"AGENTIC_READONLY_MCP_HOME": str(tmp_path / "oauth-home")})
     assert override == tmp_path / "oauth-home"
+    systemd = oauth_home(environ={"HOME": "/home/agentic", "USER": "agentic", "PATH": "/usr/bin"})
+    assert systemd == Path("/home/agentic") / ".agentic-portfolio" / "readonly-mcp"
+    stray_windows = oauth_home(
+        environ={
+            "HOME": "/home/agentic",
+            "LOCALAPPDATA": "C:\\Users\\developer\\AppData\\Local",
+            "USERPROFILE": "C:\\Users\\developer",
+        }
+    )
+    if os.name != "nt":
+        assert stray_windows == Path("/home/agentic") / ".agentic-portfolio" / "readonly-mcp"
 
 
 def test_dashboard_stays_on_localhost():
@@ -198,7 +211,16 @@ def test_healthz_is_public_and_reports_placement_disabled(tmp_path):
     assert payload["LIVE_ORDER_PLACEMENT"] is False
 
 
-def test_run_service_once_does_not_wire_paid_ai():
+def test_pi_smoke_script_is_read_only():
+    path = project_root() / "scripts" / "pi_production_smoke.py"
+    text = path.read_text(encoding="utf-8")
+    assert path.is_file()
+    assert "Never places" in text
+    assert "LIVE_ORDER_PLACEMENT" in text
+    assert "sudo -u agentic" in text
+    assert "place_equity_order(" not in text
+    assert "review_equity_order(" not in text
+    assert "cancel_equity_order(" not in text
     source = RUN_SERVICE.read_text(encoding="utf-8")
     assert "ai_call_fn" not in source
     assert "OPENAI_API_KEY" not in source

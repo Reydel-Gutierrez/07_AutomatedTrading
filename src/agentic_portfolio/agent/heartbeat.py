@@ -57,6 +57,8 @@ def write_health(
     cycles: int,
     runtime_mode: str = "LIVE",
     config: dict[str, Any] | None = None,
+    live_error: dict[str, Any] | None = None,
+    job_skips: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
@@ -81,6 +83,8 @@ def write_health(
         "LIVE_ORDER_PLACEMENT": False,
         "auto_execution": False,
         "live_trade_actions_allowed": False,
+        "live_error": live_error,
+        "job_skips": list(job_skips or []),
     }
     atomic_write_json(health_path(root, config=config), payload)
     return payload

@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable, Mapping
 
+from agentic_portfolio.discovery.live_readonly import LIVE_DISCOVERY_SKIP_REASON
+from agentic_portfolio.adapters.portfolio_facts import live_error_code_of, redact_live_error
 from agentic_portfolio.agent.activity import log_activity
 from agentic_portfolio.agent.connection import ConnectionManager
 from agentic_portfolio.agent.safety import assert_execution_disabled
@@ -58,6 +60,20 @@ def _ok(job: str, **extra: Any) -> dict[str, Any]:
     return payload
 
 
+def _skipped(services: AgentServices, job: str, reason: str, **extra: Any) -> dict[str, Any]:
+    """Intentional skip — visible in activity/health. Never a silent OK."""
+    log_activity(services.root, "JOB_SKIPPED", job=job, reason=reason)
+    payload = {
+        "job": job,
+        "status": "SKIPPED",
+        "skipped": reason,
+        "placement_attempted": False,
+        "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+    }
+    payload.update(extra)
+    return payload
+
+
 def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
     def wrap(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
         def inner(ctx: dict[str, Any]) -> dict[str, Any]:
@@ -106,10 +122,17 @@ def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any
 
 def _broker(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
     try:
-        services.connection.ensure(force=not services.connection.connected)
+        services.connection.ensure(force=True)
         return _ok("BROKER_RECONNECT", connected=True)
     except Exception as exc:  # noqa: BLE001
-        return {"job": "BROKER_RECONNECT", "status": "FAIL_CLOSED", "connected": False, "reason": str(exc), "placement_attempted": False}
+        return {
+            "job": "BROKER_RECONNECT",
+            "status": "FAIL_CLOSED",
+            "connected": False,
+            "reason": redact_live_error(str(exc)),
+            "error_code": live_error_code_of(exc),
+            "placement_attempted": False,
+        }
 
 
 def _expire_approvals(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
@@ -127,7 +150,7 @@ def _watch_cleanup(services: AgentServices, ctx: dict[str, Any]) -> dict[str, An
 def _refresh_account(services: AgentServices, ctx: dict[str, Any], job: str | None = None) -> dict[str, Any]:
     name = job or "LIVE_ACCOUNT_REFRESH"
     if services.refresh_fn is None and services.context_fn is None:
-        return _ok(name, skipped="no_refresh")
+        return _skipped(services, name, "no_refresh")
     try:
         if services.refresh_fn is not None:
             services.last_refresh = services.refresh_fn()
@@ -135,8 +158,15 @@ def _refresh_account(services: AgentServices, ctx: dict[str, Any], job: str | No
         elif services.context_fn is not None:
             services.last_context = services.context_fn()
     except Exception as exc:  # noqa: BLE001 — fail closed; keep the runtime alive
-        log_activity(services.root, "LIVE_REFRESH_FAILED", job=name, reason=str(exc))
-        return {"job": name, "status": "FAIL_CLOSED", "reason": str(exc), "placement_attempted": False}
+        reason = redact_live_error(str(exc))
+        log_activity(services.root, "LIVE_REFRESH_FAILED", job=name, reason=reason, error_code=live_error_code_of(exc))
+        return {
+            "job": name,
+            "status": "FAIL_CLOSED",
+            "reason": reason,
+            "error_code": live_error_code_of(exc),
+            "placement_attempted": False,
+        }
     nav = getattr(services.last_context, "current_nav", None)
     cash = getattr(services.last_context, "cash", None)
     buying_power = getattr(services.last_context, "buying_power", None)
@@ -155,16 +185,21 @@ def _portfolio_review(services: AgentServices, ctx: dict[str, Any], job: str) ->
 def _quotes(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
     session = _session(ctx)
     if not session.regular_hours_open:
-        return _ok("QUOTE_REFRESH", skipped="off_hours_liquidity_not_executable")
+        return _skipped(services, "QUOTE_REFRESH", "off_hours_liquidity_not_executable")
     tickers = [item.ticker for item in services.watch_store.active()]
     if services.quotes_fn is None:
-        return _ok("QUOTE_REFRESH", tickers=tickers, skipped="no_quotes_fn")
+        return _skipped(services, "QUOTE_REFRESH", "no_quotes_fn", tickers=tickers)
     quotes = services.quotes_fn(tickers)
     return _ok("QUOTE_REFRESH", count=len(quotes or {}))
 
 
 def _discover(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
     rows = []
+    job = ctx.get("job") or "CANDIDATE_DISCOVERY"
+    if services.candidates_fn is None:
+        if job == "CANDIDATE_DISCOVERY":
+            return _skipped(services, job, LIVE_DISCOVERY_SKIP_REASON)
+        return _ok(job, created=0, count=0, skipped=LIVE_DISCOVERY_SKIP_REASON)
     if services.candidates_fn:
         try:
             rows = list(services.candidates_fn() or [])

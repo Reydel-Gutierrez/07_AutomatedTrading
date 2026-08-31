@@ -11,6 +11,7 @@ from uuid import uuid4
 from agentic_portfolio.adapters.portfolio_facts import (
     LiveAccountError,
     LiveDataUnavailable,
+    LiveErrorCode,
     PortfolioFetcher,
     confirm_agentic_account,
     parse_open_orders,
@@ -162,22 +163,48 @@ def refresh_live_portfolio(
     paper_book = PaperFillStore(base).current_book() or {}
     paper_ctx = dict(paper_book.get("context") or {})
 
-    accounts_payload = fetcher.get_accounts()
+    try:
+        accounts_payload = fetcher.get_accounts()
+    except LiveDataUnavailable:
+        raise
+    except AttributeError as exc:
+        raise LiveDataUnavailable(
+            f"production adapter is missing get_accounts: {exc}",
+            code=LiveErrorCode.MCP_GET_ACCOUNTS_FAILED,
+        ) from exc
+    except Exception as exc:
+        raise LiveDataUnavailable(f"get_accounts failed: {type(exc).__name__}: {exc}", code=LiveErrorCode.MCP_GET_ACCOUNTS_FAILED) from exc
     used.append("get_accounts")
     if not accounts_payload:
-        raise LiveDataUnavailable("get_accounts unavailable")
-    account = confirm_agentic_account(accounts_payload, expected_number=expected, rules=rules)
+        raise LiveDataUnavailable("get_accounts unavailable", code=LiveErrorCode.MCP_GET_ACCOUNTS_FAILED)
+    try:
+        account = confirm_agentic_account(accounts_payload, expected_number=expected, rules=rules)
+    except LiveAccountError as exc:
+        raise LiveAccountError(str(exc), code=LiveErrorCode.ACCOUNT_IDENTITY_MISMATCH) from exc
 
-    portfolio_payload = fetcher.get_portfolio(expected)
+    try:
+        portfolio_payload = fetcher.get_portfolio(expected)
+    except LiveDataUnavailable:
+        raise
+    except Exception as exc:
+        raise LiveDataUnavailable(f"get_portfolio failed: {type(exc).__name__}: {exc}", code=LiveErrorCode.MCP_GET_PORTFOLIO_FAILED) from exc
     used.append("get_portfolio")
     if not portfolio_payload:
-        raise LiveDataUnavailable("get_portfolio unavailable")
-    book = parse_portfolio(portfolio_payload)
+        raise LiveDataUnavailable("get_portfolio unavailable", code=LiveErrorCode.MCP_GET_PORTFOLIO_FAILED)
+    try:
+        book = parse_portfolio(portfolio_payload)
+    except LiveDataUnavailable as exc:
+        raise LiveDataUnavailable(str(exc), code=exc.code if exc.code != LiveErrorCode.LIVE_DATA_UNAVAILABLE else LiveErrorCode.MCP_GET_PORTFOLIO_FAILED) from exc
 
-    positions_payload = fetcher.get_equity_positions(expected)
+    try:
+        positions_payload = fetcher.get_equity_positions(expected)
+    except LiveDataUnavailable:
+        raise
+    except Exception as exc:
+        raise LiveDataUnavailable(f"get_equity_positions failed: {type(exc).__name__}: {exc}", code=LiveErrorCode.MCP_GET_POSITIONS_FAILED) from exc
     used.append("get_equity_positions")
     if not positions_payload:
-        raise LiveDataUnavailable("get_equity_positions unavailable")
+        raise LiveDataUnavailable("get_equity_positions unavailable", code=LiveErrorCode.MCP_GET_POSITIONS_FAILED)
 
     quotes_payload = None
     spy = None
@@ -188,14 +215,27 @@ def refresh_live_portfolio(
         quotes_payload = fetcher.get_equity_quotes(quote_symbols)
         used.append("get_equity_quotes")
         spy = parse_spy(quotes_payload)
+    except LiveDataUnavailable as exc:
+        quotes_payload = None
+        if symbols:
+            raise LiveDataUnavailable(
+                str(exc) if str(exc) else "LIVE quotes unavailable for open positions",
+                code=exc.code if exc.code != LiveErrorCode.LIVE_DATA_UNAVAILABLE else LiveErrorCode.MCP_QUOTES_FAILED,
+            ) from exc
+        spy = None
     except Exception:
         quotes_payload = None
         if symbols:
-            raise LiveDataUnavailable("LIVE quotes unavailable for open positions") from None
+            raise LiveDataUnavailable("LIVE quotes unavailable for open positions", code=LiveErrorCode.MCP_QUOTES_FAILED) from None
 
     sleeves = sleeves or SleeveRegistry(base / "state" / "sleeve_registry.json")
     theses = theses or ThesisRegistry(base / "state" / "thesis_registry.json")
-    positions = parse_positions(positions_payload, quotes=quotes_payload, sleeves=sleeves, theses=theses)
+    try:
+        positions = parse_positions(positions_payload, quotes=quotes_payload, sleeves=sleeves, theses=theses)
+    except LiveDataUnavailable as exc:
+        if "market value unavailable" in str(exc).lower():
+            raise LiveDataUnavailable(str(exc), code=LiveErrorCode.MCP_QUOTES_FAILED) from exc
+        raise LiveDataUnavailable(str(exc), code=exc.code if getattr(exc, "code", None) else LiveErrorCode.MCP_GET_POSITIONS_FAILED) from exc
 
     orders_payload = None
     open_orders = []
@@ -259,38 +299,47 @@ def refresh_live_portfolio(
     assert_live_isolated(snapshot, paper_book)
 
     if persist:
-        store.save_snapshot(snapshot_id, snapshot)
-        save_hwm_state(context, store.hwm_path())
-        store.save_mcp(
-            {
-                "observed_at": stamp.isoformat(),
-                "account_number": expected,
-                "accounts": accounts_payload,
-                "portfolio": portfolio_payload,
-                "positions": positions_payload,
-                "quotes": quotes_payload,
-                "orders": orders_payload,
-                "mcp_tools_used": snapshot["mcp_tools_used"],
-                "mcp_not_called": snapshot["mcp_not_called"],
-            }
-        )
-        append_jsonl(
-            {
-                "type": "LIVE_PORTFOLIO_REFRESHED",
-                "snapshot_id": snapshot_id,
-                "account_number": expected,
-                "nav": context.current_nav,
-                "cash": context.cash,
-                "buying_power": context.buying_power,
-                "holdings_count": context.holdings_count,
-                "risk_state": context.risk_state.value if isinstance(context.risk_state, RiskState) else context.risk_state,
-                "source_of_truth": LIVE_SOURCE_OF_TRUTH,
-                "live_order_placement_enabled": False,
-                "mcp_tools_used": snapshot["mcp_tools_used"],
-                "mcp_not_called": snapshot["mcp_not_called"],
-            },
-            journal or journal_path(base),
-        )
+        try:
+            store.save_snapshot(snapshot_id, snapshot)
+            save_hwm_state(context, store.hwm_path())
+            store.save_mcp(
+                {
+                    "observed_at": stamp.isoformat(),
+                    "account_number": expected,
+                    "accounts": accounts_payload,
+                    "portfolio": portfolio_payload,
+                    "positions": positions_payload,
+                    "quotes": quotes_payload,
+                    "orders": orders_payload,
+                    "mcp_tools_used": snapshot["mcp_tools_used"],
+                    "mcp_not_called": snapshot["mcp_not_called"],
+                }
+            )
+            append_jsonl(
+                {
+                    "type": "LIVE_PORTFOLIO_REFRESHED",
+                    "snapshot_id": snapshot_id,
+                    "account_number": expected,
+                    "nav": context.current_nav,
+                    "cash": context.cash,
+                    "buying_power": context.buying_power,
+                    "holdings_count": context.holdings_count,
+                    "risk_state": context.risk_state.value if isinstance(context.risk_state, RiskState) else context.risk_state,
+                    "source_of_truth": LIVE_SOURCE_OF_TRUTH,
+                    "live_order_placement_enabled": False,
+                    "mcp_tools_used": snapshot["mcp_tools_used"],
+                    "mcp_not_called": snapshot["mcp_not_called"],
+                },
+                journal or journal_path(base),
+            )
+            store.clear_error()
+        except LiveDataUnavailable:
+            raise
+        except OSError as exc:
+            raise LiveDataUnavailable(
+                f"LIVE snapshot persist failed: {exc}",
+                code=LiveErrorCode.LIVE_SNAPSHOT_PERSIST_FAILED,
+            ) from exc
 
     return LiveRefreshResult(
         snapshot_id=snapshot_id,

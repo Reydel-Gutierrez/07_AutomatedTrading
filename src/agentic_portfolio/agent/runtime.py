@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable
+from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable, live_error_code_of, redact_live_error, watch_quotes_from_payload
 from agentic_portfolio.agent.activity import log_activity
 from agentic_portfolio.agent.connection import ConnectionManager
 from agentic_portfolio.agent.handlers import AgentServices, build_handlers
@@ -17,6 +17,7 @@ from agentic_portfolio.agent.orchestrator import JobOrchestrator
 from agentic_portfolio.agent.safety import assert_execution_disabled
 from agentic_portfolio.agent.session import classify_market_phase
 from agentic_portfolio.live.engine import refresh_live_portfolio
+from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.live_approval import LiveApprovalEngine, LiveApprovalStore
 from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
 from agentic_portfolio.paths import project_root
@@ -32,11 +33,18 @@ def refresh_live_from_connection(
     now: datetime | None = None,
 ) -> Any:
     """Ensure the bound READ_ONLY runtime, then persist a LIVE snapshot. Never places."""
-    bound = connection.ensure()
-    fetcher = bound.fetcher
-    if fetcher is None:
-        raise LiveDataUnavailable("bound Robinhood runtime has no fetcher")
-    return refresh_live_portfolio(fetcher, now=now, root=root)
+    store = LivePortfolioStore(root)
+    try:
+        bound = connection.ensure()
+        fetcher = bound.fetcher
+        if fetcher is None:
+            raise LiveDataUnavailable("bound Robinhood runtime has no fetcher")
+        result = refresh_live_portfolio(fetcher, now=now, root=root)
+        store.clear_error()
+        return result
+    except Exception as exc:  # noqa: BLE001 — persist the failing layer, then fail closed
+        store.save_error(live_error_code_of(exc), redact_live_error(str(exc)), observed_at=(now or datetime.now(timezone.utc)).isoformat())
+        raise
 
 
 class AgentRuntime:
@@ -90,6 +98,16 @@ class AgentRuntime:
             def refresh_live() -> Any:
                 return refresh_live_from_connection(self.connection, root=self.base, now=self.now())
 
+            def quotes_live(tickers: list[str]) -> dict[str, dict[str, Any]]:
+                if not tickers:
+                    return {}
+                bound = self.connection.ensure()
+                fetcher = bound.fetcher
+                if fetcher is None or not hasattr(fetcher, "get_equity_quotes"):
+                    raise LiveDataUnavailable("bound Robinhood runtime cannot fetch quotes")
+                payload = fetcher.get_equity_quotes(list(tickers))
+                return watch_quotes_from_payload(payload)
+
             services = AgentServices(
                 root=self.base,
                 runtime_mode=self.runtime_mode,
@@ -101,6 +119,7 @@ class AgentRuntime:
                 connection=self.connection,
                 now_fn=self._now,
                 refresh_fn=refresh_live,
+                quotes_fn=quotes_live,
                 budget_exhausted=budget_exhausted,
                 ai_allowed=ai_allowed,
             )
@@ -183,6 +202,12 @@ class AgentRuntime:
         self.last_results = results
         self.cycles += 1
         budget = self._budget()
+        live_error = LivePortfolioStore(self.base).last_error()
+        job_skips = [
+            {"job": row.get("job"), "skipped": row.get("skipped"), "status": row.get("status"), "reason": row.get("reason")}
+            for row in results
+            if row.get("status") == "SKIPPED" or row.get("skipped")
+        ]
         write_health(
             self.base,
             started_at=self.started_at or stamp.isoformat(),
@@ -195,6 +220,8 @@ class AgentRuntime:
             cycles=self.cycles,
             runtime_mode=self.runtime_mode.value,
             config=self.config,
+            live_error=live_error,
+            job_skips=job_skips,
         )
         return results
 

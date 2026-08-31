@@ -25,6 +25,7 @@ ACTIVITY_KINDS = (
     "LIVE_REFRESH_FAILED",
     "JOB_ERROR",
     "JOB_OK",
+    "JOB_SKIPPED",
     "AI_SKIPPED",
     "WATCH_UPSERTED",
 )
