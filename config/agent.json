@@ -6,6 +6,7 @@
     "auto_execution": false,
     "live_trade_actions_allowed": false,
     "LIVE_ORDER_PLACEMENT": false,
+    "require_human_approval": true,
     "approve_does_not_place": true,
     "continue_when_ai_exhausted": true,
     "continue_on_job_failure": true
@@ -34,7 +35,8 @@
   },
   "approval": {
     "ttl_hours": 24,
-    "approve_status": "APPROVED_AWAITING_EXECUTION_IMPLEMENTATION"
+    "approve_status": "APPROVED",
+    "execution_disabled_status": "APPROVED_EXECUTION_DISABLED"
   },
   "ai": {
     "skip_when_exhausted": true,

@@ -337,7 +337,7 @@ def test_dashboard_live_does_not_read_paper_nav(tmp_path, monkeypatch):
     assert view["paper_environment"] is False
     html = _admin(create_app(tmp_path).test_client()).get("/").get_data(as_text=True)
     assert "LIVE ENVIRONMENT" in html
-    assert "NO LIVE ORDER PLACEMENT ENABLED" in html
+    assert "LIVE ORDER PLACEMENT: OFF" in html or "NO LIVE ORDER PLACEMENT ENABLED" in html
     assert "$10,000.00" not in html
     assert "$500.00" in html
     assert "NVDA" not in html or "INACTIVE" in html

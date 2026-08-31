@@ -139,7 +139,7 @@ def run_smoke(
     cfg = load_ai_config()
     cap = monthly_cap(cfg)
     add("ai_monthly_cap_10", float(cap) == 10.0, str(cap))
-    add("live_discovery_not_static", LIVE_DISCOVERY_WIRED is False, "no_live_discovery")
+    add("live_discovery_wired", LIVE_DISCOVERY_WIRED is True, "LIVE_DISCOVERY_WIRED")
 
     if not connect:
         return checks

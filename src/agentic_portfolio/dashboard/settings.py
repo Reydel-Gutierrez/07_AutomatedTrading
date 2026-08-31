@@ -7,7 +7,7 @@ from typing import Any, Mapping
 
 from agentic_portfolio.dashboard.safety import DashboardSafetyError, assert_localhost_bind
 from agentic_portfolio.policy import load_dashboard_config
-from agentic_portfolio.runtime import get_active_runtime
+from agentic_portfolio.runtime import get_active_runtime, live_placement_enabled
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 3100
@@ -15,7 +15,8 @@ PAPER_BOOK_LABEL = "PAPER BOOK"
 LIVE_ACCOUNT_LABEL = "LIVE ACCOUNT (read-only)"
 LIVE_ACCOUNT_SHORT = "LIVE ACCOUNT"
 PAPER_BOOK_INACTIVE = "INACTIVE / TEST ENVIRONMENT"
-NO_LIVE_PLACEMENT_BANNER = "NO LIVE ORDER PLACEMENT ENABLED"
+NO_LIVE_PLACEMENT_BANNER = "LIVE ORDER PLACEMENT: OFF"
+LIVE_PLACEMENT_ON_BANNER = "LIVE ORDER PLACEMENT: ON"
 LIVE_DATA_UNAVAILABLE = "LIVE DATA UNAVAILABLE"
 
 
@@ -101,6 +102,7 @@ def resolve_ui_flags(
     stale_key = env_names.get("allow_stale_packet_decisions") or "DASHBOARD_ALLOW_STALE_PACKET_DECISIONS"
     environment = get_active_runtime(environ=env, dashboard_config=cfg).value
     live = environment == "LIVE"
+    placement = live_placement_enabled(environ=env)
     return {
         "environment": environment,
         "active_runtime": environment,
@@ -113,8 +115,8 @@ def resolve_ui_flags(
         "live_account_status": "ACTIVE" if live else "READ-ONLY",
         "paper_book_status": PAPER_BOOK_INACTIVE if live else "ACTIVE",
         "book_kind": "live" if live else "paper",
-        "live_order_placement_enabled": False,
-        "no_live_placement_banner": NO_LIVE_PLACEMENT_BANNER,
+        "live_order_placement_enabled": placement,
+        "no_live_placement_banner": LIVE_PLACEMENT_ON_BANNER if placement else NO_LIVE_PLACEMENT_BANNER,
         "live_data_unavailable_label": LIVE_DATA_UNAVAILABLE,
         "allow_paper_packet_decisions": _flag(env, paper_key, cfg, "allow_paper_packet_decisions", False),
         "allow_demo_packet_decisions": _flag(env, demo_key, cfg, "allow_demo_packet_decisions", False),

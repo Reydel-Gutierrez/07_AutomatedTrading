@@ -76,6 +76,13 @@ def load_ai_config(path: Path | None = None) -> dict[str, Any]:
     return json.loads(p.read_text(encoding="utf-8"))
 
 
+def load_live_execution_config(path: Path | None = None) -> dict[str, Any]:
+    p = path or (project_root() / "config" / "live_execution.json")
+    if not p.exists():
+        return {"live_order_placement_enabled": False, "require_human_approval": True, "auto_execution": False}
+    return json.loads(p.read_text(encoding="utf-8"))
+
+
 def load_pipeline_config(path: Path | None = None) -> dict[str, Any]:
     p = path or (project_root() / "config" / "pipeline.json")
     return json.loads(p.read_text(encoding="utf-8"))

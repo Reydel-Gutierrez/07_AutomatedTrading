@@ -41,7 +41,8 @@ Keep these modules separate:
 | Journal | Append-only records |
 | 24/7 Agent Runtime | Long-running process (`src/agentic_portfolio/agent/`). Stays alive on weekends/holidays. Internal orchestrator selects jobs from market phase. One failed job cannot kill the service. |
 | Persistent Watch / Thesis | LIVE watch items (`src/agentic_portfolio/watch/`). Survive close and restart. Off-hours AI may only write CONDITIONAL next-session plans. |
-| LIVE Approval Queue | Human queue (`src/agentic_portfolio/live_approval/`). APPROVE → `APPROVED_AWAITING_EXECUTION_IMPLEMENTATION`. Does not place. |
+| LIVE Approval Queue | Human queue (`src/agentic_portfolio/live_approval/`). APPROVE is mandatory. Default → `APPROVED_EXECUTION_DISABLED`. |
+| Live Order Executor | Sole broker mutation surface (`src/agentic_portfolio/live_execution/`). Send-time revalidation → review → place (only if `LIVE_ORDER_PLACEMENT=true`) → reconcile. |
 | Notifications | Dashboard events (`src/agentic_portfolio/notify/`). Sinks can be added later without changing trading logic. |
 
 The production application is a **24/7 autonomous portfolio-management service**, not a market-hours script. Raspberry Pi boot starts `scripts/run_service.py`: dashboard + agent runtime. The scheduler is only an internal orchestrator.

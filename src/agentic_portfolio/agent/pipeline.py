@@ -42,7 +42,7 @@ from agentic_portfolio.research.reasoner import ResearchReasoner
 from agentic_portfolio.research.store import ResearchStore
 from agentic_portfolio.research.types import ResearchConclusion, ResearchReport, ResearchStatus
 from agentic_portfolio.research.validate import ResearchValidationError
-from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, LIVE_SOURCE_OF_TRUTH, RuntimeMode, discovery_state_dir
+from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, LIVE_SOURCE_OF_TRUTH, RuntimeMode, discovery_state_dir, live_placement_enabled
 from agentic_portfolio.schemas import (
     Candidate,
     CandidateStatus,
@@ -626,7 +626,7 @@ class ResearchQueueWorker:
             "desired_allocation_pct": pct,
             "expected_resulting_position_pct": action.expected_resulting_position_pct,
             "holdings_count": context.holdings_count,
-            "LIVE_ORDER_PLACEMENT": False,
+            "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
         }
         gw = getattr(self._reasoner(), "last_result", None) or getattr(self._decision(), "last_result", None)
         item = self.approvals.create(

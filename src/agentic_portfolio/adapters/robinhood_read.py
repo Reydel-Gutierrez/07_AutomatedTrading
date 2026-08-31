@@ -131,6 +131,20 @@ MCP_TOOL_ARGUMENTS = {
     "get_equity_tradability": frozenset({"account_number", "symbols"}),
     "get_equity_fundamentals": frozenset({"symbols", "bounds"}),
     "search": frozenset({"query", "asset_type", "limit"}),
+    "get_scans": frozenset(),
+    "run_scan": frozenset({"scan_id"}),
+    "get_watchlists": frozenset(),
+    "get_watchlist_items": frozenset({"list_id"}),
+    "get_popular_watchlists": frozenset(),
+    "get_earnings_calendar": frozenset({"start_date", "days", "filter"}),
+    "get_earnings_results": frozenset({"symbol"}),
+    "get_equity_historicals": frozenset({"symbols", "start_time", "end_time", "interval", "bounds", "adjustment_type"}),
+    "get_equity_technical_indicators": frozenset({"symbol", "type", "interval", "start_time", "end_time", "bounds", "adjustment_type", "output", "period"}),
+    "get_equity_news": frozenset({"symbol", "limit", "cursor"}),
+    "get_financials": frozenset({"symbols", "period", "limit"}),
+    "get_indexes": frozenset({"symbols"}),
+    "get_index_quotes": frozenset({"instrument_ids"}),
+    "get_sec_filing_index": frozenset({"symbol", "form_type"}),
 }
 
 MCP_TOOL_REQUIRED = {
@@ -271,6 +285,69 @@ class AuthorizedMcpReadAdapter:
 
     def get_equity_orders(self, account_number: str, *, state: str | None = None) -> Mapping[str, Any] | None:
         return self._invoke("get_equity_orders", account_number=str(account_number), state=state)
+
+    def search(self, query: str, *, asset_type: str = "instrument", limit: int = 10) -> Mapping[str, Any] | None:
+        return self._invoke("search", query=str(query), asset_type=asset_type, limit=limit)
+
+    def quotes(self, symbols: list[str]) -> Mapping[str, Any] | None:
+        return self.get_equity_quotes(symbols)
+
+    def fundamentals(self, symbols: list[str]) -> Mapping[str, Any] | None:
+        return self._invoke("get_equity_fundamentals", symbols=as_symbol_list(symbols))
+
+    def financials(self, symbols: list[str], *, period: str = "quarterly", limit: int = 8) -> Mapping[str, Any] | None:
+        return self._invoke("get_financials", symbols=as_symbol_list(symbols), period=period, limit=limit)
+
+    def historicals(self, symbols: list[str], *, start_time: str, interval: str = "day") -> Mapping[str, Any] | None:
+        return self._invoke("get_equity_historicals", symbols=as_symbol_list(symbols), start_time=start_time, interval=interval)
+
+    def technicals(self, symbol: str, *, indicator: str, interval: str, start_time: str) -> Mapping[str, Any] | None:
+        return self._invoke("get_equity_technical_indicators", symbol=str(symbol).upper(), type=indicator, interval=interval, start_time=start_time)
+
+    def tradability(self, symbols: list[str]) -> Mapping[str, Any] | None:
+        return self._invoke("get_equity_tradability", account_number=self.account_number, symbols=as_symbol_list(symbols))
+
+    def earnings_calendar(self, *, days: int = 7, **kwargs: Any) -> Mapping[str, Any] | None:
+        return self._invoke("get_earnings_calendar", days=days, **kwargs)
+
+    def earnings_results(self, symbol: str) -> Mapping[str, Any] | None:
+        return self._invoke("get_earnings_results", symbol=str(symbol).upper())
+
+    def news(self, symbol: str, *, limit: int = 5) -> Mapping[str, Any] | None:
+        return self._invoke("get_equity_news", symbol=str(symbol).upper(), limit=limit)
+
+    def sec_index(self, symbol: str, *, form_type: list[str] | None = None) -> Mapping[str, Any] | None:
+        kwargs: dict[str, Any] = {"symbol": str(symbol).upper()}
+        if form_type:
+            kwargs["form_type"] = form_type
+        return self._invoke("get_sec_filing_index", **kwargs)
+
+    def scans(self) -> Mapping[str, Any] | None:
+        return self._invoke("get_scans")
+
+    def run_scan(self, scan_id: str) -> Mapping[str, Any] | None:
+        return self._invoke("run_scan", scan_id=str(scan_id))
+
+    def watchlists(self) -> Mapping[str, Any] | None:
+        return self._invoke("get_watchlists")
+
+    def watchlist_items(self, list_id: str) -> Mapping[str, Any] | None:
+        return self._invoke("get_watchlist_items", list_id=str(list_id))
+
+    def popular_watchlists(self) -> Mapping[str, Any] | None:
+        return self._invoke("get_popular_watchlists")
+
+    def indexes(self) -> Mapping[str, Any] | None:
+        return self._invoke("get_indexes")
+
+    def index_quotes(self, instrument_ids: list[str]) -> Mapping[str, Any] | None:
+        return self._invoke("get_index_quotes", instrument_ids=list(instrument_ids))
+
+    def portfolio(self) -> Mapping[str, Any] | None:
+        return self.get_portfolio(str(self.account_number))
+
+    def positions(self) -> Mapping[str, Any] | None:
+        return self.get_equity_positions(str(self.account_number))
 
 
 def authorized_readonly_fetcher(*, transport: Any | None = None, account_number: str | None = None) -> ReadOnlyFetcher:

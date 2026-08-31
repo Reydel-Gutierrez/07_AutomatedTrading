@@ -1,0 +1,86 @@
+"""Associate LIVE holdings with thesis / approval / broker order provenance."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+from agentic_portfolio.agent.persist import atomic_write_json, read_json
+from agentic_portfolio.live_execution.store import ExecutionStore
+from agentic_portfolio.paths import project_root
+from agentic_portfolio.runtime import RuntimeMode
+from agentic_portfolio.schemas import to_dict
+
+
+@dataclass
+class PositionLink:
+    symbol: str
+    thesis_id: str | None = None
+    approval_id: str | None = None
+    intent_id: str | None = None
+    broker_order_id: str | None = None
+    sleeve: str | None = None
+    entry_rationale: str | None = None
+    invalidation: list[str] = field(default_factory=list)
+    target_review_date: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return to_dict(self)
+
+
+def links_path(root, *, mode: RuntimeMode | str = RuntimeMode.LIVE):
+    current = mode.value if isinstance(mode, RuntimeMode) else str(mode)
+    folder = "live_execution" if current == RuntimeMode.LIVE.value else "paper_execution"
+    return (root or project_root()) / "state" / folder / "position_links.json"
+
+
+def load_links(root, *, mode: RuntimeMode | str = RuntimeMode.LIVE) -> dict[str, PositionLink]:
+    data = read_json(links_path(root, mode=mode), {"records": {}})
+    rows = {}
+    for key, raw in dict(data.get("records") or {}).items():
+        rows[str(key).upper()] = PositionLink(
+            symbol=str(raw.get("symbol") or key).upper(),
+            thesis_id=raw.get("thesis_id"),
+            approval_id=raw.get("approval_id"),
+            intent_id=raw.get("intent_id"),
+            broker_order_id=raw.get("broker_order_id"),
+            sleeve=raw.get("sleeve"),
+            entry_rationale=raw.get("entry_rationale"),
+            invalidation=list(raw.get("invalidation") or []),
+            target_review_date=raw.get("target_review_date"),
+        )
+    return rows
+
+
+def save_links(root, links: dict[str, PositionLink], *, mode: RuntimeMode | str = RuntimeMode.LIVE) -> None:
+    payload = {"records": {k: v.to_dict() for k, v in links.items()}}
+    atomic_write_json(links_path(root, mode=mode), payload)
+
+
+def upsert_from_fill(
+    root,
+    *,
+    symbol: str,
+    store: ExecutionStore,
+    sleeve: str | None = None,
+    rationale: str | None = None,
+    invalidation: list[str] | None = None,
+    mode: RuntimeMode | str = RuntimeMode.LIVE,
+) -> PositionLink:
+    links = load_links(root, mode=mode)
+    order = next((o for o in store.orders() if o.symbol.upper() == symbol.upper()), None)
+    link = links.get(symbol.upper()) or PositionLink(symbol=symbol.upper())
+    if order is not None:
+        link.approval_id = order.approval_id
+        link.intent_id = order.intent_id
+        link.broker_order_id = order.broker_order_id
+        link.thesis_id = order.thesis_id
+    if sleeve:
+        link.sleeve = sleeve
+    if rationale:
+        link.entry_rationale = rationale
+    if invalidation:
+        link.invalidation = list(invalidation)
+    links[symbol.upper()] = link
+    save_links(root, links, mode=mode)
+    return link

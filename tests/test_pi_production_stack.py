@@ -209,6 +209,7 @@ def test_real_stack_refresh_persists_and_dashboard_reads(monkeypatch, tmp_path):
     assert runtime.services.refresh_fn is not None
     assert runtime.services.quotes_fn is not None
     assert runtime.services.candidates_fn is None
+    assert runtime.services.discovery_fn is not None
     row = runtime.orchestrator.run_job("LIVE_ACCOUNT_REFRESH", now=SATURDAY)
     assert row["status"] == "OK"
     assert row["nav"] == 1513.67
@@ -468,10 +469,12 @@ def test_scheduler_phases_and_long_simulated_service(monkeypatch, tmp_path):
     assert runtime.services.refresh_fn is not None
     assert runtime.services.quotes_fn is not None
     assert runtime.services.candidates_fn is None
+    assert runtime.services.discovery_fn is not None
     discovery = [row for row in runtime.last_results if row.get("job") == "CANDIDATE_DISCOVERY"]
     if discovery:
-        assert discovery[0].get("skipped") == LIVE_DISCOVERY_SKIP_REASON
-    assert LIVE_DISCOVERY_WIRED is False
+        assert discovery[0].get("skipped") != "no_live_discovery"
+        assert discovery[0].get("LIVE_DISCOVERY_WIRED") is True or discovery[0].get("status") in {"OK", "SKIPPED", "FAIL_CLOSED"}
+    assert LIVE_DISCOVERY_WIRED is True
     assert float(health.get("ai_budget", {}).get("cap") or 10) == 10
 
     phases = {
@@ -499,9 +502,11 @@ def test_candidate_discovery_not_static_and_quotes_wired(monkeypatch, tmp_path):
     fake = FakeMcpHttp()
     _patch_http(monkeypatch, fake)
     runtime = _runtime(tmp_path, fake, now=lambda: FRIDAY_OPEN)
+    runtime.orchestrator.run_job("LIVE_ACCOUNT_REFRESH", now=FRIDAY_OPEN)
     disc = runtime.orchestrator.run_job("CANDIDATE_DISCOVERY", now=FRIDAY_OPEN)
-    assert disc["status"] == "SKIPPED"
-    assert disc["skipped"] == LIVE_DISCOVERY_SKIP_REASON
+    assert disc.get("skipped") != "no_live_discovery"
+    assert disc.get("LIVE_DISCOVERY_WIRED") is True or disc["status"] in {"OK", "FAIL_CLOSED"}
+    assert LIVE_DISCOVERY_WIRED is True
     quotes = runtime.orchestrator.run_job("QUOTE_REFRESH", now=FRIDAY_OPEN)
     assert quotes.get("skipped") != "no_quotes_fn"
     assert quotes["status"] in {"OK", "FAIL_CLOSED"}

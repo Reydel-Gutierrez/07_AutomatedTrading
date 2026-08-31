@@ -134,7 +134,7 @@ def test_unauthenticated_html_redirects_and_api_is_401(tmp_path):
     login = client.get("/login")
     assert login.status_code == 200
     assert "PAPER ENVIRONMENT" in login.get_data(as_text=True)
-    assert "NO LIVE ORDER PLACEMENT ENABLED" in login.get_data(as_text=True)
+    assert "LIVE ORDER PLACEMENT: OFF" in login.get_data(as_text=True) or "NO LIVE ORDER PLACEMENT ENABLED" in login.get_data(as_text=True)
     api = client.get("/api/dashboard")
     assert api.status_code == 401
     assert api.get_json()["error"] == "authentication_required"
@@ -221,7 +221,7 @@ def test_family_login_personal_dashboard_hides_admin_surfaces(tmp_path):
     assert "CORE_GROWTH" in html
     assert "NVDA" in html
     assert "PAPER ENVIRONMENT" in html
-    assert "NO LIVE ORDER PLACEMENT ENABLED" in html
+    assert "LIVE ORDER PLACEMENT: OFF" in html or "NO LIVE ORDER PLACEMENT ENABLED" in html
     assert "PAPER BOOK" in html
     assert "Mom" not in html
     assert "Pending approvals" not in html

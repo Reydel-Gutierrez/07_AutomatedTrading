@@ -49,7 +49,7 @@
         <a class="brand" href="{{ url_for('dashboard_page') }}">Agentic Portfolio</a>
         <span class="env-chip {{ environment }}">{{ environment }}</span>
       </div>
-      <div class="status-copy env-banner {{ environment }}" role="status">{{ environment_banner }} · {{ no_live_placement_banner }}{% if autonomous_disabled %} · AUTONOMOUS TRADING DISABLED · approve does not place an order · no live place/cancel{% endif %}</div>
+      <div class="status-copy env-banner {{ environment }}{% if live_order_placement_enabled %} placement-on{% endif %}" role="status">{{ environment_banner }} · {{ no_live_placement_banner }}{% if live_order_placement_enabled %} · HUMAN APPROVAL STILL REQUIRED{% endif %}{% if autonomous_disabled and not live_order_placement_enabled %} · AUTONOMOUS TRADING DISABLED · approve does not place an order{% endif %}</div>
       <div class="top-right">
         {% if current_user %}
         <span class="who">{{ current_user.name }} ({{ current_user.role }})</span>

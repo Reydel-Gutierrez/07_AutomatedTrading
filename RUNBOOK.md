@@ -40,7 +40,13 @@ Proposal-only LIVE AI check: `PYTHONPATH=src python scripts/run_live_ai_check.py
 
 The Raspberry Pi scheduler (`scripts/run_scheduler.py`) is an internal orchestrator inside the 24/7 Agent Runtime (`scripts/run_service.py`). The process never exits after one cycle. PREMARKET / MARKET HOURS / POSTMARKET / OVERNIGHT / WEEKEND / HOLIDAY jobs run according to session phase. Duplicate jobs are skipped. AI is not called on every tick.
 
-Overnight/premarket now consume the research queue (`RESEARCH_QUEUE_WORKER`) and persisted watches/theses. Discovery ending in `CANDIDATES_READY_FOR_RESEARCH` is no longer a terminal stop. Read-only dump: `PYTHONPATH=src python scripts/diagnose_pipeline.py`. `LIVE_ORDER_PLACEMENT` stays false.
+Overnight/premarket now consume the research queue (`RESEARCH_QUEUE_WORKER`) and persisted watches/theses. Discovery ending in `CANDIDATES_READY_FOR_RESEARCH` is no longer a terminal stop. Dynamic live universe construction is wired (`LIVE_DISCOVERY_WIRED=true`). Read-only dump: `PYTHONPATH=src python scripts/diagnose_pipeline.py`.
+
+Committed default: `LIVE_ORDER_PLACEMENT=false` / `AGENTIC_LIVE_ORDER_PLACEMENT=false`. Human APPROVE is required. With the switch off, APPROVE → `APPROVED_EXECUTION_DISABLED` and `place_equity_order` is not called. Enabling placement is a manual Pi step after validation, never a git default.
+
+Live execution (implemented, behind the switch): send-time revalidation → `review_equity_order` → `place_equity_order` via `LiveOrderExecutor` only → `LIVE_ORDER_RECONCILE` → holdings refresh. Ambiguous broker acks fail closed and require reconcile. Double APPROVE and process restart share one execution intent id.
+
+This tree is a **release candidate** (`pi-live-rc1`) awaiting Raspberry Pi validation. It is not production-validated.
 
 $10/month AI cap: `config/ai.json` + persisted `state/ai_budget/`. $0–$8 normal, $8+ conserving, $9.50+ critical reassessment only, $10 blocks all external AI until next calendar month. Market monitoring, broker sync, Risk Gate, dashboard, watch conditions, and logs continue when AI is blocked.
 
@@ -71,6 +77,6 @@ $env:DASHBOARD_ENVIRONMENT = "LIVE"
 python scripts/run_service.py
 ```
 
-Dashboard: `http://127.0.0.1:3100` (localhost only). APPROVE does not place an order.
+Dashboard: `http://127.0.0.1:3100` (localhost only). APPROVE is required. Default LIVE ORDER PLACEMENT is OFF.
 
 Raspberry Pi production: install as dedicated user `agentic` (or replace `User=`/`Group=` in the unit), venv at `/opt/agentic-portfolio/.venv`, secrets in `/etc/agentic-portfolio/env`. OAuth must be created as the same user that runs systemd. Full procedure: `deploy/README.md`. Unit: `deploy/systemd/agentic-portfolio.service`. Do not run as root. SSH tunnel: `ssh -L 3100:127.0.0.1:3100 <pi>`.

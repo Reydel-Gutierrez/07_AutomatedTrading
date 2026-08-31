@@ -74,4 +74,28 @@
     </table>
   </div>
 </section>
+
+<section class="card">
+  <h2>Broker orders</h2>
+  <p class="meta">LIVE ORDER PLACEMENT: {{ 'ON' if view.live_order_placement_enabled else 'OFF' }}</p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Symbol</th><th>Status</th><th>Side</th><th>Qty / notional</th><th>Broker ID</th><th>Updated</th></tr></thead>
+      <tbody>
+        {% for o in view.broker_orders or [] %}
+        <tr>
+          <td>{{ o.symbol }}</td>
+          <td><span class="pill">{{ o.status }}</span></td>
+          <td>{{ o.side }}</td>
+          <td>{{ o.quantity or o.notional }}</td>
+          <td>{{ o.broker_order_id or '—' }}</td>
+          <td>{{ o.updated_at }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty">No broker orders.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
 {% endblock %}

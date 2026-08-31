@@ -162,12 +162,10 @@ body.sidebar-collapsed .side-user { justify-content: center; padding-left: 8px; 
 .who { color: var(--text); font-weight: 650; font-size: 13px; }
 .signout { color: var(--text); font-weight: 700; }
 .signout:hover { color: var(--accent); text-decoration: none; }
-.status-copy, .env-banner {
-  text-align: center;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--muted);
-  letter-spacing: .01em;
+.env-banner.placement-on {
+  background: #b45a52;
+  color: #fff;
+  font-weight: 800;
 }
 .halt-banner { background: #f4e4e2; color: var(--halt); text-align: center; padding: 8px 14px; font-weight: 700; }
 .approval-banner { background: #f6edd8; color: #8a5a1e; font-size: 16px; letter-spacing: .04em; }

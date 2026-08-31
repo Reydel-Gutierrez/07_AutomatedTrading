@@ -4,6 +4,10 @@
   "description": "PAPER uses the isolated paper book for tests/dev. LIVE uses the configured Agentic Robinhood account as the single source of truth for NAV, cash, buying power, positions, allocations, HWM/drawdown, daily P/L, dashboard, monitoring, and Risk Gate inputs. Live order placement remains disabled. review_equity_order stays behind the existing approval/review gate.",
   "mode": "PAPER",
   "live_order_placement_enabled": false,
+  "require_human_approval": true,
+  "auto_execution": false,
+  "ai_monthly_hard_cap_usd": 10.00,
+  "fail_closed_if_placement_ambiguous": true,
   "env": {
     "mode": ["AGENTIC_RUNTIME_MODE", "DASHBOARD_ENVIRONMENT"]
   },

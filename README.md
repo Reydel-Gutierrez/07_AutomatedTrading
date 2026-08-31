@@ -12,7 +12,7 @@ As of 2026-08-30, read-only LIVE refresh: Agentic account confirmed (`agentic_al
 
 Use live `get_portfolio` going forward. Do not treat $500 as a policy constraint. Do not use the paper $10,000 book as LIVE NAV.
 
-## Execution (unchanged)
+## Execution
 
 | Setting | Value |
 |---|---|
@@ -20,9 +20,10 @@ Use live `get_portfolio` going forward. Do not treat $500 as a policy constraint
 | `auto_execution` | `false` |
 | `require_human_approval` | `true` |
 | `live_trade_actions_allowed` | `false` |
-| Stop | After Robinhood review-only |
+| `LIVE_ORDER_PLACEMENT` | `false` (committed default) |
+| Placement surface | `LiveOrderExecutor` only, after human APPROVE + send-time revalidation + broker review |
 
-`review_equity_order` is informational/preflight after a still-valid APPROVED packet. No place/cancel. No deposits/withdrawals/transfers.
+Human approval is mandatory. With `LIVE_ORDER_PLACEMENT=false`, APPROVE → `APPROVED_EXECUTION_DISABLED` and the broker place tool is not called. Enabling placement is a manual Raspberry Pi step after validation — never a git default. No deposits/withdrawals/transfers.
 
 ## Layout
 
@@ -155,7 +156,11 @@ Paper/live-shaped run: `PYTHONPATH=src python scripts/run_paper_review.py` (one 
 
 Switch: `AGENTIC_RUNTIME_MODE=LIVE` or `DASHBOARD_ENVIRONMENT=LIVE` (see `config/runtime.json`). Dashboard shows **LIVE**. It does not fall back to paper $10,000 NAV.
 
-The overnight `RESEARCH_QUEUE_WORKER` job consumes promoted candidates in `state/research_queue.json` (and `state/live_ai/` when present) through the existing Research Engine and AI Gateway. Successful research can create DRAFT theses, persistent watches, or human approval packets. `LIVE_ORDER_PLACEMENT` remains **false**. Approving a packet still does not place an order.
+The overnight `RESEARCH_QUEUE_WORKER` job consumes promoted candidates in `state/research_queue.json` (and `state/live_ai/` when present) through the existing Research Engine and AI Gateway. Successful research can create DRAFT theses, persistent watches, or human approval packets.
+
+Live discovery is dynamic (`LIVE_DISCOVERY_WIRED=true`): positions, watchlists, popular lists, saved scans, and earnings — no AI, no hard-coded 25-name universe.
+
+Committed default: `LIVE_ORDER_PLACEMENT=false` (`AGENTIC_LIVE_ORDER_PLACEMENT=false`). Human APPROVE is mandatory. With the switch off, APPROVE becomes `APPROVED_EXECUTION_DISABLED` and never calls the broker. The live path (`LiveOrderExecutor`) is implemented and tested: send-time revalidation → `review_equity_order` → place (only if the switch is on) → reconcile → holdings update. Do not enable placement in git. Raspberry Pi validation is still required before the first real order.
 
 Read-only pipeline dump: `PYTHONPATH=src python scripts/diagnose_pipeline.py`.
 
@@ -176,7 +181,7 @@ $env:DASHBOARD_ENVIRONMENT = "LIVE"
 python scripts/run_service.py
 ```
 
-Dashboard control room: `http://127.0.0.1:3100` (localhost only). APPROVE does not place an order.
+Dashboard control room: `http://127.0.0.1:3100` (localhost only). Human APPROVE is required. Default `LIVE_ORDER_PLACEMENT=false` does not place.
 
 Raspberry Pi LIVE install: dedicated non-root user, `/opt/agentic-portfolio/.venv`, secrets in `/etc/agentic-portfolio/env`. Procedure: `deploy/README.md`. Unit: `deploy/systemd/agentic-portfolio.service`. Do not run as root. Reach the dashboard with `ssh -L 3100:127.0.0.1:3100 <pi>`.
 

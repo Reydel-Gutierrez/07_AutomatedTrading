@@ -86,8 +86,6 @@ class AgentRuntime:
             live_trade_actions_allowed=bool(exec_cfg.get("live_trade_actions_allowed")),
             auto_execution=bool(exec_cfg.get("auto_execution")),
         )
-        if LIVE_ORDER_PLACEMENT:
-            raise RuntimeError("LIVE_ORDER_PLACEMENT must remain false")
         self.notify = NotificationEngine(NotificationStore(self.base), now_fn=self._now)
         self.connection = connection or ConnectionManager(notify=self.notify, root=self.base, now_fn=self._now)
         if services is None:
@@ -109,8 +107,25 @@ class AgentRuntime:
                 return watch_quotes_from_payload(payload)
 
             from agentic_portfolio.ai.gateway import build_gateway
+            from agentic_portfolio.live_execution import ExecutionStore, LiveOrderExecutor, bind_live_write_broker
+            from agentic_portfolio.runtime import live_placement_enabled
 
             gateway = build_gateway(self.base, runtime_mode=self.runtime_mode, now_fn=self._now)
+            exec_store = ExecutionStore(self.base, runtime_mode=self.runtime_mode)
+            broker = None
+            if live_placement_enabled() and self.runtime_mode is RuntimeMode.LIVE:
+                broker = bind_live_write_broker(account_number=str(rules["account"]["account_number"]))
+            executor = LiveOrderExecutor(
+                exec_store,
+                broker,
+                root=self.base,
+                runtime_mode=self.runtime_mode,
+                context_fn=lambda: getattr(self.services, "last_context", None),
+                regular_hours_fn=lambda: classify_market_phase(self.now()).regular_hours_open,
+                notify=self.notify,
+                now_fn=self._now,
+                refresh_fn=refresh_live,
+            )
 
             def ai_status() -> dict[str, Any]:
                 status = gateway.budget.status()
@@ -125,12 +140,40 @@ class AgentRuntime:
                     "calls_month": status.calls_month,
                 }
 
+            def live_discover(sources=None):
+                from agentic_portfolio.discovery.live import run_live_discovery
+                from agentic_portfolio.agent.pipeline import load_live_context
+
+                bound = self.connection.ensure()
+                fetcher = getattr(bound, "fetcher", None)
+                if fetcher is None:
+                    raise LiveDataUnavailable("bound Robinhood runtime has no fetcher")
+                ctx_obj = getattr(self.services, "last_context", None)
+                if ctx_obj is None:
+                    ctx_obj = load_live_context(self.base, runtime_mode=self.runtime_mode)
+                if ctx_obj is None:
+                    raise LiveDataUnavailable("missing_live_context")
+                return run_live_discovery(
+                    fetcher,
+                    ctx_obj,
+                    root=self.base,
+                    runtime_mode=self.runtime_mode,
+                    source_filter=sources,
+                    now=self.now(),
+                )
+
             services = AgentServices(
                 root=self.base,
                 runtime_mode=self.runtime_mode,
                 watch=WatchEngine(watch_store, config=self.config, journal=journal, now_fn=self._now),
                 watch_store=watch_store,
-                approvals=LiveApprovalEngine(approval_store, config=self.config, journal=journal, now_fn=self._now),
+                approvals=LiveApprovalEngine(
+                    approval_store,
+                    config=self.config,
+                    journal=journal,
+                    now_fn=self._now,
+                    executor=executor,
+                ),
                 approval_store=approval_store,
                 notify=self.notify,
                 connection=self.connection,
@@ -141,6 +184,8 @@ class AgentRuntime:
                 ai_status_fn=ai_status,
                 budget_exhausted=budget_exhausted,
                 ai_allowed=ai_allowed,
+                executor=executor,
+                discovery_fn=live_discover,
             )
         else:
             services.budget_exhausted = budget_exhausted or services.budget_exhausted

@@ -53,6 +53,7 @@ from agentic_portfolio.runtime import (
     get_active_artifact_environment,
     get_active_portfolio_source,
     get_active_runtime,
+    live_placement_enabled,
 )
 from agentic_portfolio.schemas import ThesisRecord, to_dict
 from agentic_portfolio.session import load_session_state
@@ -216,9 +217,37 @@ def execution_flags(rules: dict[str, Any] | None = None) -> dict[str, Any]:
         "live_trade_actions_allowed": live,
         "current_terminal_stage": exe.get("current_terminal_stage"),
         "autonomous_trading_disabled": (not auto) and (not live),
-        "approved_does_not_place_order": True,
-        "live_order_placement_enabled": False,
+        "approved_does_not_place_order": not live_placement_enabled(),
+        "live_order_placement_enabled": live_placement_enabled(),
     }
+
+
+def _dashboard_executor(state: DashboardState):
+    from agentic_portfolio.live.store import LivePortfolioStore
+    from agentic_portfolio.live_execution import ExecutionStore, LiveOrderExecutor, bind_live_write_broker
+    from agentic_portfolio.context import portfolio_context_from_dict
+    from agentic_portfolio.agent.session import classify_market_phase
+    from agentic_portfolio.policy import load_account_rules
+
+    def context_fn():
+        book = LivePortfolioStore(state.root).current_book() or {}
+        raw = book.get("context")
+        if isinstance(raw, dict):
+            return portfolio_context_from_dict(raw)
+        return None
+
+    broker = None
+    mode = state.runtime.value if hasattr(state.runtime, "value") else str(state.runtime)
+    if live_placement_enabled() and str(mode).upper() == "LIVE":
+        broker = bind_live_write_broker(account_number=str(load_account_rules()["account"]["account_number"]))
+    return LiveOrderExecutor(
+        ExecutionStore(state.root, runtime_mode=state.runtime),
+        broker,
+        root=state.root,
+        runtime_mode=state.runtime,
+        context_fn=context_fn,
+        regular_hours_fn=lambda: classify_market_phase().regular_hours_open,
+    )
 
 
 def packet_kind(packet: ApprovalPacket) -> str:
@@ -392,7 +421,7 @@ def _packet_row(packet: ApprovalPacket, *, flags: dict[str, Any] | None = None) 
         "approved_does_not_place_order": True,
         "broker_submitted": False,
         "live_execution_blocked": True,
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
     }
 
 
@@ -473,6 +502,20 @@ def _live_approval_row(item: LiveApproval) -> dict[str, Any]:
         "order_notional": item.proposed_dollar_amount,
         "order_notional_display": _usd(item.proposed_dollar_amount),
         "order_quantity": None,
+        "approx_shares": (
+            round(float(item.proposed_dollar_amount) / float(item.current_quote), 4)
+            if item.proposed_dollar_amount and item.current_quote
+            else None
+        ),
+        "nav_display": _usd((item.portfolio_impact or {}).get("nav") or item.nav_at_proposal),
+        "cash_display": _usd((item.portfolio_impact or {}).get("cash")),
+        "buying_power_display": _usd((item.portfolio_impact or {}).get("buying_power")),
+        "existing_exposure": (item.portfolio_impact or {}).get("expected_resulting_position_pct"),
+        "execution_status_label": (
+            "APPROVED — LIVE EXECUTION DISABLED"
+            if item.status.value == "APPROVED_EXECUTION_DISABLED"
+            else ("ORDER SUBMITTED" if item.broker_submitted else item.status.value)
+        ),
         "current_price": item.current_quote,
         "risk_gate_verdict": (item.risk_gate_result or {}).get("verdict"),
         "created_at": item.created_at,
@@ -488,11 +531,11 @@ def _live_approval_row(item: LiveApproval) -> dict[str, Any]:
         "runtime_mode": item.runtime_mode,
         "decision_block_reason": None,
         "can_decide": pending,
-        "approved_does_not_place_order": True,
-        "broker_submitted": False,
-        "live_execution_blocked": True,
-        "live_order_placement_enabled": False,
-        "placed_order": False,
+        "approved_does_not_place_order": not live_placement_enabled(),
+        "broker_submitted": bool(item.broker_submitted),
+        "live_execution_blocked": bool(item.live_execution_blocked),
+        "live_order_placement_enabled": live_placement_enabled(),
+        "placed_order": bool(item.placed_order),
         "ai_rationale": item.ai_rationale,
         "supporting_thesis": item.supporting_thesis,
         "reason": item.reason,
@@ -509,6 +552,7 @@ def _live_approval_row(item: LiveApproval) -> dict[str, Any]:
         "model": item.model,
         "nav_at_proposal": item.nav_at_proposal,
         "quote_at_proposal": item.quote_at_proposal or item.current_quote,
+        "evidence_freshness": item.evidence_freshness,
     }
 
 
@@ -534,11 +578,11 @@ def live_approval_detail(item: LiveApproval) -> dict[str, Any]:
             "enhanced_review_requirements": [],
             "order_plan_summary": {
                 "side": item.proposed_action,
-                "order_type": None,
-                "time_in_force": None,
-                "execution_status": "EXECUTION_NOT_IMPLEMENTED",
-                "live_execution_blocked": True,
-                "broker_submitted": False,
+                "order_type": "market",
+                "time_in_force": "gfd",
+                "execution_status": item.status.value,
+                "live_execution_blocked": bool(item.live_execution_blocked),
+                "broker_submitted": bool(item.broker_submitted),
                 "stop_orders_created": 0,
             },
             "evidence_refs": {"watch_id": item.watch_id},
@@ -588,7 +632,7 @@ def watchlist_view(state: DashboardState) -> dict[str, Any]:
         "rows": items,
         "count": len(items),
         "active": sum(1 for row in items if row["status"] not in {"REJECTED", "EXPIRED", "INVALIDATED"}),
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
     }
 
 
@@ -617,7 +661,7 @@ def agent_runtime_view(state: DashboardState) -> dict[str, Any]:
         "live_error_code": err.get("code"),
         "live_error_message": err.get("message"),
         "job_skips": err.get("job_skips") or [],
-        "LIVE_ORDER_PLACEMENT": False,
+        "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
     }
 
 
@@ -647,7 +691,7 @@ def list_approvals(state: DashboardState) -> dict[str, Any]:
         "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "runtime_mode": env,
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
         "allow_paper_packet_decisions": flags["allow_paper_packet_decisions"] and env != RuntimeMode.LIVE.value,
         "allow_demo_packet_decisions": flags["allow_demo_packet_decisions"] and env != RuntimeMode.LIVE.value,
         "allow_stale_packet_decisions": flags["allow_stale_packet_decisions"],
@@ -674,10 +718,10 @@ def record_approval_decision(
     live_store = _live_approval_store(state)
     live = live_store.get(approval_id)
     if live is not None:
-        engine = LiveApprovalEngine(live_store, journal=state.root / "logs" / "approval.jsonl")
-        wanted = LiveApprovalStatus.APPROVED if str(getattr(status, "value", status)).upper() in {"APPROVED", "APPROVED_AWAITING_EXECUTION_IMPLEMENTATION"} else LiveApprovalStatus.REJECTED
+        engine = LiveApprovalEngine(live_store, journal=state.root / "logs" / "approval.jsonl", executor=_dashboard_executor(state))
+        wanted = LiveApprovalStatus.APPROVED if str(getattr(status, "value", status)).upper() in {"APPROVED", "APPROVED_AWAITING_EXECUTION_IMPLEMENTATION", "APPROVED_EXECUTION_DISABLED"} else LiveApprovalStatus.REJECTED
         updated = engine.record_decision(approval_id, wanted, note=note)
-        if updated.placed_order or updated.broker_submitted or updated.execution_attempted:
+        if updated.placed_order and not live_placement_enabled():
             raise ApprovalValidationError("dashboard approval must not place an order")
         from agentic_portfolio.agent.activity import log_activity
 
@@ -825,7 +869,7 @@ def research_view(state: DashboardState) -> dict[str, Any]:
         "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "runtime_mode": env,
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
         "pipeline": pipeline_status(state),
     }
 
@@ -912,15 +956,47 @@ def orders_view(state: DashboardState) -> dict[str, Any]:
         row["book_label"] = LIVE_ACCOUNT_LABEL
         row["live_order_placement_enabled"] = False
         reviews.append(row)
+    from agentic_portfolio.live_execution.store import ExecutionStore
+
+    broker_orders = []
+    try:
+        for order in ExecutionStore(state.root, runtime_mode=env).orders():
+            broker_orders.append(order.to_dict())
+    except Exception:  # noqa: BLE001
+        broker_orders = []
     return {
         "plans": plans,
         "fills": fills,
         "reviews": reviews,
+        "broker_orders": broker_orders,
         "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "runtime_mode": env,
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
     }
+
+
+def _broker_order_summary(state: DashboardState) -> dict[str, int]:
+    from agentic_portfolio.live_execution.store import ExecutionStore
+
+    counts = {"pending": 0, "submitted": 0, "filled": 0, "rejected": 0, "canceled": 0}
+    try:
+        orders = ExecutionStore(state.root, runtime_mode=state.runtime).orders()
+    except Exception:  # noqa: BLE001
+        return counts
+    for order in orders:
+        status = order.status.value if hasattr(order.status, "value") else str(order.status)
+        if status in {"PENDING_SUBMISSION"}:
+            counts["pending"] += 1
+        elif status in {"SUBMITTED", "OPEN", "PARTIALLY_FILLED"}:
+            counts["submitted"] += 1
+        elif status == "FILLED":
+            counts["filled"] += 1
+        elif status == "REJECTED":
+            counts["rejected"] += 1
+        elif status in {"CANCELED"}:
+            counts["canceled"] += 1
+    return counts
 
 
 def journal_view(state: DashboardState, *, limit: int = 250) -> dict[str, Any]:
@@ -960,7 +1036,7 @@ def journal_view(state: DashboardState, *, limit: int = 250) -> dict[str, Any]:
         "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "runtime_mode": env,
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
     }
 
 
@@ -1137,7 +1213,7 @@ def health_status(state: DashboardState) -> list[dict[str, Any]]:
             "ok": True,
             "status": "disabled",
             "detail": ui["no_live_placement_banner"],
-            "live_order_placement_enabled": False,
+            "live_order_placement_enabled": live_placement_enabled(),
             "autonomous_trading_disabled": flags["autonomous_trading_disabled"],
         },
     ]
@@ -1296,7 +1372,7 @@ def system_view(state: DashboardState) -> dict[str, Any]:
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "active_book_label": ui["active_book_label"],
         "book_kind": ui["book_kind"],
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
         "pipeline_stop": pipeline.get("hard_stop_after"),
         "policy_version": policy.get("version"),
         "daily_halt_threshold": (policy.get("daily_risk_halt") or {}).get("threshold_fraction_of_start_of_day_nav"),
@@ -1528,7 +1604,7 @@ def discovery_view(state: DashboardState) -> dict[str, Any]:
         "count": len(rows),
         "book_label": ui["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
         "environment": env,
         "runtime_mode": env,
         "note": "Read from stored discovery results. This page does not run discovery. PAPER candidates are never reused as LIVE.",
@@ -1608,7 +1684,7 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
         "risk_state_label": risk_label,
         "live_account_status": ui["live_account_status"],
         "paper_book_status": ui["paper_book_status"],
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
         "live_data_unavailable": unavailable,
         "live_error_code": live_error_state(state).get("code") if unavailable else None,
         "live_error_message": live_error_state(state).get("message") if unavailable else None,
@@ -1712,6 +1788,8 @@ def pipeline_status(state: DashboardState) -> dict[str, Any]:
         if entry.status.value in {"RESEARCHING", "IN_PROGRESS"}:
             current = entry.symbol
             break
+    univ = dict((latest.market_session_context or {}) if latest else {})
+    live_univ = univ.get("live_universe") if isinstance(univ.get("live_universe"), dict) else {}
     return {
         "discovery": {
             "last_run": latest.completed_at if latest else None,
@@ -1720,6 +1798,9 @@ def pipeline_status(state: DashboardState) -> dict[str, Any]:
             "promoted": len(latest.candidates_promoted) if latest else 0,
             "rejected": len(latest.candidates_rejected) if latest else 0,
             "conclusion": latest.conclusion if latest else None,
+            "universe_size": univ.get("unique_universe_size") or live_univ.get("unique_universe_size"),
+            "sources": list(latest.sources_queried or []) if latest else [],
+            "sources_successful": univ.get("sources_successful") or live_univ.get("sources_successful") or [],
         },
         "research": {
             "queue_count": len(queue),
@@ -1741,9 +1822,10 @@ def pipeline_status(state: DashboardState) -> dict[str, Any]:
             "phase": (agent.get("market") or {}).get("phase") if agent else None,
             "alive": agent.get("alive") if agent else False,
             "cycles": agent.get("cycles") if agent else 0,
-            "LIVE_ORDER_PLACEMENT": False,
+            "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
         },
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
+        "orders": _broker_order_summary(state),
     }
 
 
@@ -1782,7 +1864,7 @@ def ai_summary(state: DashboardState, ui: dict[str, Any] | None = None) -> dict[
         "runtime_mode": mode,
         "LIVE_AI_ALLOWED": LIVE_AI_ALLOWED,
         "LIVE_PROPOSALS_ALLOWED": LIVE_PROPOSALS_ALLOWED,
-        "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+        "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
         "roles": roles,
         "providers": availability,
         "budget_mode": status.mode.value,
@@ -1814,7 +1896,7 @@ def ai_view(state: DashboardState) -> dict[str, Any]:
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "active_book_label": ui["active_book_label"],
         "book_kind": ui["book_kind"],
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
         "note": "AI is advisory. Risk Gate is deterministic. Broker is the account source of truth. Cursor is the development agent; the Raspberry Pi runs this runtime.",
     }
 
@@ -1866,7 +1948,7 @@ def ai_activity_view(state: DashboardState) -> dict[str, Any]:
         "active_book_label": ui["active_book_label"],
         "paper_book_label": PAPER_BOOK_LABEL,
         "live_account_label": LIVE_ACCOUNT_LABEL,
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": live_placement_enabled(),
         "scans": scans[-10:],
         "rows": rows,
         "proposals": proposals,

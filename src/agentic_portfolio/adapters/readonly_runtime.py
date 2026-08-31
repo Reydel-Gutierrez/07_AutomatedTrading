@@ -34,6 +34,45 @@ READONLY_MODE = "READ_ONLY"
 DEFAULT_MCP_URL = "https://agent.robinhood.com/mcp/trading"
 MCP_PROTOCOL_VERSION = "2025-03-26"
 
+# Keep in sync with discovery.safety.DISCOVERY_READ_TOOLS (do not import that module here).
+DISCOVERY_OBSERVATION_TOOLS = frozenset(
+    {
+        "search",
+        "get_scans",
+        "run_scan",
+        "get_scanner_filter_specs",
+        "get_equity_quotes",
+        "get_equity_historicals",
+        "get_equity_technical_indicators",
+        "get_equity_fundamentals",
+        "get_financials",
+        "get_earnings_calendar",
+        "get_earnings_results",
+        "get_equity_news",
+        "get_sec_filing",
+        "get_sec_filing_facts",
+        "get_sec_filing_facts_catalog",
+        "get_sec_filing_index",
+        "get_index_quotes",
+        "get_index_historicals",
+        "get_indexes",
+        "get_watchlists",
+        "get_watchlist_items",
+        "get_popular_watchlists",
+        "get_equity_tradability",
+        "get_equity_positions",
+        "get_portfolio",
+        "get_accounts",
+        "get_equity_price_book",
+        "get_equity_orders",
+    }
+)
+
+SHARED_PRODUCTION_TRANSPORT = "shared production transport"
+READONLY_MODE = "READ_ONLY"
+DEFAULT_MCP_URL = "https://agent.robinhood.com/mcp/trading"
+MCP_PROTOCOL_VERSION = "2025-03-26"
+
 TRANSFER_MARKERS = (
     "deposit",
     "withdrawal",
@@ -50,11 +89,16 @@ WRITE_ORDER_TOOLS = frozenset(FORBIDDEN_MCP_TOOLS) | {
     "preview_crypto_order",
 }
 
-READONLY_OBSERVATION_TOOLS = frozenset(CLASSIFICATION_READ_TOOLS) | frozenset(RECONCILIATION_READ_TOOLS) | {
-    "get_equity_quotes",
-    "get_equity_orders",
-    "get_financials",
-}
+READONLY_OBSERVATION_TOOLS = (
+    frozenset(CLASSIFICATION_READ_TOOLS)
+    | frozenset(RECONCILIATION_READ_TOOLS)
+    | DISCOVERY_OBSERVATION_TOOLS
+    | {
+        "get_equity_quotes",
+        "get_equity_orders",
+        "get_financials",
+    }
+)
 
 _BOUND: "ReadonlyBrokerRuntime | None" = None
 
@@ -158,11 +202,39 @@ class GuardedFetcherProxy:
             "get_equity_tradability",
             "get_equity_fundamentals",
             "search_instrument",
+            "search",
             "get_equity_quotes",
+            "quotes",
             "get_accounts",
             "get_portfolio",
             "get_equity_positions",
             "get_equity_orders",
+            "get_scans",
+            "run_scan",
+            "get_watchlists",
+            "get_watchlist_items",
+            "get_popular_watchlists",
+            "get_earnings_calendar",
+            "get_earnings_results",
+            "get_equity_historicals",
+            "get_equity_technical_indicators",
+            "get_equity_news",
+            "get_financials",
+            "get_indexes",
+            "get_index_quotes",
+            "get_sec_filing_index",
+            "scans",
+            "watchlists",
+            "watchlist_items",
+            "popular_watchlists",
+            "earnings_calendar",
+            "fundamentals",
+            "financials",
+            "historicals",
+            "tradability",
+            "news",
+            "positions",
+            "portfolio",
             "calls",
         }
     )

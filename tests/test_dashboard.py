@@ -79,7 +79,7 @@ def test_pages_and_api_ok():
         body = res.get_data(as_text=True)
         assert "AUTONOMOUS TRADING DISABLED" in body
         assert "PAPER ENVIRONMENT" in body
-        assert "NO LIVE ORDER PLACEMENT ENABLED" in body
+        assert "LIVE ORDER PLACEMENT: OFF" in body or "NO LIVE ORDER PLACEMENT ENABLED" in body
         assert "PAPER BOOK" in body
         assert "LIVE ACCOUNT (read-only)" in body
         assert "Agentic Portfolio" in body

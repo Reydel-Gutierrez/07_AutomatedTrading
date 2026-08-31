@@ -7,13 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from agentic_portfolio.discovery.live_readonly import LIVE_DISCOVERY_SKIP_REASON
+from agentic_portfolio.discovery.live import LIVE_DISCOVERY_SKIP_REASON, LIVE_DISCOVERY_WIRED, run_live_discovery
 from agentic_portfolio.adapters.portfolio_facts import live_error_code_of, redact_live_error
 from agentic_portfolio.agent.activity import log_activity
 from agentic_portfolio.agent.connection import ConnectionManager
-from agentic_portfolio.agent.safety import assert_execution_disabled
+from agentic_portfolio.agent.safety import assert_auto_execution_disabled
 from agentic_portfolio.agent.session import MarketPhase, SessionSnapshot
 from agentic_portfolio.live_approval import LiveApprovalEngine, LiveApprovalStore
+from agentic_portfolio.live_approval.types import LiveApprovalStatus
 from agentic_portfolio.notify import NotificationEngine, NotificationKind
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode
 from agentic_portfolio.watch import ReassessTrigger, WatchEngine, WatchStatus, WatchStore, context_hash
@@ -46,6 +47,8 @@ class AgentServices:
     ai_allowed: bool = True
     last_refresh: Any = None
     last_context: Any = None
+    executor: Any = None
+    discovery_fn: Callable[..., Any] | None = None
 
 
 def _now(services: AgentServices) -> datetime:
@@ -183,7 +186,7 @@ def _premarket_revalidate(services: AgentServices, ctx: dict[str, Any]) -> dict[
 def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
     def wrap(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
         def inner(ctx: dict[str, Any]) -> dict[str, Any]:
-            assert_execution_disabled()
+            assert_auto_execution_disabled()
             return fn(ctx)
 
         return inner
@@ -197,6 +200,10 @@ def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any
         "POSITION_MONITOR": wrap(lambda ctx: _refresh_account(services, ctx, job="POSITION_MONITOR")),
         "QUOTE_REFRESH": wrap(lambda ctx: _quotes(services, ctx)),
         "CANDIDATE_DISCOVERY": wrap(lambda ctx: _discover(services, ctx)),
+        "POSTMARKET_EARNINGS_DISCOVERY": wrap(lambda ctx: _discover(services, ctx, job="POSTMARKET_EARNINGS_DISCOVERY", sources=["earnings_calendar", "account_positions"])),
+        "PREMARKET_EVENT_DISCOVERY": wrap(lambda ctx: _discover(services, ctx, job="PREMARKET_EVENT_DISCOVERY", sources=["earnings_calendar", "account_positions", "account_watchlists"])),
+        "LIVE_ORDER_RECONCILE": wrap(lambda ctx: _reconcile_orders(services, ctx)),
+        "APPROVED_EXECUTION_DRAIN": wrap(lambda ctx: _drain_execution(services, ctx)),
         "WATCH_CONDITION_MONITOR": wrap(lambda ctx: _watch_conditions(services, ctx)),
         "RISK_MONITOR": wrap(lambda ctx: _risk_monitor(services, ctx)),
         "MARKET_OPEN_CONDITIONAL_VALIDATE": wrap(lambda ctx: _validate_plans(services, ctx)),
@@ -304,19 +311,49 @@ def _quotes(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
     return _ok("QUOTE_REFRESH", count=len(quotes or {}))
 
 
-def _discover(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
+def _discover(services: AgentServices, ctx: dict[str, Any], job: str | None = None, sources: list[str] | None = None) -> dict[str, Any]:
+    name = job or ctx.get("job") or "CANDIDATE_DISCOVERY"
+    if services.discovery_fn is None and services.candidates_fn is None:
+        if not LIVE_DISCOVERY_WIRED:
+            return _skipped(services, name, LIVE_DISCOVERY_SKIP_REASON)
+        return _skipped(services, name, "no_discovery_fn")
+    if services.discovery_fn is not None:
+        try:
+            result = services.discovery_fn(sources=sources)
+        except Exception as exc:  # noqa: BLE001
+            log_activity(services.root, "DISCOVERY_FAILED", job=name, reason=str(exc))
+            return {
+                "job": name,
+                "status": "FAIL_CLOSED",
+                "reason": str(exc),
+                "placement_attempted": False,
+                "LIVE_DISCOVERY_WIRED": LIVE_DISCOVERY_WIRED,
+            }
+        run = getattr(result, "run", None)
+        extra = {}
+        if run is not None:
+            extra = {
+                "universe_size": (run.market_session_context or {}).get("unique_universe_size"),
+                "sources": list(run.sources_queried or []),
+                "evaluated": len(run.symbols_evaluated or []),
+                "created": len(run.candidates_created or []),
+                "promoted": len(run.candidates_promoted or []),
+                "rejected": len(run.candidates_rejected or []),
+                "conclusion": run.conclusion,
+                "errors": list(run.errors or []),
+            }
+        return _ok(name, LIVE_DISCOVERY_WIRED=True, **extra)
+    return _legacy_watch_discover(services, ctx, name)
+
+
+def _legacy_watch_discover(services: AgentServices, ctx: dict[str, Any], job: str) -> dict[str, Any]:
     rows = []
-    job = ctx.get("job") or "CANDIDATE_DISCOVERY"
-    if services.candidates_fn is None:
-        if job == "CANDIDATE_DISCOVERY":
-            return _skipped(services, job, LIVE_DISCOVERY_SKIP_REASON)
-        return _ok(job, created=0, count=0, skipped=LIVE_DISCOVERY_SKIP_REASON)
     if services.candidates_fn:
         try:
             rows = list(services.candidates_fn() or [])
-        except Exception as exc:  # noqa: BLE001 — malformed candidate data must not kill runtime
+        except Exception as exc:  # noqa: BLE001
             log_activity(services.root, "CANDIDATE_REJECTED", reason=f"malformed:{exc}")
-            return _ok("CANDIDATE_DISCOVERY", rejected=1, reason=str(exc))
+            return _ok(job, rejected=1, reason=str(exc))
     created = 0
     session = _session(ctx)
     for raw in rows:
@@ -346,7 +383,46 @@ def _discover(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
         )
         created += 1
         log_activity(services.root, "CANDIDATE_DISCOVERED", ticker=item.ticker, watch_id=item.watch_id)
-    return _ok("CANDIDATE_DISCOVERY", created=created, count=len(rows))
+    return _ok(job, created=created, count=len(rows))
+
+
+def _reconcile_orders(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
+    executor = services.executor
+    if executor is None or getattr(executor, "broker", None) is None:
+        return _skipped(services, "LIVE_ORDER_RECONCILE", "no_executor")
+    from agentic_portfolio.live_execution.reconcile import reconcile_orders
+    from agentic_portfolio.policy import load_account_rules
+
+    account = str(load_account_rules()["account"]["account_number"])
+    result = reconcile_orders(
+        executor.store,
+        executor.broker,
+        account_number=account,
+        root=services.root,
+        now=_now(services),
+        notify=services.notify,
+        refresh_fn=services.refresh_fn,
+        approval_store=services.approval_store,
+    )
+    return _ok("LIVE_ORDER_RECONCILE", **result)
+
+
+def _drain_execution(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
+    session = _session(ctx)
+    if not session.regular_hours_open:
+        return _skipped(services, "APPROVED_EXECUTION_DRAIN", "off_hours_liquidity_not_executable")
+    if services.executor is None:
+        return _skipped(services, "APPROVED_EXECUTION_DRAIN", "no_executor")
+    ran = 0
+    for item in services.approval_store.all():
+        if item.status not in {LiveApprovalStatus.APPROVED, LiveApprovalStatus.APPROVED_EXECUTION_DISABLED}:
+            continue
+        if item.placed_order:
+            continue
+        services.executor.execute_approved(item)
+        services.approval_store.save(item)
+        ran += 1
+    return _ok("APPROVED_EXECUTION_DRAIN", drained=ran)
 
 
 def _session_analysis(services: AgentServices, ctx: dict[str, Any], job: str) -> dict[str, Any]:

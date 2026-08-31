@@ -1,0 +1,31 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-08-31",
+  "description": "Live execution after human approval. Default is off. LiveOrderExecutor is the only placement surface.",
+  "live_order_placement_enabled": false,
+  "require_human_approval": true,
+  "auto_execution": false,
+  "default_order_type": "market",
+  "default_time_in_force": "gfd",
+  "market_hours": "regular_hours",
+  "prefer_dollar_amount_for_buy": true,
+  "min_order_notional_usd": 1.0,
+  "quantity_decimal_places": 6,
+  "revalidation": {
+    "max_quote_move_pct": 0.03,
+    "max_nav_change_pct": 0.10,
+    "max_buying_power_change_pct": 0.15,
+    "max_cash_change_pct": 0.15,
+    "max_allocation_delta_pct_points": 1.0,
+    "require_regular_hours": true,
+    "require_tradable": true,
+    "reject_duplicate_open_order": true,
+    "reject_if_approval_expired": true,
+    "reject_if_thesis_invalidated": true
+  },
+  "idempotency": {
+    "intent_id_prefix": "exec",
+    "lock_stale_seconds": 120,
+    "ambiguous_does_not_retry": true
+  }
+}

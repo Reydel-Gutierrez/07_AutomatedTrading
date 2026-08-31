@@ -23,6 +23,9 @@ from agentic_portfolio.policy import load_dashboard_config, load_runtime_config
 LIVE_AI_ALLOWED = True
 LIVE_PROPOSALS_ALLOWED = True
 LIVE_ORDER_PLACEMENT = False
+REQUIRE_HUMAN_APPROVAL = True
+AUTO_EXECUTION = False
+AI_MONTHLY_HARD_CAP_USD = 10.0
 
 
 class RuntimeMode(str, Enum):
@@ -74,15 +77,65 @@ def is_live(*, environ: Mapping[str, str] | None = None) -> bool:
     return resolve_runtime_mode(environ=environ) is RuntimeMode.LIVE
 
 
+_TRUE = {"1", "true", "yes", "on"}
+_FALSE = {"0", "false", "no", "off"}
+
+
 def live_placement_enabled(
     *,
     environ: Mapping[str, str] | None = None,
     runtime_config: dict[str, Any] | None = None,
     account_rules: dict[str, Any] | None = None,
 ) -> bool:
-    """Always false until a future explicit human enable. Do not infer from LIVE mode."""
-    del environ, runtime_config, account_rules
+    """Explicit opt-in only. Default false. Ambiguous values fail closed.
+
+    LIVE mode does not imply placement. Committed default remains false.
+    """
+    env = environ if environ is not None else os.environ
+    for name in ("AGENTIC_LIVE_ORDER_PLACEMENT", "LIVE_ORDER_PLACEMENT"):
+        if name not in env:
+            continue
+        raw = str(env.get(name) or "").strip().lower()
+        if not raw:
+            continue
+        if raw in _TRUE:
+            return True
+        if raw in _FALSE:
+            return False
+        return False
+    cfg = dict(runtime_config if runtime_config is not None else load_runtime_config())
+    if "live_order_placement_enabled" in cfg:
+        value = cfg.get("live_order_placement_enabled")
+        if isinstance(value, bool):
+            return value
+        text = str(value or "").strip().lower()
+        if text in _TRUE:
+            return True
+        return False
+    if account_rules is not None:
+        exe = dict(account_rules.get("execution") or {})
+        if "live_order_placement_enabled" in exe:
+            return _truthy(exe.get("live_order_placement_enabled"))
     return False
+
+
+def require_human_approval(
+    *,
+    runtime_config: dict[str, Any] | None = None,
+    account_rules: dict[str, Any] | None = None,
+) -> bool:
+    cfg = dict(runtime_config if runtime_config is not None else load_runtime_config())
+    if "require_human_approval" in cfg:
+        return bool(cfg.get("require_human_approval"))
+    rules = dict(account_rules if account_rules is not None else {})
+    if not rules:
+        from agentic_portfolio.policy import load_account_rules
+
+        rules = load_account_rules()
+    exe = dict(rules.get("execution") or {})
+    if "require_human_approval" in exe:
+        return bool(exe.get("require_human_approval"))
+    return True
 
 
 def source_of_truth(mode: RuntimeMode | None = None) -> str:

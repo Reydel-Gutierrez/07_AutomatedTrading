@@ -81,11 +81,11 @@ Python collects facts and calculates deterministic values. AI Research interpret
 
 Cursor = development agent. Raspberry Pi application = 24/7 autonomous production runtime (`scripts/run_service.py`). The scheduler is internal orchestration, not process lifetime. AI providers (OpenAI, Anthropic) = reasoning services used only through the AI Gateway. Risk Gate = deterministic authority. Broker = authoritative account/execution state.
 
-The process stays alive on weekends and holidays. Off-hours work must not treat stale liquidity as executable. APPROVE on the dashboard transitions to `APPROVED_AWAITING_EXECUTION_IMPLEMENTATION` and does not place an order.
+The process stays alive on weekends and holidays. Off-hours work must not treat stale liquidity as executable. Human APPROVE is mandatory. Default `LIVE_ORDER_PLACEMENT=false` transitions to `APPROVED_EXECUTION_DISABLED` and does not place. Placement is only allowed through `LiveOrderExecutor` after send-time revalidation and broker review, when the switch is explicitly on.
 
 AI must **never** be described as having unrestricted trading authority.
 
-LIVE: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, `LIVE_ORDER_PLACEMENT=false`. Do not call `place_equity_order` or `cancel_equity_order`. Any placement attempt fails closed and writes an audit event.
+LIVE: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, committed `LIVE_ORDER_PLACEMENT=false`. AI never calls `place_equity_order` or `cancel_equity_order`. The only placement surface is `src/agentic_portfolio/live_execution/executor.py`. Any unapproved placement attempt fails closed and writes an audit event.
 
 All external AI calls go through `src/agentic_portfolio/ai/gateway.py`. Model names live in `config/ai.json`. Combined spend across every provider and model must never exceed **$10 USD per calendar month**. Structured JSON only. Application facts are assembled in Python; the model interprets them and must not replace NAV/cash/positions.
 

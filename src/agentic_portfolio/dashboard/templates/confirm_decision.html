@@ -3,8 +3,8 @@
 {% block content %}
 <p class="crumb"><a href="{{ url_for('approval_detail_page', approval_id=packet.approval_id) }}">{{ packet.symbol }}</a> / confirm</p>
 
-<div class="halt-banner placement-banner">{{ no_live_placement_banner }} · this still does not place an order</div>
-<p class="lede"><span class="book-tag paper">{{ packet.book_label or paper_book_label }}</span> Confirm <strong>{{ intent }}</strong> for {{ packet.symbol }} {{ packet.action }}. Packet kind {{ packet.packet_kind }}.</p>
+<div class="halt-banner placement-banner">{{ no_live_placement_banner }}{% if live_order_placement_enabled %} · human approval still required · send-time revalidation still runs{% else %} · this still does not place an order{% endif %}</div>
+<p class="lede"><span class="book-tag {{ 'live' if packet.queue_kind == 'live' else 'paper' }}">{{ packet.book_label or paper_book_label }}</span> Confirm <strong>{{ intent }}</strong> for {{ packet.symbol }} {{ packet.action }}. Packet kind {{ packet.packet_kind }}.</p>
 
 <section class="kpis">
   <article class="kpi"><h2>Symbol</h2><p class="figure">{{ packet.symbol }}</p><p class="meta">{{ packet.sleeve or '—' }}</p></article>
@@ -15,9 +15,9 @@
 
 <section class="card">
   <h2>Confirm human decision</h2>
-  <p>Persisting {{ intent }} writes the approval packet only. Live order placement stays disabled.</p>
+  <p>Persisting {{ intent }} writes the approval packet.{% if live_order_placement_enabled %} If APPROVED, send-time revalidation and broker review run before any live order.{% else %} Live order placement stays disabled.{% endif %}</p>
   {% if note %}<p class="meta">Note: {{ note }}</p>{% endif %}
-  <form class="decide" method="post" action="{{ url_for('approve_packet' if intent == 'APPROVED' else 'reject_packet', approval_id=packet.approval_id) }}" onsubmit="return confirm('{{ intent }} {{ packet.symbol }}? This still does not place an order.');">
+  <form class="decide" method="post" action="{{ url_for('approve_packet' if intent == 'APPROVED' else 'reject_packet', approval_id=packet.approval_id) }}" onsubmit="return confirm('{{ intent }} {{ packet.symbol }}?');">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="confirm" value="1">
     <input type="hidden" name="note" value="{{ note }}">

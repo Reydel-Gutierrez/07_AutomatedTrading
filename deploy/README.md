@@ -323,8 +323,10 @@ sudo systemctl status agentic-portfolio
 
 PID file: `state/runtime/agent.pid`
 
-## Execution (unchanged)
+## Execution (release candidate)
 
-`auto_execution=false`, `live_trade_actions_allowed=false`, `LIVE_ORDER_PLACEMENT=false`.
-Approving a proposal on the dashboard does not place an order.
-No new broker mutation capabilities are enabled by this unit.
+`auto_execution=false`, `live_trade_actions_allowed=false`, committed `LIVE_ORDER_PLACEMENT=false` / `AGENTIC_LIVE_ORDER_PLACEMENT=false`.
+
+Human APPROVE is mandatory. With the switch off, APPROVE becomes `APPROVED_EXECUTION_DISABLED` and does not call `place_equity_order`.
+
+Do **not** set `AGENTIC_LIVE_ORDER_PLACEMENT=true` until this RC has been validated on the Pi (real discovery, research, approval cards). Then enable it only in `/etc/agentic-portfolio/env`, never in git. The only placement surface is `LiveOrderExecutor`.

@@ -240,6 +240,34 @@
       "max_3pct_nav_fit"
     ]
   },
+  "universe_construction": {
+    "max_universe_size": 40,
+    "max_per_source": 25,
+    "max_snapshots_to_score": 30,
+    "min_last_price": 5.0,
+    "existing_position_exempt_from_min_price": true,
+    "baseline_only_if_empty": true,
+    "baseline_symbols": [],
+    "sources": [
+      "account_positions",
+      "account_watchlists",
+      "popular_watchlists",
+      "saved_scans",
+      "earnings_calendar",
+      "portfolio_adjacent"
+    ],
+    "popular_watchlist_titles": [
+      "100 Most Popular",
+      "Daily Movers",
+      "Upcoming Earnings",
+      "Most Held"
+    ],
+    "earnings_days": 7,
+    "earnings_filter": "high_market_cap",
+    "do_not_call_ai": true,
+    "do_not_create_scan": true,
+    "do_not_mutate_watchlists": true
+  },
   "channels": {
     "CORE_QUALITY_DISCOVERY": {
       "sleeve": "CORE_GROWTH",

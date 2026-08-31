@@ -11,6 +11,7 @@ from agentic_portfolio.agent.persist import atomic_write_json, read_json
 from agentic_portfolio.agent.session import SessionSnapshot
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.policy import load_agent_config
+from agentic_portfolio.runtime import live_placement_enabled
 
 
 def health_path(root: Path | None = None, *, config: dict[str, Any] | None = None) -> Path:
@@ -80,7 +81,7 @@ def write_health(
         "openai": openai,
         "ai_budget": budget,
         "cycles": cycles,
-        "LIVE_ORDER_PLACEMENT": False,
+        "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
         "auto_execution": False,
         "live_trade_actions_allowed": False,
         "live_error": live_error,

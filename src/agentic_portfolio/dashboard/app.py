@@ -251,7 +251,7 @@ def create_app(root: Path | None = None) -> Flask:
             "live_account_status": ui["live_account_status"],
             "paper_book_status": ui["paper_book_status"],
             "book_kind": ui["book_kind"],
-            "live_order_placement_enabled": False,
+            "live_order_placement_enabled": ui["live_order_placement_enabled"],
             "no_live_placement_banner": ui["no_live_placement_banner"],
             "csrf_token": _csrf_token(),
             "allow_paper_packet_decisions": ui["allow_paper_packet_decisions"],

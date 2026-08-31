@@ -275,7 +275,7 @@ def test_approve_reject_dashboard_does_not_place(tmp_path):
     body = res.get_json()
     assert body["ok"] is True
     assert body["placed_order"] is False
-    assert body["packet"]["status"] == LiveApprovalStatus.APPROVED_AWAITING_EXECUTION_IMPLEMENTATION.value
+    assert body["packet"]["status"] == LiveApprovalStatus.APPROVED_EXECUTION_DISABLED.value
     assert body["packet"]["broker_submitted"] is False
     stored = store.get(item.approval_id)
     assert stored.status is APPROVED_HOLD

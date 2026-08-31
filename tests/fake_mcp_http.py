@@ -281,12 +281,33 @@ class FakeMcpHttp:
             return orders_payload(self.orders)
         if tool == "get_equity_tradability":
             symbols = [str(s).upper() for s in (arguments.get("symbols") or ["MSFT"])]
-            return tradability_payload(symbols[0] if symbols else "MSFT")
+            if not symbols:
+                symbols = ["MSFT"]
+            return {
+                "data": {
+                    "results": [
+                        {
+                            "symbol": symbol,
+                            "name": symbol,
+                            "simple_name": symbol,
+                            "state": "active",
+                            "tradeable": True,
+                        }
+                        for symbol in symbols
+                    ]
+                }
+            }
         if tool == "get_equity_fundamentals":
             symbols = [str(s).upper() for s in (arguments.get("symbols") or ["MSFT"])]
-            return fundamentals_payload(symbols[0] if symbols else "MSFT")
+            return {
+                "data": {
+                    "results": [fundamentals_payload(symbol)["data"]["results"][0] for symbol in symbols]
+                }
+            }
         if tool == "search":
             return search_payload(str(arguments.get("query") or "MSFT").upper())
+        if tool in {"get_watchlists", "get_popular_watchlists", "get_scans", "get_earnings_calendar", "get_watchlist_items", "run_scan"}:
+            return {"data": {"results": []}}
         return {"data": {}}
 
     def tool_calls(self) -> list[tuple[str, dict[str, Any]]]:
