@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Any, Iterable
 
 from agentic_portfolio.agent.session import MarketPhase
 
@@ -14,6 +14,11 @@ POST = frozenset({MarketPhase.AFTER_CLOSE})
 NIGHT = frozenset({MarketPhase.OVERNIGHT})
 CLOSED_DAYS = frozenset({MarketPhase.WEEKEND, MarketPhase.HOLIDAY})
 OFF = frozenset({MarketPhase.PREMARKET, MarketPhase.AFTER_CLOSE, MarketPhase.OVERNIGHT, MarketPhase.WEEKEND, MarketPhase.HOLIDAY})
+
+MARKET_OPEN_DEEP_RESEARCH_PER_CYCLE = 1
+OFF_HOURS_DEEP_RESEARCH_PER_CYCLE = 2
+MARKET_OPEN_DISCOVERY_MINUTES = 15
+RESEARCH_QUEUE_MINUTES = 30
 
 
 @dataclass(frozen=True)
@@ -26,6 +31,35 @@ class JobSpec:
     requires_broker: bool = False
     requires_regular_hours: bool = False
     description: str = ""
+    open_cadence: str | None = None
+    open_every_minutes: int | None = None
+
+    def cadence_for(self, phase: MarketPhase) -> str:
+        if phase is MarketPhase.MARKET_OPEN and self.open_cadence:
+            return self.open_cadence
+        return self.cadence
+
+    def every_minutes_for(self, phase: MarketPhase) -> int | None:
+        if phase is MarketPhase.MARKET_OPEN and self.open_every_minutes is not None:
+            return self.open_every_minutes
+        return self.every_minutes
+
+    def mode_for(self, phase: MarketPhase) -> str | None:
+        if self.name != "CANDIDATE_DISCOVERY":
+            return None
+        return "lightweight" if phase is MarketPhase.MARKET_OPEN else "broad"
+
+    def as_preview(self, phase: MarketPhase) -> dict[str, Any]:
+        return {
+            "job": self.name,
+            "cadence": self.cadence_for(phase),
+            "every_minutes": self.every_minutes_for(phase),
+            "allow_ai": self.allow_ai,
+            "description": self.description,
+            "mode": self.mode_for(phase),
+            "valid_for_phase": True,
+            "phase": phase.value,
+        }
 
 
 def catalog() -> list[JobSpec]:
@@ -37,7 +71,15 @@ def catalog() -> list[JobSpec]:
         JobSpec("LIVE_ACCOUNT_REFRESH", ALL_PHASES, "interval", every_minutes=15, requires_broker=True, description="Live account/position refresh"),
         JobSpec("POSITION_MONITOR", OPEN, "interval", every_minutes=15, requires_broker=True, requires_regular_hours=True, description="Position monitoring"),
         JobSpec("QUOTE_REFRESH", OPEN, "interval", every_minutes=15, requires_broker=True, requires_regular_hours=True, description="Quote/liquidity refresh"),
-        JobSpec("CANDIDATE_DISCOVERY", POST | CLOSED_DAYS, "once_per_session", requires_broker=True, description="Broad live universe discovery"),
+        JobSpec(
+            "CANDIDATE_DISCOVERY",
+            OPEN | POST | CLOSED_DAYS,
+            "once_per_session",
+            requires_broker=True,
+            description="Broad live universe discovery; lightweight MARKET_OPEN pass every 15 minutes",
+            open_cadence="interval",
+            open_every_minutes=MARKET_OPEN_DISCOVERY_MINUTES,
+        ),
         JobSpec("POSTMARKET_EARNINGS_DISCOVERY", POST, "once_per_session", requires_broker=True, description="Earnings and event discovery"),
         JobSpec("PREMARKET_EVENT_DISCOVERY", PRE, "once_per_session", requires_broker=True, description="Overnight event / earnings refresh"),
         JobSpec("LIVE_ORDER_RECONCILE", OPEN | POST, "interval", every_minutes=5, requires_broker=True, requires_regular_hours=False, description="Reconcile broker orders"),
@@ -55,7 +97,14 @@ def catalog() -> list[JobSpec]:
         JobSpec("POSTMARKET_CANDIDATE_RANK", POST, "once_per_session", description="Candidate ranking from completed session"),
         JobSpec("LUNA_SCREEN", POST | CLOSED_DAYS, "once_per_day", allow_ai=True, description="Cheap Luna screening when warranted"),
         JobSpec("TERRA_RESEARCH", POST | CLOSED_DAYS, "once_per_day", allow_ai=True, description="Terra research when warranted"),
-        JobSpec("RESEARCH_QUEUE_WORKER", NIGHT | PRE | POST | CLOSED_DAYS, "interval", every_minutes=30, allow_ai=True, description="Consume research queue through AI Gateway"),
+        JobSpec(
+            "RESEARCH_QUEUE_WORKER",
+            OPEN | NIGHT | PRE | POST | CLOSED_DAYS,
+            "interval",
+            every_minutes=RESEARCH_QUEUE_MINUTES,
+            allow_ai=True,
+            description="Consume research queue through AI Gateway (max 1 deep-research item during MARKET_OPEN)",
+        ),
         JobSpec("THESIS_WATCH_CREATE", POST | CLOSED_DAYS, "once_per_day", description="Thesis/watchlist creation"),
         JobSpec("NEXT_SESSION_PLANS", POST | CLOSED_DAYS, "once_per_day", description="Conditional next-session plans"),
         JobSpec("OVERNIGHT_NEWS", NIGHT, "interval", every_minutes=120, description="News/catalyst monitoring"),
@@ -78,6 +127,17 @@ def specs_by_name() -> dict[str, JobSpec]:
 
 def specs_for_phase(phase: MarketPhase) -> list[JobSpec]:
     return [spec for spec in catalog() if phase in spec.phases]
+
+
+def catalog_preview(phase: MarketPhase) -> list[dict[str, Any]]:
+    """Scheduler diagnostics: jobs valid for a phase, including MARKET_OPEN research/discovery."""
+    return [spec.as_preview(phase) for spec in specs_for_phase(phase)]
+
+
+def research_queue_max_items(phase: MarketPhase | None) -> int:
+    if phase is MarketPhase.MARKET_OPEN:
+        return MARKET_OPEN_DEEP_RESEARCH_PER_CYCLE
+    return OFF_HOURS_DEEP_RESEARCH_PER_CYCLE
 
 
 def iter_catalog() -> Iterable[JobSpec]:

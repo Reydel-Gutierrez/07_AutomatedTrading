@@ -140,7 +140,7 @@ class AgentRuntime:
                     "calls_month": status.calls_month,
                 }
 
-            def live_discover(sources=None):
+            def live_discover(sources=None, lightweight=False):
                 from agentic_portfolio.discovery.live import run_live_discovery
                 from agentic_portfolio.agent.pipeline import load_live_context
 
@@ -159,6 +159,7 @@ class AgentRuntime:
                     root=self.base,
                     runtime_mode=self.runtime_mode,
                     source_filter=sources,
+                    lightweight=lightweight,
                     now=self.now(),
                 )
 

@@ -156,7 +156,7 @@ Paper/live-shaped run: `PYTHONPATH=src python scripts/run_paper_review.py` (one 
 
 Switch: `AGENTIC_RUNTIME_MODE=LIVE` or `DASHBOARD_ENVIRONMENT=LIVE` (see `config/runtime.json`). Dashboard shows **LIVE**. It does not fall back to paper $10,000 NAV.
 
-The overnight `RESEARCH_QUEUE_WORKER` job consumes promoted candidates in `state/research_queue.json` (and `state/live_ai/` when present) through the existing Research Engine and AI Gateway. Successful research can create DRAFT theses, persistent watches, or human approval packets.
+The `RESEARCH_QUEUE_WORKER` job consumes promoted candidates in `state/research_queue.json` (and `state/live_ai/` when present) through the existing Research Engine and AI Gateway. It runs during MARKET_OPEN as well (every 30 minutes, max 1 deep-research item per cycle; max 2 outside regular hours). Successful research can create DRAFT theses, persistent watches, or human approval packets.
 
 Live discovery is dynamic (`LIVE_DISCOVERY_WIRED=true`): positions, watchlists, popular lists, saved scans, and earnings — no AI, no hard-coded 25-name universe.
 

@@ -70,17 +70,19 @@ class JobOrchestrator:
 
     def _key(self, spec: JobSpec, stamp: datetime, session: SessionSnapshot) -> str:
         et = stamp.astimezone(EASTERN)
-        if spec.cadence == "once_per_session":
+        cadence = spec.cadence_for(session.phase)
+        if cadence == "once_per_session":
             return session.session_id or et.date().isoformat()
-        if spec.cadence == "once_per_day":
+        if cadence == "once_per_day":
             return et.date().isoformat()
         return ""
 
     def _is_due(self, spec: JobSpec, stamp: datetime, session: SessionSnapshot) -> bool:
         last = (self.state.get("jobs") or {}).get(spec.name) or {}
-        if spec.cadence in {"once_per_session", "once_per_day"}:
+        cadence = spec.cadence_for(session.phase)
+        if cadence in {"once_per_session", "once_per_day"}:
             return str(last.get("run_key") or "") != self._key(spec, stamp, session)
-        every = int(spec.every_minutes or 1) * 60
+        every = int(spec.every_minutes_for(session.phase) or 1) * 60
         last_at = last.get("at")
         if not last_at:
             return True
@@ -93,13 +95,14 @@ class JobOrchestrator:
         return (stamp - prev).total_seconds() >= every
 
     def _wait_seconds(self, spec: JobSpec, stamp: datetime, session: SessionSnapshot) -> float | None:
-        if spec.cadence in {"once_per_session", "once_per_day"}:
+        cadence = spec.cadence_for(session.phase)
+        if cadence in {"once_per_session", "once_per_day"}:
             if self._is_due(spec, stamp, session):
                 return 0.0
             return None
         last = (self.state.get("jobs") or {}).get(spec.name) or {}
         last_at = last.get("at")
-        every = int(spec.every_minutes or 1) * 60
+        every = int(spec.every_minutes_for(session.phase) or 1) * 60
         if not last_at:
             return 0.0
         try:
@@ -173,16 +176,13 @@ class JobOrchestrator:
         rows = []
         for spec in specs_for_phase(session.phase):
             last = (self.state.get("jobs") or {}).get(spec.name) or {}
-            rows.append(
+            row = spec.as_preview(session.phase)
+            row.update(
                 {
-                    "job": spec.name,
-                    "cadence": spec.cadence,
-                    "every_minutes": spec.every_minutes,
-                    "allow_ai": spec.allow_ai,
                     "due": self._is_due(spec, stamp, session),
                     "last_status": last.get("status"),
                     "last_at": last.get("at"),
-                    "description": spec.description,
                 }
             )
+            rows.append(row)
         return rows

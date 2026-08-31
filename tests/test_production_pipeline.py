@@ -12,6 +12,7 @@ from pathlib import Path
 
 from agentic_portfolio.agent.handlers import AgentServices, build_handlers
 from agentic_portfolio.agent.jobs import specs_by_name
+from agentic_portfolio.agent.orchestrator import JobOrchestrator
 from agentic_portfolio.agent.pipeline import ResearchQueueWorker, resolve_queue_stores
 from agentic_portfolio.agent.safety import inspect_agent_packages_for_forbidden_calls
 from agentic_portfolio.ai.budget import BudgetManager
@@ -531,9 +532,27 @@ def test_research_queue_worker_is_scheduled():
     names = specs_by_name()
     assert "RESEARCH_QUEUE_WORKER" in names
     assert names["RESEARCH_QUEUE_WORKER"].allow_ai is True
+    from agentic_portfolio.agent.jobs import catalog_preview, research_queue_max_items
     from agentic_portfolio.agent.session import MarketPhase
 
     assert MarketPhase.OVERNIGHT in names["RESEARCH_QUEUE_WORKER"].phases
+    assert MarketPhase.MARKET_OPEN in names["RESEARCH_QUEUE_WORKER"].phases
+    assert MarketPhase.MARKET_OPEN in names["CANDIDATE_DISCOVERY"].phases
+    assert names["RESEARCH_QUEUE_WORKER"].every_minutes == 30
+    assert names["CANDIDATE_DISCOVERY"].open_every_minutes == 15
+    assert names["CANDIDATE_DISCOVERY"].cadence_for(MarketPhase.MARKET_OPEN) == "interval"
+    assert names["CANDIDATE_DISCOVERY"].mode_for(MarketPhase.MARKET_OPEN) == "lightweight"
+    assert names["CANDIDATE_DISCOVERY"].mode_for(MarketPhase.AFTER_CLOSE) == "broad"
+    assert research_queue_max_items(MarketPhase.MARKET_OPEN) == 1
+    assert research_queue_max_items(MarketPhase.OVERNIGHT) == 2
+    preview = catalog_preview(MarketPhase.MARKET_OPEN)
+    jobs = {row["job"]: row for row in preview}
+    assert jobs["RESEARCH_QUEUE_WORKER"]["valid_for_phase"] is True
+    assert jobs["RESEARCH_QUEUE_WORKER"]["every_minutes"] == 30
+    assert jobs["CANDIDATE_DISCOVERY"]["valid_for_phase"] is True
+    assert jobs["CANDIDATE_DISCOVERY"]["mode"] == "lightweight"
+    assert jobs["CANDIDATE_DISCOVERY"]["every_minutes"] == 15
+    assert "AI_REASSESS_IF_WARRANTED" in jobs
 
 
 def test_handlers_include_research_queue_worker(tmp_path):
@@ -559,3 +578,201 @@ def test_handlers_include_research_queue_worker(tmp_path):
     row = handlers["RESEARCH_QUEUE_WORKER"]({"job": "RESEARCH_QUEUE_WORKER"})
     assert row["status"] == "BLOCKED"
     assert row["skipped"] == "ai_disabled"
+
+
+def _orch_services(root: Path, *, now, research=None, decision=None, gateway=None, discovery_fn=None, nav=500.0, exhausted=False):
+    from agentic_portfolio.adapters.readonly_runtime import ReadonlyBrokerRuntime
+    from agentic_portfolio.agent.connection import ConnectionManager
+
+    watch, approvals, notify = _services(root)
+    context = ctx(nav)
+    return AgentServices(
+        root=root,
+        runtime_mode=RuntimeMode.LIVE,
+        watch=watch,
+        watch_store=watch.store,
+        approvals=approvals,
+        approval_store=approvals.store,
+        notify=notify,
+        connection=ConnectionManager(bootstrap=lambda **k: ReadonlyBrokerRuntime(bound=True), now_fn=now),
+        now_fn=now,
+        research_reasoner=research,
+        decision_reasoner=decision,
+        gateway=gateway,
+        context_fn=lambda: context,
+        payload_fn=lambda candidate: _payload(candidate.symbol),
+        last_context=context,
+        discovery_fn=discovery_fn,
+        ai_allowed=not exhausted,
+        budget_exhausted=exhausted,
+    )
+
+
+def test_queued_research_is_consumed_during_market_open(tmp_path):
+    from agentic_portfolio.calendar import EASTERN
+    from agentic_portfolio.agent.session import MarketPhase, classify_market_phase
+
+    friday_open = datetime(2026, 8, 28, 10, 0, tzinfo=EASTERN)
+    assert classify_market_phase(friday_open).phase is MarketPhase.MARKET_OPEN
+    _seed(tmp_path, symbol="QUAL")
+    research = ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="KEEP_WATCHING")})
+    now = lambda: friday_open
+    orch = JobOrchestrator(tmp_path, handlers=build_handlers(_orch_services(tmp_path, now=now, research=research)), now_fn=now)
+    due = orch.due_jobs(friday_open)
+    assert "RESEARCH_QUEUE_WORKER" in due
+    row = orch.run_job("RESEARCH_QUEUE_WORKER", now=friday_open)
+    assert row["status"] in {"OK", "DEGRADED"}
+    assert row["items_processed"] == 1
+    assert row["max_items"] == 1
+    assert row["LIVE_ORDER_PLACEMENT"] is False
+    assert row["placement_attempted"] is False
+    assert LIVE_ORDER_PLACEMENT is False
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    assert queue.all()[0].status is ResearchQueueStatus.COMPLETED
+
+
+def test_market_open_research_cycle_processes_only_one_item(tmp_path):
+    from agentic_portfolio.calendar import EASTERN
+
+    friday_open = datetime(2026, 8, 28, 10, 0, tzinfo=EASTERN)
+    _seed(tmp_path, symbol="QUAL")
+    _seed(tmp_path, symbol="MSFT")
+    research = ScriptedResearchReasoner(
+        {
+            "QUAL": _ai("QUAL", conclusion="KEEP_WATCHING"),
+            "MSFT": _ai("MSFT", conclusion="KEEP_WATCHING"),
+        }
+    )
+    now = lambda: friday_open
+    orch = JobOrchestrator(tmp_path, handlers=build_handlers(_orch_services(tmp_path, now=now, research=research)), now_fn=now)
+    row = orch.run_job("RESEARCH_QUEUE_WORKER", now=friday_open)
+    assert row["max_items"] == 1
+    assert row["items_processed"] == 1
+    assert row["items_considered"] == 2
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    statuses = {e.symbol: e.status for e in queue.all()}
+    completed = [s for s in statuses.values() if s is ResearchQueueStatus.COMPLETED]
+    queued = [s for s in statuses.values() if s is ResearchQueueStatus.QUEUED]
+    assert len(completed) == 1
+    assert len(queued) == 1
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_off_hours_research_cycle_still_allows_two_items(tmp_path):
+    from agentic_portfolio.calendar import EASTERN
+
+    saturday = datetime(2026, 8, 29, 14, 0, tzinfo=EASTERN)
+    _seed(tmp_path, symbol="QUAL")
+    _seed(tmp_path, symbol="MSFT")
+    _seed(tmp_path, symbol="AAPL")
+    research = ScriptedResearchReasoner(
+        {
+            "QUAL": _ai("QUAL", conclusion="KEEP_WATCHING"),
+            "MSFT": _ai("MSFT", conclusion="KEEP_WATCHING"),
+            "AAPL": _ai("AAPL", conclusion="KEEP_WATCHING"),
+        }
+    )
+    now = lambda: saturday
+    orch = JobOrchestrator(tmp_path, handlers=build_handlers(_orch_services(tmp_path, now=now, research=research)), now_fn=now)
+    row = orch.run_job("RESEARCH_QUEUE_WORKER", now=saturday)
+    assert row["max_items"] == 2
+    assert row["items_processed"] == 2
+
+
+def test_market_open_hard_cap_still_blocks_ai(tmp_path):
+    from agentic_portfolio.calendar import EASTERN
+
+    friday_open = datetime(2026, 8, 28, 10, 0, tzinfo=EASTERN)
+    _seed(tmp_path)
+    cfg = load_ai_config()
+    ledger = UsageLedger(tmp_path, config=cfg)
+    data = ledger.load_month(now=NOW)
+    data["spent"] = "10.00"
+    ledger.save_month(data)
+    scripted = ScriptedProvider({"*": _ai("QUAL")}, name="openai")
+    gw = AIGateway(
+        budget=BudgetManager(ledger, cfg, now_fn=lambda: NOW),
+        providers={"openai": scripted},
+        config=cfg,
+        runtime_mode=RuntimeMode.LIVE.value,
+    )
+    assert gw.budget.status().mode is BudgetMode.EXHAUSTED
+    now = lambda: friday_open
+    orch = JobOrchestrator(tmp_path, handlers=build_handlers(_orch_services(tmp_path, now=now, gateway=gw)), now_fn=now)
+    row = orch.run_job("RESEARCH_QUEUE_WORKER", now=friday_open)
+    assert row["status"] == "BLOCKED"
+    assert row.get("skipped") == "budget_exhausted" or row.get("skipped_reason") == "budget_exhausted"
+    assert scripted.calls == []
+    assert LIVE_ORDER_PLACEMENT is False
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    assert queue.all()[0].status is ResearchQueueStatus.QUEUED
+
+
+def test_market_open_does_not_duplicate_candidates_or_reports(tmp_path):
+    from agentic_portfolio.calendar import EASTERN
+
+    friday_open = datetime(2026, 8, 28, 10, 0, tzinfo=EASTERN)
+    _seed(tmp_path, symbol="QUAL")
+    research = ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="KEEP_WATCHING")})
+    now = lambda: friday_open
+    services = _orch_services(tmp_path, now=now, research=research)
+    orch = JobOrchestrator(tmp_path, handlers=build_handlers(services), now_fn=now)
+    first = orch.run_job("RESEARCH_QUEUE_WORKER", now=friday_open)
+    assert first["items_processed"] == 1
+    assert first["reports_created"] == 1
+    worker = services._pipeline_worker
+    reports = worker.research_store.by_symbol("QUAL")
+    assert len(reports) == 1
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    entry = queue.all()[0]
+    queue.set_status(entry.queue_id, ResearchQueueStatus.QUEUED, skipped_reason=None)
+    second = orch.run_job("RESEARCH_QUEUE_WORKER", now=friday_open)
+    assert second["details"][0].get("duplicate") is True
+    assert second["reports_created"] == 0
+    assert len(worker.research_store.by_symbol("QUAL")) == 1
+    assert LIVE_ORDER_PLACEMENT is False
+    assert first["placement_attempted"] is False
+    assert second["placement_attempted"] is False
+
+
+def test_market_open_discovery_is_lightweight_and_live_placement_off(tmp_path):
+    from agentic_portfolio.calendar import EASTERN
+
+    friday_open = datetime(2026, 8, 28, 10, 0, tzinfo=EASTERN)
+    friday_post = datetime(2026, 8, 28, 16, 30, tzinfo=EASTERN)
+    calls: list[dict] = []
+
+    def discovery_fn(sources=None, lightweight=False):
+        calls.append({"sources": sources, "lightweight": lightweight})
+
+        class _Run:
+            run = None
+
+        return _Run()
+
+    now = lambda: friday_open
+    orch = JobOrchestrator(
+        tmp_path,
+        handlers=build_handlers(_orch_services(tmp_path, now=now, research=ScriptedResearchReasoner({}), discovery_fn=discovery_fn)),
+        now_fn=now,
+    )
+    due = orch.due_jobs(friday_open)
+    assert "CANDIDATE_DISCOVERY" in due
+    assert "RESEARCH_QUEUE_WORKER" in due
+    assert "AI_REASSESS_IF_WARRANTED" in due
+    preview = {row["job"]: row for row in orch.scheduled_preview(friday_open)}
+    assert preview["RESEARCH_QUEUE_WORKER"]["valid_for_phase"] is True
+    assert preview["CANDIDATE_DISCOVERY"]["mode"] == "lightweight"
+    open_row = orch.run_job("CANDIDATE_DISCOVERY", now=friday_open)
+    assert open_row["mode"] == "lightweight"
+    assert open_row["LIVE_ORDER_PLACEMENT"] is False
+    post = JobOrchestrator(
+        tmp_path / "post",
+        handlers=build_handlers(_orch_services(tmp_path / "post", now=lambda: friday_post, discovery_fn=discovery_fn)),
+        now_fn=lambda: friday_post,
+    )
+    post_row = post.run_job("CANDIDATE_DISCOVERY", now=friday_post)
+    assert post_row["mode"] == "broad"
+    assert calls[0]["lightweight"] is True
+    assert calls[1]["lightweight"] is False
+    assert LIVE_ORDER_PLACEMENT is False

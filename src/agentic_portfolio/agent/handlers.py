@@ -10,6 +10,7 @@ from typing import Any, Callable, Mapping
 from agentic_portfolio.discovery.live import LIVE_DISCOVERY_SKIP_REASON, LIVE_DISCOVERY_WIRED, run_live_discovery
 from agentic_portfolio.adapters.portfolio_facts import live_error_code_of, redact_live_error
 from agentic_portfolio.agent.activity import log_activity
+from agentic_portfolio.agent.jobs import research_queue_max_items
 from agentic_portfolio.agent.connection import ConnectionManager
 from agentic_portfolio.agent.safety import assert_auto_execution_disabled
 from agentic_portfolio.agent.session import MarketPhase, SessionSnapshot
@@ -164,9 +165,14 @@ def _research_queue(services: AgentServices, ctx: dict[str, Any]) -> dict[str, A
             "placement_attempted": False,
             "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
         }
-    result = _pipeline_worker(services).run_cycle(job=job)
+    session = ctx.get("session")
+    phase = getattr(session, "phase", None)
+    max_items = research_queue_max_items(phase)
+    result = _pipeline_worker(services).run_cycle(job=job, max_items=max_items)
     row = result.as_dict()
     row["job"] = job
+    row["max_items"] = max_items
+    row["phase"] = phase.value if phase is not None else None
     return row
 
 
@@ -313,13 +319,15 @@ def _quotes(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
 
 def _discover(services: AgentServices, ctx: dict[str, Any], job: str | None = None, sources: list[str] | None = None) -> dict[str, Any]:
     name = job or ctx.get("job") or "CANDIDATE_DISCOVERY"
+    session = _session(ctx) if "session" in ctx else None
+    lightweight = bool(session is not None and session.phase is MarketPhase.MARKET_OPEN and name == "CANDIDATE_DISCOVERY")
     if services.discovery_fn is None and services.candidates_fn is None:
         if not LIVE_DISCOVERY_WIRED:
             return _skipped(services, name, LIVE_DISCOVERY_SKIP_REASON)
         return _skipped(services, name, "no_discovery_fn")
     if services.discovery_fn is not None:
         try:
-            result = services.discovery_fn(sources=sources)
+            result = _invoke_discovery(services.discovery_fn, sources=sources, lightweight=lightweight)
         except Exception as exc:  # noqa: BLE001
             log_activity(services.root, "DISCOVERY_FAILED", job=name, reason=str(exc))
             return {
@@ -328,6 +336,7 @@ def _discover(services: AgentServices, ctx: dict[str, Any], job: str | None = No
                 "reason": str(exc),
                 "placement_attempted": False,
                 "LIVE_DISCOVERY_WIRED": LIVE_DISCOVERY_WIRED,
+                "mode": "lightweight" if lightweight else "broad",
             }
         run = getattr(result, "run", None)
         extra = {}
@@ -342,8 +351,15 @@ def _discover(services: AgentServices, ctx: dict[str, Any], job: str | None = No
                 "conclusion": run.conclusion,
                 "errors": list(run.errors or []),
             }
-        return _ok(name, LIVE_DISCOVERY_WIRED=True, **extra)
+        return _ok(name, LIVE_DISCOVERY_WIRED=True, mode="lightweight" if lightweight else "broad", **extra)
     return _legacy_watch_discover(services, ctx, name)
+
+
+def _invoke_discovery(fn: Callable[..., Any], *, sources: list[str] | None, lightweight: bool) -> Any:
+    try:
+        return fn(sources=sources, lightweight=lightweight)
+    except TypeError:
+        return fn(sources=sources)
 
 
 def _legacy_watch_discover(services: AgentServices, ctx: dict[str, Any], job: str) -> dict[str, Any]:

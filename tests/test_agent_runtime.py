@@ -124,6 +124,16 @@ def test_off_market_and_weekend_jobs_execute(tmp_path):
     holiday = JobOrchestrator(tmp_path / "hol", now_fn=lambda: LABOR_DAY)
     assert "WEEKEND_SESSION_ANALYSIS" in holiday.due_jobs(LABOR_DAY)
 
+    open_orch = JobOrchestrator(tmp_path / "open", now_fn=lambda: FRIDAY_OPEN)
+    open_due = open_orch.due_jobs(FRIDAY_OPEN)
+    assert "RESEARCH_QUEUE_WORKER" in open_due
+    assert "CANDIDATE_DISCOVERY" in open_due
+    assert "AI_REASSESS_IF_WARRANTED" in open_due
+    preview = {row["job"]: row for row in open_orch.scheduled_preview(FRIDAY_OPEN)}
+    assert preview["RESEARCH_QUEUE_WORKER"]["valid_for_phase"] is True
+    assert preview["CANDIDATE_DISCOVERY"]["mode"] == "lightweight"
+    assert preview["CANDIDATE_DISCOVERY"]["every_minutes"] == 15
+
 
 def test_latest_session_analysis_creates_watch_and_persists(tmp_path):
     now = lambda: SATURDAY

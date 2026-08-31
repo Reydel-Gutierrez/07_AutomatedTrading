@@ -384,6 +384,35 @@ def test_candidate_and_queue_and_run_persist(tmp_path):
         assert q.symbol == "QUAL"
 
 
+def test_repeat_discovery_does_not_duplicate_candidates_or_queue(tmp_path):
+    from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT
+
+    cstore = CandidateStore(tmp_path / "c.json")
+    qstore = ResearchQueue(tmp_path / "q.json")
+    rstore = DiscoveryRunStore(tmp_path / "r.json")
+    kwargs = dict(
+        snapshots=[_quality_core()],
+        context=ctx(10_000),
+        regime=MarketRegime.unknown(observed_at=TS),
+        persist=True,
+        promote_shortlist=True,
+        now=NOW,
+        candidate_store=cstore,
+        queue_store=qstore,
+        run_store=rstore,
+    )
+    first = run_discovery(**kwargs)
+    origin = (first.candidates or first.rejected)[0]
+    second = run_discovery(**kwargs)
+    live = [c for c in cstore.all() if c.symbol == "QUAL" and c.status != CandidateStatus.REJECTED]
+    assert len({c.candidate_id for c in live}) == 1
+    assert live[0].candidate_id == origin.candidate_id
+    queued = [e for e in qstore.all() if e.symbol == "QUAL"]
+    assert len(queued) <= 1
+    assert second.queue == []
+    assert LIVE_ORDER_PLACEMENT is False
+
+
 def test_empty_universe_is_no_high_quality_candidates():
     out = _run([], ctx(10_000))
     assert out.conclusion == "NO_HIGH_QUALITY_CANDIDATES"

@@ -109,6 +109,10 @@ def run_discovery(
             existing = cstore.active_for_symbol(c.symbol)
             if existing and existing.status != CandidateStatus.REJECTED:
                 c.candidate_id = existing.candidate_id
+                if existing.status is CandidateStatus.PROMOTED_TO_RESEARCH:
+                    # Keep the promoted row. Hourly MARKET_OPEN discovery must not
+                    # reset status and re-enqueue a name already in research.
+                    c.status = CandidateStatus.PROMOTED_TO_RESEARCH
             cstore.upsert(c)
 
     queue_entries: list[ResearchQueueEntry] = []
@@ -122,6 +126,10 @@ def run_discovery(
             # it does not discard a shortlisted candidate from the queue.
             if c.priority in {DiscoveryPriority.LOW} and not c.deferred_due_to_overlap:
                 continue
+            if persist and qstore is not None:
+                blocked = qstore.blocking_entry(symbol=c.symbol, candidate_id=c.candidate_id)
+                if blocked is not None:
+                    continue
             entry = _queue_entry(c, cfg, now=now)
             c.status = CandidateStatus.PROMOTED_TO_RESEARCH
             promoted_ids.append(c.candidate_id)

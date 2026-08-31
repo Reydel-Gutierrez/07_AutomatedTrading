@@ -124,6 +124,23 @@ class ResearchQueue:
     def all(self) -> list[ResearchQueueEntry]:
         return [_queue_from_dict(r) for r in self._data.get("records", {}).values()]
 
+    def blocking_entry(self, *, symbol: str, candidate_id: str | None = None) -> ResearchQueueEntry | None:
+        """Return an existing row that must not be duplicated or re-researched."""
+        want = symbol.upper()
+        blocked = {
+            ResearchQueueStatus.QUEUED,
+            ResearchQueueStatus.RESEARCHING,
+            ResearchQueueStatus.IN_PROGRESS,
+            ResearchQueueStatus.COMPLETED,
+            ResearchQueueStatus.NEED_MORE_DATA,
+            ResearchQueueStatus.INCONCLUSIVE,
+        }
+        for entry in self.all():
+            same = entry.symbol.upper() == want or (candidate_id and entry.candidate_id == candidate_id)
+            if same and entry.status in blocked:
+                return entry
+        return None
+
     def enqueue(self, entry: ResearchQueueEntry) -> ResearchQueueEntry:
         from agentic_portfolio.discovery.freshness import normalize_queue_freshness
 

@@ -40,7 +40,7 @@ Proposal-only LIVE AI check: `PYTHONPATH=src python scripts/run_live_ai_check.py
 
 The Raspberry Pi scheduler (`scripts/run_scheduler.py`) is an internal orchestrator inside the 24/7 Agent Runtime (`scripts/run_service.py`). The process never exits after one cycle. PREMARKET / MARKET HOURS / POSTMARKET / OVERNIGHT / WEEKEND / HOLIDAY jobs run according to session phase. Duplicate jobs are skipped. AI is not called on every tick.
 
-Overnight/premarket now consume the research queue (`RESEARCH_QUEUE_WORKER`) and persisted watches/theses. Discovery ending in `CANDIDATES_READY_FOR_RESEARCH` is no longer a terminal stop. Dynamic live universe construction is wired (`LIVE_DISCOVERY_WIRED=true`). Read-only dump: `PYTHONPATH=src python scripts/diagnose_pipeline.py`.
+`RESEARCH_QUEUE_WORKER` consumes the research queue during MARKET_OPEN (every 30 minutes, max 1 deep-research item) as well as overnight/premarket/postmarket/closed days (max 2). Lightweight `CANDIDATE_DISCOVERY` also runs during MARKET_OPEN every 15 minutes; broader discovery remains POSTMARKET / closed days. Discovery ending in `CANDIDATES_READY_FOR_RESEARCH` is no longer a terminal stop. Dynamic live universe construction is wired (`LIVE_DISCOVERY_WIRED=true`). Read-only dump: `PYTHONPATH=src python scripts/diagnose_pipeline.py`.
 
 Committed default: `LIVE_ORDER_PLACEMENT=false` / `AGENTIC_LIVE_ORDER_PLACEMENT=false`. Human APPROVE is required. With the switch off, APPROVE → `APPROVED_EXECUTION_DISABLED` and `place_equity_order` is not called. Enabling placement is a manual Pi step after validation, never a git default.
 

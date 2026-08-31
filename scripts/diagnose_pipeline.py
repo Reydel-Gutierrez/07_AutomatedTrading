@@ -7,6 +7,7 @@ import json
 import sys
 from datetime import datetime, timezone
 
+from agentic_portfolio.agent.jobs import catalog_preview
 from agentic_portfolio.agent.heartbeat import load_health
 from agentic_portfolio.agent.pipeline import resolve_queue_stores
 from agentic_portfolio.agent.session import classify_market_phase
@@ -88,6 +89,22 @@ def main() -> int:
         "regular_hours_open": session.regular_hours_open,
         "executable_liquidity": session.executable_liquidity,
         "reason": session.reason,
+    })
+    scheduled = catalog_preview(session.phase)
+    health_jobs = health.get("next_jobs") or scheduled
+    _print("SCHEDULED JOBS", {
+        "phase": session.phase.value,
+        "source": "health.next_jobs" if health.get("next_jobs") else "catalog_preview",
+        "jobs": health_jobs,
+        "research_queue_worker_valid": any(row.get("job") == "RESEARCH_QUEUE_WORKER" for row in health_jobs),
+        "lightweight_discovery_valid": any(
+            row.get("job") == "CANDIDATE_DISCOVERY" and (row.get("mode") == "lightweight" or session.phase.value == "MARKET_OPEN")
+            for row in health_jobs
+        ) if session.phase.value == "MARKET_OPEN" else any(row.get("job") == "CANDIDATE_DISCOVERY" for row in health_jobs),
+        "MARKET_OPEN_jobs_include_research_and_discovery": {
+            "RESEARCH_QUEUE_WORKER": any(row.get("job") == "RESEARCH_QUEUE_WORKER" for row in catalog_preview(session.phase)),
+            "CANDIDATE_DISCOVERY": any(row.get("job") == "CANDIDATE_DISCOVERY" for row in catalog_preview(session.phase)),
+        },
     })
     _print("BROKER CONNECTION", health.get("robinhood") or {"connected": None})
     _print("LIVE ACCOUNT", {

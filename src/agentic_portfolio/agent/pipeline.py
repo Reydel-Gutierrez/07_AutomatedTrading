@@ -96,6 +96,7 @@ class PipelineCycleResult:
     skipped_reason: str | None = None
     placement_attempted: bool = False
     LIVE_ORDER_PLACEMENT: bool = False
+    max_items: int | None = None
     symbols: list[str] = field(default_factory=list)
     details: list[dict[str, Any]] = field(default_factory=list)
 
@@ -112,8 +113,10 @@ class PipelineCycleResult:
             "proposals_created": self.proposals_created,
             "rejection_count": self.rejections,
             "skipped": self.skipped_reason,
+            "skipped_reason": self.skipped_reason,
             "placement_attempted": False,
             "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+            "max_items": self.max_items,
             "symbols": list(self.symbols),
             "details": list(self.details),
         }
@@ -345,6 +348,7 @@ class ResearchQueueWorker:
                 cap = min(cap, 1)
             elif mode is BudgetMode.CONSERVING:
                 cap = min(cap, 1)
+        result.max_items = cap
         for entry in pending[: max(0, cap)]:
             row = self.process_entry(entry, context)
             result.items_processed += 1
