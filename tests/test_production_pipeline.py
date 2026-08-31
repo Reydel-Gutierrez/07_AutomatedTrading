@@ -508,6 +508,25 @@ def test_freshness_deadline_not_before_enqueue():
     assert fixed.freshness_deadline > fixed.enqueued_at
 
 
+def test_stale_deadline_before_enqueue_is_repaired_not_expired(tmp_path):
+    cand, entry = _seed(tmp_path, symbol="GAP")
+    d = discovery_state_dir(tmp_path, mode=RuntimeMode.LIVE)
+    queue = ResearchQueue(d / "research_queue.json", runtime_mode=RuntimeMode.LIVE.value)
+    rec = queue.get(entry.queue_id)
+    rec.freshness_deadline = "2026-08-29T16:00:00+00:00"
+    rec.enqueued_at = NOW.isoformat()
+    queue.save_entry(rec)
+    worker = _worker(tmp_path, research=ScriptedResearchReasoner({"GAP": _ai("GAP", conclusion="REJECT")}))
+    result = worker.run_cycle()
+    assert result.status != "SKIPPED_NO_WORK"
+    loaded = queue.get(entry.queue_id)
+    # Re-read after worker persist
+    queue = ResearchQueue(d / "research_queue.json", runtime_mode=RuntimeMode.LIVE.value)
+    loaded = queue.get(entry.queue_id)
+    assert loaded.status is not ResearchQueueStatus.EXPIRED
+    assert loaded.status is ResearchQueueStatus.REJECTED
+
+
 def test_research_queue_worker_is_scheduled():
     names = specs_by_name()
     assert "RESEARCH_QUEUE_WORKER" in names

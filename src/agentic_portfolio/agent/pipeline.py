@@ -26,7 +26,7 @@ from agentic_portfolio.decision.reasoner import DecisionReasoner
 from agentic_portfolio.decision.store import DecisionStore
 from agentic_portfolio.decision.types import GatedAction
 from agentic_portfolio.decision.validate import DecisionValidationError
-from agentic_portfolio.discovery.freshness import is_queue_expired
+from agentic_portfolio.discovery.freshness import is_queue_expired, normalize_queue_freshness
 from agentic_portfolio.discovery.store import CandidateStore, ResearchQueue
 from agentic_portfolio.journal import append_jsonl
 from agentic_portfolio.live.isolation import detect_paper_contamination
@@ -284,6 +284,10 @@ class ResearchQueueWorker:
                 continue
             if entry.status is not ResearchQueueStatus.QUEUED:
                 continue
+            prior = entry.freshness_deadline
+            entry = normalize_queue_freshness(entry)
+            if entry.freshness_deadline != prior:
+                self.queue.save_entry(entry)
             if is_queue_expired(entry, stamp):
                 self.queue.set_status(entry.queue_id, ResearchQueueStatus.EXPIRED, skipped_reason="freshness_deadline")
                 continue
