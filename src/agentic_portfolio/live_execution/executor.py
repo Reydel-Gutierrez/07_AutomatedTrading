@@ -201,6 +201,9 @@ class LiveOrderExecutor:
             )
             return ExecutionOutcome(intent=intent, placed=False, reasons=["LIVE_ORDER_PLACEMENT_false"])
 
+        if bool(self.cfg.get("auto_execution")):
+            return self._block(intent, approval, ["auto_execution_true"], LiveApprovalStatus.EXECUTION_FAILED)
+
         if self.runtime_mode is not RuntimeMode.LIVE:
             intent.status = ExecutionIntentStatus.BLOCKED
             intent.block_reasons = ["runtime_not_live"]

@@ -241,9 +241,9 @@
     ]
   },
   "universe_construction": {
-    "max_universe_size": 40,
+    "max_universe_size": 50,
     "max_per_source": 25,
-    "max_snapshots_to_score": 30,
+    "max_snapshots_to_score": 36,
     "min_last_price": 5.0,
     "existing_position_exempt_from_min_price": true,
     "baseline_only_if_empty": true,
@@ -254,7 +254,9 @@
       "popular_watchlists",
       "saved_scans",
       "earnings_calendar",
-      "portfolio_adjacent"
+      "portfolio_adjacent",
+      "core_liquid",
+      "liquid_etfs"
     ],
     "popular_watchlist_titles": [
       "100 Most Popular",
@@ -264,6 +266,12 @@
     ],
     "earnings_days": 7,
     "earnings_filter": "high_market_cap",
+    "core_liquid_symbols": [
+      "AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA", "AVGO", "JPM", "V", "UNH",
+      "XOM", "HD", "PG", "MA", "COST", "NFLX", "LLY", "WMT", "JNJ", "BAC",
+      "ORCL", "CRM", "KO", "PEP", "MRK", "ABBV", "CVX", "TMO", "ACN", "MCD"
+    ],
+    "liquid_etf_symbols": ["SPY", "QQQ", "IWM", "DIA", "VTI", "VOO", "XLK", "XLF", "XLE", "XLV"],
     "do_not_call_ai": true,
     "do_not_create_scan": true,
     "do_not_mutate_watchlists": true
@@ -284,6 +292,17 @@
     "SPECULATIVE_ASYMMETRY_DISCOVERY": {
       "sleeve": "SPECULATIVE",
       "purpose": "Surface high-uncertainty asymmetric situations. Low price is not a thesis."
+    }
+  },
+  "reassessment": {
+    "need_more_data_min_retry_hours": 24,
+    "completed_min_retry_hours": 72,
+    "reject_min_retry_hours": 168,
+    "watch_min_retry_hours": {
+      "CORE_GROWTH": 168,
+      "OPPORTUNISTIC": 48,
+      "TACTICAL": 8,
+      "SPECULATIVE": 24
     }
   }
 }

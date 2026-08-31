@@ -51,7 +51,7 @@ config/runtime.json
 config/ai.json
 config/dashboard.json
 deploy/                  ← Raspberry Pi systemd unit, env example, install procedure
-src/agentic_portfolio/   ← context, LIVE Robinhood snapshot, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, deep research, thesis+portfolio decision, position monitoring, risk gate, paper execution controller, paper fill/blotter, human approval packet, Robinhood review-only (no place/cancel)
+src/agentic_portfolio/   ← context, LIVE Robinhood snapshot, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, deep research, thesis+portfolio decision, position monitoring, risk gate, paper execution controller, paper fill/blotter, human approval packet, LiveOrderExecutor (the only broker place surface)
 tests/
 logs/  reports/  state/
 ```
@@ -67,10 +67,11 @@ logs/  reports/  state/
 7. `config/execution.json` — paper Execution Controller / OrderPlan (not live trading)  
 8. `config/paper_fill.json` — paper fill + blotter (isolated paper book; not live trading)  
 9. `config/approval.json` — human approval packet (APPROVED does not place)  
-10. `config/review.json` — Robinhood review-only (`review_equity_order` preflight; does not place)  
-11. `config/runtime.json` — PAPER vs LIVE source of truth (placement still off)  
+10. `config/review.json` — Robinhood `review_equity_order` preflight used at send-time  
+11. `config/runtime.json` — PAPER vs LIVE source of truth (placement still off in git)  
 12. `config/ai.json` — AI Gateway roles/providers, $10/month hard cap, conservative LIVE shortlist, Raspberry Pi scheduler  
-13. If prose ≠ JSON, **stop**
+13. `config/live_execution.json` — send-time revalidation, dollar BUY orders, idempotency  
+14. If prose ≠ JSON, **stop**
 
 ## Candidate Discovery
 
@@ -134,33 +135,24 @@ Paper run: `PYTHONPATH=src python scripts/run_paper_fill.py` (existing paper Ord
 
 ## Human Approval Packet
 
-Answers: **what should a human read before Robinhood review?**  
-Does not answer: place or cancel at the broker.
+Answers: **what should a human read before a live order can be sent?**  
+Does not answer: whether Risk Gate already passed (it must have), and does not auto-execute.
 
-Takes a Risk-Gate-approved paper OrderPlan plus thesis, research, decision, context, risk result, and optional monitoring state. Emits a persisted `ApprovalPacket`. `APPROVED` still does not place an order. Packets expire or are superseded when quotes, thesis/research, the book, or risk state drift, or when a newer decision replaces them.
+Takes a Risk-Gate-approved `ProposedAction` plus thesis, research, decision, context, risk result. Emits a persisted approval. Human APPROVE is mandatory. With `LIVE_ORDER_PLACEMENT=false`, APPROVE becomes `APPROVED_EXECUTION_DISABLED` and does not call the broker. With the Pi env switch on, APPROVE is the only user action: send-time revalidation → `review_equity_order` → `place_equity_order` via `LiveOrderExecutor` only → reconcile.
 
-Paper run: `PYTHONPATH=src python scripts/run_paper_approval.py` (existing paper OrderPlans; no place/cancel).
+Dashboard: `http://127.0.0.1:3100/approvals`.
 
-## Robinhood Review-Only
-
-Answers: **what does Robinhood say about this still-valid APPROVED order plan?**  
-Does not answer: place or cancel the order.
-
-Takes an APPROVED, still-valid `ApprovalPacket`, revalidates quote / portfolio / thesis / risk state, re-checks Risk Gate, and calls `review_equity_order`. Persists a `ReviewResult`. `REVIEW_ACCEPTED` does not execute.
-
-Paper/live-shaped run: `PYTHONPATH=src python scripts/run_paper_review.py` (one approved packet; `review_equity_order` only).
-
-## LIVE runtime (read-only)
+## LIVE runtime
 
 `PAPER` (default) uses the isolated paper book for tests/dev. `LIVE` uses the Agentic Robinhood account as the single source of truth for NAV, cash, buying power, positions, allocations, HWM/drawdown, daily P/L, dashboard, family shares, monitoring holdings, and Risk Gate inputs.
 
 Switch: `AGENTIC_RUNTIME_MODE=LIVE` or `DASHBOARD_ENVIRONMENT=LIVE` (see `config/runtime.json`). Dashboard shows **LIVE**. It does not fall back to paper $10,000 NAV.
 
-The `RESEARCH_QUEUE_WORKER` job consumes promoted candidates in `state/research_queue.json` (and `state/live_ai/` when present) through the existing Research Engine and AI Gateway. It runs during MARKET_OPEN as well (every 30 minutes, max 1 deep-research item per cycle; max 2 outside regular hours). Successful research can create DRAFT theses, persistent watches, or human approval packets.
+The `RESEARCH_QUEUE_WORKER` job consumes promoted candidates in `state/live_ai/research_queue.json` through the existing Research Engine and AI Gateway. LIVE never reads `state/research_queue.json`. It runs during MARKET_OPEN as well (every 30 minutes, max 1 deep-research item per cycle; max 2 outside regular hours). Successful research can create DRAFT theses, persistent watches, or human approval packets. WATCH/REJECT/NEED_MORE_DATA do not immediately requeue.
 
-Live discovery is dynamic (`LIVE_DISCOVERY_WIRED=true`): positions, watchlists, popular lists, saved scans, and earnings — no AI, no hard-coded 25-name universe.
+Live discovery is dynamic (`LIVE_DISCOVERY_WIRED=true`): positions, watchlists, popular lists, saved scans, earnings, plus a deterministic core-liquid/ETF sleeve — no AI, no frozen-only universe.
 
-Committed default: `LIVE_ORDER_PLACEMENT=false` (`AGENTIC_LIVE_ORDER_PLACEMENT=false`). Human APPROVE is mandatory. With the switch off, APPROVE becomes `APPROVED_EXECUTION_DISABLED` and never calls the broker. The live path (`LiveOrderExecutor`) is implemented and tested: send-time revalidation → `review_equity_order` → place (only if the switch is on) → reconcile → holdings update. Do not enable placement in git. Raspberry Pi validation is still required before the first real order.
+Committed default: `LIVE_ORDER_PLACEMENT=false` (`AGENTIC_LIVE_ORDER_PLACEMENT=false`). Human APPROVE is mandatory. Enabling placement is a manual Raspberry Pi step in `/etc/agentic-portfolio/env` — never a git default.
 
 Read-only pipeline dump: `PYTHONPATH=src python scripts/diagnose_pipeline.py`.
 
@@ -181,7 +173,7 @@ $env:DASHBOARD_ENVIRONMENT = "LIVE"
 python scripts/run_service.py
 ```
 
-Dashboard control room: `http://127.0.0.1:3100` (localhost only). Human APPROVE is required. Default `LIVE_ORDER_PLACEMENT=false` does not place.
+Dashboard control room: `http://127.0.0.1:3100` (localhost only). Approvals: `http://127.0.0.1:3100/approvals`. Human APPROVE is required. Default `LIVE_ORDER_PLACEMENT=false` does not place.
 
 Raspberry Pi LIVE install: dedicated non-root user, `/opt/agentic-portfolio/.venv`, secrets in `/etc/agentic-portfolio/env`. Procedure: `deploy/README.md`. Unit: `deploy/systemd/agentic-portfolio.service`. Do not run as root. Reach the dashboard with `ssh -L 3100:127.0.0.1:3100 <pi>`.
 

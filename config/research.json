@@ -123,5 +123,16 @@
     "get_equity_positions",
     "get_portfolio",
     "get_accounts"
-  ]
+  ],
+  "reassessment": {
+    "need_more_data_min_retry_hours": 24,
+    "completed_min_retry_hours": 72,
+    "reject_min_retry_hours": 168,
+    "watch_min_retry_hours": {
+      "CORE_GROWTH": 168,
+      "OPPORTUNISTIC": 48,
+      "TACTICAL": 8,
+      "SPECULATIVE": 24
+    }
+  }
 }

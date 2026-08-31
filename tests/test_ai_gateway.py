@@ -317,3 +317,47 @@ def test_anthropic_transport_tool_schema():
         ProviderRequest(model="claude-sonnet-4-20250514", messages=[{"role": "user", "content": "x"}], schema_name="screening", schema=SCREENING_SCHEMA)
     )
     assert resp.payload["score"] == 71.0
+
+
+def test_openai_strict_schema_requires_all_properties_only_at_adapter_boundary():
+    from agentic_portfolio.ai.schemas import RESEARCH_REPORT_SCHEMA, to_openai_strict_schema
+
+    internal_required = set(RESEARCH_REPORT_SCHEMA["required"])
+    assert internal_required == {"research_conclusion", "confidence", "executive_summary"}
+    case_required = set(RESEARCH_REPORT_SCHEMA["properties"]["bull_case"]["required"])
+    assert case_required == {"summary"}
+    strict = to_openai_strict_schema(RESEARCH_REPORT_SCHEMA)
+    assert set(strict["required"]) == set(strict["properties"])
+    assert strict["additionalProperties"] is False
+    bull = strict["properties"]["bull_case"]
+    assert set(bull["required"]) == set(bull["properties"])
+    assert bull["additionalProperties"] is False
+    assert "null" in (bull["properties"]["price_target"]["type"] if isinstance(bull["properties"]["price_target"]["type"], list) else [])
+    captured = {}
+
+    def transport(url, body, timeout):
+        captured["schema"] = body["text"]["format"]["schema"]
+        captured["strict"] = body["text"]["format"]["strict"]
+        return {
+            "status": "completed",
+            "output_parsed": SCREEN,
+            "model": "gpt-5.6-terra",
+            "usage": {"input_tokens": 10, "output_tokens": 5},
+        }
+
+    adapter = OpenAIProvider(api_key="sk-test", transport=transport)
+    from agentic_portfolio.ai.providers.base import ProviderRequest
+    from agentic_portfolio.ai.schemas import RESEARCH_REPORT_SCHEMA as schema
+
+    adapter.complete(
+        ProviderRequest(
+            model="gpt-5.6-terra",
+            messages=[{"role": "user", "content": "x"}],
+            schema_name="research_report",
+            schema=schema,
+        )
+    )
+    sent = captured["schema"]
+    assert captured["strict"] is True
+    assert set(sent["required"]) == set(sent["properties"])
+    assert set(RESEARCH_REPORT_SCHEMA["required"]) != set(sent["required"])

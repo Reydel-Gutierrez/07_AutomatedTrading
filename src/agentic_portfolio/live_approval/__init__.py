@@ -1,4 +1,4 @@
-"""LIVE approval queue. Human APPROVE does not place an order."""
+"""LIVE approval queue. APPROVE is mandatory. Placement is LiveOrderExecutor-only."""
 
 from agentic_portfolio.live_approval.engine import APPROVED_HOLD, LiveApprovalEngine
 from agentic_portfolio.live_approval.store import LiveApprovalStore

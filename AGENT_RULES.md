@@ -8,7 +8,7 @@ AI may reason and may **tighten**. AI may **never** loosen hard ceilings, skip c
 
 1. Intelligence — `STRATEGY.md`  
 2. Risk — `config/portfolio_policy.json` (hard veto)  
-3. Execution — paper OrderPlan + paper fill/blotter + human approval packet + Robinhood review-only; place/cancel off  
+3. Execution — paper OrderPlan + paper fill for tests; LIVE human APPROVE → LiveOrderExecutor only when placement is explicitly enabled  
 
 `NO_ACTION` always valid. Never buy to fill sleeve targets.
 
@@ -26,15 +26,15 @@ NAV is whatever `get_portfolio` returns on the configured Agentic account. It is
 | `auto_execution` | `false` |
 | `require_human_approval` | `true` |
 | `live_trade_actions_allowed` | `false` |
-| stop | after Robinhood review-only (`review_equity_order`); never place |
+| stop | after send-time revalidation; place only via LiveOrderExecutor when `AGENTIC_LIVE_ORDER_PLACEMENT=true` |
 
 `HALTED` → keep/force `auto_execution` false. No self-resume.
 
 ## Forbidden
 
-Never: `place_equity_order`, `cancel_equity_order`, option/crypto trading, deposit/withdraw/transfer.
+Never: AI self-approval, `cancel_equity_order`, option/crypto trading, deposit/withdraw/transfer.
 
-`review_equity_order` is allowed only from the Robinhood review-only bridge, after a still-valid APPROVED ApprovalPacket. It is informational/preflight. `REVIEW_ACCEPTED` does not execute.
+`place_equity_order` is allowed only from `LiveOrderExecutor` after human APPROVE, send-time revalidation, and `AGENTIC_LIVE_ORDER_PLACEMENT=true`. `review_equity_order` is allowed on that same path.
 
 ## Never (hard)
 

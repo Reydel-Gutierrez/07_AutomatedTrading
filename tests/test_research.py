@@ -306,11 +306,12 @@ def test_malformed_ai_response_rejected(tmp_path):
     journal = tmp_path / "j.jsonl"
     cand = _candidate()
     reasoner = ScriptedResearchReasoner({"QUAL": {"executive_summary": "nope"}})
-    out = run_research(cand, _payload(), ctx(10_000), reasoner, persist=True, now=NOW, store=store, journal=journal)
-    assert out.report.research_status == ResearchStatus.RESEARCH_INCONCLUSIVE
-    assert out.report.validation_errors
-    assert out.report.research_conclusion == ResearchConclusion.NEED_MORE_DATA
-    assert out.proposed_actions_created == 0
+    with pytest.raises(ResearchValidationError, match="malformed"):
+        run_research(cand, _payload(), ctx(10_000), reasoner, persist=True, now=NOW, store=store, journal=journal)
+    assert store.all_reports() == []
+    blob = journal.read_text(encoding="utf-8") if journal.exists() else ""
+    assert "RESEARCH_COMPLETED" not in blob
+    assert "RESEARCH_FAILED" in blob
 
 
 def test_provider_outage_does_not_persist_synthetic_report(tmp_path):

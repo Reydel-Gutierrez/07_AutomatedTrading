@@ -6,6 +6,8 @@ requests. Does not buy, size, write ACTIVE theses, or call execution tools.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -105,6 +107,9 @@ def run_research(
     )
     report = _blank_report(research_id, candidate, packet, started, subject_kind, existing_thesis_id)
     report.research_status = ResearchStatus.RESEARCHING
+    report.evidence_fingerprint = evidence_fingerprint(candidate, payload=payload)
+    if queue_entry is not None:
+        report.research_generation = int(getattr(queue_entry, "research_generation", None) or 1)
     if queue_entry and persist and queue_store:
         queue_store.set_status(queue_entry.queue_id, ResearchQueueStatus.RESEARCHING)
 
@@ -144,7 +149,7 @@ def run_research(
         apply_research_provenance(report, reasoner, raw if isinstance(raw, dict) else None)
         _journal(
             {
-                "type": "RESEARCH_INCONCLUSIVE",
+                "type": "RESEARCH_FAILED",
                 "research_id": research_id,
                 "candidate_id": candidate.candidate_id,
                 "symbol": candidate.symbol,
@@ -156,11 +161,8 @@ def run_research(
             journal,
             persist=persist,
         )
-        if persist:
-            (store or ResearchStore()).save(report)
-            if queue_entry and queue_store:
-                queue_store.set_status(queue_entry.queue_id, ResearchQueueStatus.COMPLETED)
-        return ResearchResult(report=report, packet=packet, candidate=candidate, context=context)
+        # Schema/API validation failures are not investment conclusions. Do not persist a fake report.
+        raise
 
     event = {
         ResearchConclusion.REJECT: "RESEARCH_REJECTED",
@@ -309,6 +311,31 @@ def apply_research_provenance(
     else:
         report.research_source = "deterministic"
     return report
+
+
+def evidence_fingerprint(candidate: Candidate, *, payload: ResearchPayload | None = None, packet: ResearchEvidencePacket | None = None) -> str:
+    """Stable evidence-generation key. Unchanged evidence must not spawn a new report."""
+    sources = []
+    facts: list[str] = []
+    observed = ""
+    if packet is not None:
+        sources = list(packet.sources_observed or [])
+        facts = [e.name for e in (packet.facts or [])]
+        observed = packet.assembled_at or ""
+    elif payload is not None:
+        sources = list(payload.sources_observed or payload.sources_attempted or [])
+        observed = payload.observed_at or ""
+    blob = json.dumps(
+        {
+            "symbol": candidate.symbol.upper(),
+            "candidate_id": candidate.candidate_id,
+            "day": observed[:10],
+            "sources": sorted(str(s) for s in sources),
+            "facts": sorted(str(f) for f in facts),
+        },
+        sort_keys=True,
+    )
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
 
 
 def _blank_report(

@@ -896,10 +896,10 @@ def test_diagnostics_show_production_queue_even_when_worker_binds_legacy(tmp_pat
             )
         )
     inspected = inspect_research_queues(tmp_path, runtime_mode=RuntimeMode.LIVE)
-    assert inspected["worker_uses_legacy_fallback"] is True
+    assert inspected["worker_uses_legacy_fallback"] is False
     assert any(e.symbol == "SBSW" for e in inspected["production"].all())
     assert inspected["production"].all()[0].status is ResearchQueueStatus.NEED_MORE_DATA
-    assert "SBSW" not in [e.symbol for e in inspected["worker"].all()]
+    assert any(e.symbol == "SBSW" for e in inspected["worker"].all())
     assert inspected["legacy"].all() and all(e.status is ResearchQueueStatus.QUEUED for e in inspected["legacy"].all())
     from scripts.diagnose_pipeline import budget_diagnostic, research_report_diagnostics
 
@@ -969,3 +969,222 @@ def test_live_runtime_does_not_inject_scripted_research_reasoner(tmp_path):
     assert runtime.services.gateway is not None
     assert "scripted" not in runtime.services.gateway.providers
     assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_live_never_consumes_paper_queue(tmp_path):
+    _seed(tmp_path, symbol="MSFT")
+    paper = ResearchQueue(tmp_path / "state" / "research_queue.json", runtime_mode=RuntimeMode.PAPER.value)
+    paper.enqueue(
+        ResearchQueueEntry(
+            queue_id="paper-q",
+            candidate_id="paper-c",
+            symbol="FAKE",
+            provisional_sleeve=Sleeve.CORE_GROWTH,
+            discovery_score=99.0,
+            priority=DiscoveryPriority.URGENT_RESEARCH,
+            why_research_warranted="paper",
+            enqueued_at=NOW.isoformat(),
+            freshness_deadline=(NOW + timedelta(hours=72)).isoformat(),
+            status=ResearchQueueStatus.QUEUED,
+        )
+    )
+    research = ScriptedResearchReasoner({"MSFT": _ai("MSFT", conclusion="KEEP_WATCHING"), "FAKE": _ai("FAKE", conclusion="KEEP_WATCHING")})
+    result = _worker(tmp_path, research=research).run_cycle()
+    assert "FAKE" not in result.symbols
+    _, live_q = primary_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    assert all(e.symbol != "FAKE" for e in live_q.all())
+    assert paper.get("paper-q").status is ResearchQueueStatus.QUEUED
+
+
+def test_duplicate_discovery_does_not_create_duplicate_queue_item(tmp_path):
+    from agentic_portfolio.discovery.engine import run_discovery
+    from agentic_portfolio.discovery.store import DiscoveryRunStore
+    from tests.test_discovery import _quality_core
+    from agentic_portfolio.schemas import MarketRegime
+
+    d = discovery_state_dir(tmp_path, mode=RuntimeMode.LIVE)
+    cstore = CandidateStore(d / "candidates.json", runtime_mode=RuntimeMode.LIVE.value)
+    qstore = ResearchQueue(d / "research_queue.json", runtime_mode=RuntimeMode.LIVE.value)
+    rstore = DiscoveryRunStore(d / "discovery_runs.json", runtime_mode=RuntimeMode.LIVE.value)
+    kwargs = dict(
+        snapshots=[_quality_core("QUAL")],
+        context=ctx(500),
+        persist=True,
+        promote_shortlist=True,
+        now=NOW,
+        candidate_store=cstore,
+        queue_store=qstore,
+        run_store=rstore,
+        regime=MarketRegime.unknown(observed_at=NOW.isoformat()),
+    )
+    run_discovery(**kwargs)
+    run_discovery(**kwargs)
+    queued = [e for e in qstore.all() if e.symbol == "QUAL"]
+    assert len(queued) == 1
+    assert queued[0].status is ResearchQueueStatus.QUEUED
+
+
+def test_completed_watch_does_not_requeue_immediately(tmp_path):
+    from agentic_portfolio.discovery.engine import run_discovery
+    from agentic_portfolio.discovery.store import DiscoveryRunStore
+    from tests.test_discovery import _quality_core
+    from agentic_portfolio.schemas import MarketRegime
+
+    _seed(tmp_path, symbol="QUAL")
+    worker = _worker(tmp_path, research=ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="KEEP_WATCHING")}))
+    worker.run_cycle()
+    d = discovery_state_dir(tmp_path, mode=RuntimeMode.LIVE)
+    cstore = CandidateStore(d / "candidates.json", runtime_mode=RuntimeMode.LIVE.value)
+    qstore = ResearchQueue(d / "research_queue.json", runtime_mode=RuntimeMode.LIVE.value)
+    rstore = DiscoveryRunStore(d / "discovery_runs.json", runtime_mode=RuntimeMode.LIVE.value)
+    before = len(qstore.all())
+    run_discovery(
+        [_quality_core("QUAL")],
+        ctx(500),
+        persist=True,
+        promote_shortlist=True,
+        now=NOW,
+        candidate_store=cstore,
+        queue_store=qstore,
+        run_store=rstore,
+        regime=MarketRegime.unknown(observed_at=NOW.isoformat()),
+    )
+    assert len([e for e in qstore.all() if e.status is ResearchQueueStatus.QUEUED]) == 0
+    assert len(qstore.all()) == before
+    cand = cstore.active_for_symbol("QUAL")
+    assert cand.status is CandidateStatus.WATCHING
+
+
+def test_need_more_data_retries_only_after_freshness(tmp_path):
+    from agentic_portfolio.discovery.engine import run_discovery
+    from agentic_portfolio.discovery.store import DiscoveryRunStore
+    from tests.test_discovery import _quality_core
+    from agentic_portfolio.schemas import MarketRegime
+
+    _seed(tmp_path, symbol="QUAL")
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="NEED_MORE_DATA", missing=["get_financials"])}),
+    )
+    worker.payload_fn = lambda candidate: _payload(candidate.symbol, rich=False)
+    worker.run_cycle()
+    d = discovery_state_dir(tmp_path, mode=RuntimeMode.LIVE)
+    cstore = CandidateStore(d / "candidates.json", runtime_mode=RuntimeMode.LIVE.value)
+    qstore = ResearchQueue(d / "research_queue.json", runtime_mode=RuntimeMode.LIVE.value)
+    rstore = DiscoveryRunStore(d / "discovery_runs.json", runtime_mode=RuntimeMode.LIVE.value)
+    run_discovery(
+        [_quality_core("QUAL")],
+        ctx(500),
+        persist=True,
+        promote_shortlist=True,
+        now=NOW + timedelta(hours=1),
+        candidate_store=cstore,
+        queue_store=qstore,
+        run_store=rstore,
+        regime=MarketRegime.unknown(observed_at=NOW.isoformat()),
+    )
+    assert [e for e in qstore.all() if e.status is ResearchQueueStatus.QUEUED] == []
+    later = run_discovery(
+        [_quality_core("QUAL")],
+        ctx(500),
+        persist=True,
+        promote_shortlist=True,
+        now=NOW + timedelta(hours=25),
+        candidate_store=cstore,
+        queue_store=qstore,
+        run_store=rstore,
+        regime=MarketRegime.unknown(observed_at=NOW.isoformat()),
+    )
+    assert any(e.status is ResearchQueueStatus.QUEUED for e in qstore.all())
+    assert later.queue
+
+
+def test_failed_provider_call_does_not_persist_fake_report(tmp_path):
+    _seed(tmp_path, symbol="SBSW")
+    gw = build_gateway(
+        tmp_path,
+        providers={"openai": OpenAIProvider(api_key=None), "anthropic": AnthropicProvider(api_key=None)},
+        runtime_mode=RuntimeMode.LIVE,
+        now_fn=lambda: NOW,
+    )
+    worker = _worker(tmp_path, gateway=gw)
+    worker.run_cycle()
+    assert worker.research_store.by_symbol("SBSW") == []
+    kinds = [n.kind for n in worker.notify.store.all()]
+    assert NotificationKind.RESEARCH_COMPLETED not in kinds
+
+
+def test_research_advances_to_thesis_automatically(tmp_path):
+    _seed(tmp_path)
+    research, decision = _buy_reasoners()
+    result = _worker(tmp_path, research=research, decision=decision).run_cycle()
+    assert result.theses_created >= 1
+    assert result.proposals_created == 1
+
+
+def test_unapproved_packet_cannot_execute(tmp_path, monkeypatch):
+    from agentic_portfolio.live_execution import ExecutionStore, FakeBroker, LiveOrderExecutor
+
+    monkeypatch.setenv("AGENTIC_LIVE_ORDER_PLACEMENT", "true")
+    _seed(tmp_path)
+    research, decision = _buy_reasoners()
+    worker = _worker(tmp_path, research=research, decision=decision)
+    worker.run_cycle()
+    pending = worker.approvals.store.pending()[0]
+    broker = FakeBroker()
+    executor = LiveOrderExecutor(
+        ExecutionStore(tmp_path, runtime_mode=RuntimeMode.LIVE),
+        broker,
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        context_fn=lambda: ctx(500),
+        regular_hours_fn=lambda: True,
+    )
+    outcome = executor.execute_approved(pending)
+    assert outcome.placed is False
+    assert "approval_not_approved" in outcome.reasons
+    assert broker.place_calls == []
+
+
+def test_approved_packet_blocked_when_placement_disabled(tmp_path, monkeypatch):
+    from agentic_portfolio.live_approval.types import LiveApprovalStatus
+    from agentic_portfolio.live_execution import ExecutionStore, FakeBroker, LiveOrderExecutor
+
+    monkeypatch.delenv("AGENTIC_LIVE_ORDER_PLACEMENT", raising=False)
+    _seed(tmp_path)
+    research, decision = _buy_reasoners()
+    worker = _worker(tmp_path, research=research, decision=decision)
+    worker.run_cycle()
+    pending = worker.approvals.store.pending()[0]
+    worker.approvals.record_decision(pending.approval_id, LiveApprovalStatus.APPROVED, decided_by="human")
+    item = worker.approvals.store.get(pending.approval_id)
+    broker = FakeBroker()
+    executor = LiveOrderExecutor(
+        ExecutionStore(tmp_path, runtime_mode=RuntimeMode.LIVE),
+        broker,
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        context_fn=lambda: ctx(500),
+        regular_hours_fn=lambda: True,
+    )
+    outcome = executor.execute_approved(item)
+    assert outcome.placed is False
+    assert "LIVE_ORDER_PLACEMENT_false" in outcome.reasons
+    assert broker.place_calls == []
+
+
+def test_sell_reduce_require_human_approval(tmp_path):
+    _seed(tmp_path, symbol="AAPL")
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"AAPL": _ai("AAPL", conclusion="ADVANCE_TO_THESIS")}),
+        decision=ScriptedDecisionReasoner(_decision_payload("AAPL", decision="SELL", alloc=0)),
+    )
+    result = worker.run_cycle()
+    pending = worker.approvals.store.pending()
+    if result.proposals_created:
+        assert pending
+        assert pending[0].proposed_action == "SELL"
+        assert pending[0].status.value == "PENDING"
+        assert pending[0].placed_order is False
+

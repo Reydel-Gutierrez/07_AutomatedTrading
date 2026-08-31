@@ -112,6 +112,8 @@ def construct_universe(
         "saved_scans": lambda: _run_scans(fetcher),
         "earnings_calendar": lambda: _run_earnings(fetcher, cfg, now or _now()),
         "portfolio_adjacent": lambda: _run_adjacent(held),
+        "core_liquid": lambda: _run_configured(cfg, "core_liquid_symbols"),
+        "liquid_etfs": lambda: _run_configured(cfg, "liquid_etf_symbols"),
     }
     if not wanted:
         wanted = list(runners)
@@ -249,6 +251,8 @@ def _reason_for(source: str) -> str:
         "saved_scans": "saved_market_scan",
         "earnings_calendar": "upcoming_earnings",
         "portfolio_adjacent": "portfolio_adjacent_symbol",
+        "core_liquid": "core_liquid_universe",
+        "liquid_etfs": "liquid_etf_universe",
     }.get(source, source)
 
 
@@ -321,6 +325,10 @@ def _run_earnings(fetcher: Any, cfg: Mapping[str, Any], now: datetime) -> list[s
 
 def _run_adjacent(held: set[str]) -> list[str]:
     return list(held)
+
+
+def _run_configured(cfg: Mapping[str, Any], key: str) -> list[str]:
+    return [str(s).strip().upper() for s in (cfg.get(key) or []) if str(s).strip()]
 
 
 def _symbols_from_positions(payload: Mapping[str, Any] | None) -> list[str]:

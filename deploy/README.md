@@ -1,4 +1,4 @@
-# Raspberry Pi deployment (LIVE, proposal-only)
+# Raspberry Pi deployment (LIVE)
 
 The application is a 24/7 service, not a market-hours script.
 
@@ -10,9 +10,10 @@ Do **not** install into global system Python.
 Do **not** store `OPENAI_API_KEY` in Git, source, the systemd unit, logs, or state.
 Do **not** expose the dashboard publicly. It stays on `127.0.0.1:3100`.
 
-Order placement remains impossible: `auto_execution=false`,
-`live_trade_actions_allowed=false`, `LIVE_ORDER_PLACEMENT=false`.
-Approving a proposal does not place an order.
+Order placement remains off until you set `AGENTIC_LIVE_ORDER_PLACEMENT=true` in
+`/etc/agentic-portfolio/env`. Committed default: `auto_execution=false`,
+`LIVE_ORDER_PLACEMENT=false`. Approving a proposal does not place an order
+while that switch is false.
 
 ## Boot path
 

@@ -5,7 +5,7 @@ AI agentic portfolio manager on Robinhood Trading MCP. **One** percent-of-NAV po
 Canonical policy: `PORTFOLIO_POLICY.md` + `config/portfolio_policy.json`.  
 Reasoning: `STRATEGY.md`. Risk: `RISK_RULES.md`.
 
-Live trading **off** except informational `review_equity_order` after a still-valid APPROVED packet. Stop after Robinhood review-only. No place/cancel. No transfers.
+Live trading is **off in committed config**. After human APPROVE, `LiveOrderExecutor` may place only when `AGENTIC_LIVE_ORDER_PLACEMENT=true` in `/etc/agentic-portfolio/env`. Default remains false. No transfers.
 
 Production AI is **advisory**. Cursor is the development agent. The Raspberry Pi application is the autonomous production runtime. OpenAI/Anthropic are reasoning services used only through the AI Gateway. Risk Gate is the deterministic authority. The broker is the authoritative account/execution state. AI never has unrestricted trading authority.
 
@@ -15,7 +15,7 @@ Production AI is **advisory**. Cursor is the development agent. The Raspberry Pi
 |---|---|
 | AI intelligence | Advisory |
 | Deterministic risk (class + sleeve % NAV, daily halt, HWM) | Hard veto; agent may tighten only |
-| Execution | Paper OrderPlan + paper fill/blotter + human approval packet + Robinhood review-only; place/cancel gated off |
+| Execution | Paper OrderPlan + paper fill for tests; LIVE human APPROVE → LiveOrderExecutor only when placement is explicitly enabled |
 
 ## Components
 
@@ -75,15 +75,13 @@ PORTFOLIO DECISION
         ↓
 DETERMINISTIC RISK GATE
         ↓
-EXECUTION CONTROLLER (paper OrderPlan; live gated off)
+LIVE APPROVAL PACKET (human APPROVE required)
         ↓
-PAPER FILL / BLOTTER (isolated paper book; live gated off)
+SEND-TIME REVALIDATION + review_equity_order
         ↓
-HUMAN APPROVAL PACKET (APPROVED still does not place)
+LiveOrderExecutor place (only if AGENTIC_LIVE_ORDER_PLACEMENT=true)
         ↓
-ROBINHOOD REVIEW-ONLY (review_equity_order; REVIEW_ACCEPTED does not place)
-        ↓
-POSITION MONITORING / JOURNAL
+BROKER RECONCILE / POSITIONS / JOURNAL
 ```
 
 Discovery must not skip later stages. A candidate cannot become a BUY `ProposedAction`. Research cannot either. A favorable `ResearchReport` is not permission to trade.
@@ -96,7 +94,7 @@ Discovery must not skip later stages. A candidate cannot become a BUY `ProposedA
 | AI Research | Interpret evidence, compare, judge dislocation vs deterioration, form research conclusions |
 | Thesis / Portfolio Decision | Form/update DRAFT thesis; choose action and desired % NAV vs cash/SPY/peers (not yet permitted) |
 | Risk Gate | Whether a proposed action is permitted (absolute authority on limits) |
-| Execution | Paper OrderPlan + paper fill/blotter + human approval packet + Robinhood review-only; place/cancel gated off |
+| Execution | Paper OrderPlan + paper fill for tests; LIVE human APPROVE → LiveOrderExecutor only when placement is explicitly enabled |
 
 AI cannot rewrite observed facts, override classification, alter NAV/positions, or modify risk limits.
 
@@ -111,11 +109,10 @@ MARKET DATA (NAV, SPY, session SOD NAV — America/New_York)
   → DEEP RESEARCH (ResearchEvidencePacket → ResearchReasoner → ResearchReport; no BUY)
   → INVESTMENT THESIS + PORTFOLIO DECISION (DRAFT thesis; compare vs cash/SPY; ProposedAction; no execution)
   → DETERMINISTIC RISK GATE
-  → ORDER PLAN (paper Execution Controller; BUY/ADD/REDUCE/SELL; no stops)
-  → PAPER FILL / BLOTTER (isolated paper book; no broker)
-  → HUMAN APPROVAL PACKET (human-readable; APPROVED does not place)
-  → ROBINHOOD REVIEW-ONLY (review_equity_order; REVIEW_ACCEPTED does not place) → ████ STOP ████
-  → (future) place
+  → LIVE APPROVAL PACKET (human APPROVE required; default does not place)
+  → SEND-TIME REVALIDATION + review_equity_order
+  → LiveOrderExecutor place (only if AGENTIC_LIVE_ORDER_PLACEMENT=true)
+  → BROKER RECONCILE / POSITIONS
   → POSITION MONITORING (existing holdings; thesis reassessment; ProposedAction to Risk Gate; no broker stops)
   → JOURNAL
 ```
@@ -128,7 +125,7 @@ Runtime modes: `PAPER` (tests/dev) and `LIVE` (Robinhood Agentic account). Confi
 
 ## MCP
 
-Read-only plus informational `review_equity_order` after a still-valid APPROVED packet. Forbidden now: place/cancel. Never: option/crypto trading; any transfer/deposit/withdraw.
+Read-only plus informational `review_equity_order` at send-time. `place_equity_order` is allowed only from `LiveOrderExecutor` after human APPROVE and `AGENTIC_LIVE_ORDER_PLACEMENT=true`. Never: option/crypto trading; any transfer/deposit/withdraw.
 
 ## Config
 
@@ -148,7 +145,7 @@ Read-only plus informational `review_equity_order` after a still-valid APPROVED 
 
 ## Kernel (permanent)
 
-`src/agentic_portfolio/` — portfolio context, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, **AI Gateway (the only module that may call an AI provider)**, deep research, investment thesis + portfolio decision, position monitoring + thesis reassessment, deterministic risk gate, **paper Execution Controller**, **paper fill + blotter**, **human approval packet**, **Robinhood review-only**. LIVE AI artifacts live in `state/live_ai/` and never mix with PAPER thesis/approval artifacts. Theses created at Decision stay DRAFT until a future real execution. A paper BUY fill may mark an isolated paper thesis ACTIVE; live thesis/account state is untouched. Monitoring may mark an existing thesis WEAKENED/INVALIDATED; that is not a broker stop and not live trading. Execution Controller does not invent stop orders. Paper fill does not invent broker behavior. Approving a packet does not place an order. Review-only may call `review_equity_order` and must not place or cancel.
+`src/agentic_portfolio/` — portfolio context, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, **AI Gateway (the only module that may call an AI provider)**, deep research, investment thesis + portfolio decision, position monitoring + thesis reassessment, deterministic risk gate, **paper Execution Controller**, **paper fill + blotter**, **human approval packet**, **Robinhood review-only**. LIVE AI artifacts live in `state/live_ai/` and never mix with PAPER thesis/approval artifacts. Theses created at Decision stay DRAFT until a future real execution. A paper BUY fill may mark an isolated paper thesis ACTIVE; live thesis/account state is untouched. Monitoring may mark an existing thesis WEAKENED/INVALIDATED; that is not a broker stop and not live trading. Execution Controller does not invent stop orders. Paper fill does not invent broker behavior. Approving a packet does not place an order while `LIVE_ORDER_PLACEMENT=false`. With the Pi env switch on, APPROVE is the only user action required; `LiveOrderExecutor` is the only module that may call `place_equity_order`.
 
 LIVE invariants: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, `LIVE_ORDER_PLACEMENT=false`. Combined AI spend across every provider and model is capped at **$10 USD per calendar month** (America/New_York). Restarting the app cannot reset the ledger.
 

@@ -100,39 +100,29 @@
     <p class="meta">evaluated {{ view.pipeline.discovery.symbols_evaluated or 0 }} · universe {{ view.pipeline.discovery.universe_size or 0 }} · created {{ view.pipeline.discovery.candidates_created or 0 }} · rejected {{ view.pipeline.discovery.rejected or 0 }}</p>
   </article>
   <article class="kpi">
-    <h2>Research queue</h2>
+    <h2>Research</h2>
     <p class="figure">{{ view.pipeline.research.queued or 0 }}</p>
     <p class="meta">researching {{ view.pipeline.research.researching or 0 }} · done {{ view.pipeline.research.completed or 0 }} · rejected {{ view.pipeline.research.rejected or 0 }}{% if view.pipeline.research.current_symbol %} · now {{ view.pipeline.research.current_symbol }}{% endif %}</p>
   </article>
   <article class="kpi">
-    <h2>Watch / theses</h2>
-    <p class="figure">{{ view.pipeline.watchlist.active or 0 }}</p>
-    <p class="meta">{{ view.pipeline.watchlist.count or 0 }} stored · reports {{ view.pipeline.research.reports or 0 }}</p>
+    <h2>Thesis / Decision</h2>
+    <p class="figure">{{ (view.pipeline.theses.draft_or_active if view.pipeline.theses else 0) or 0 }}</p>
+    <p class="meta">watch {{ view.pipeline.watchlist.active or 0 }} · reports {{ view.pipeline.research.reports or 0 }}</p>
   </article>
   <article class="kpi">
-    <h2>Approvals</h2>
+    <h2>Approval</h2>
     <p class="figure">{{ view.pipeline.approvals.pending or 0 }}</p>
     <p class="meta">{% if view.live_order_placement_enabled %}LIVE ORDER PLACEMENT: ON · human required{% else %}LIVE ORDER PLACEMENT: OFF · human required{% endif %}</p>
   </article>
   <article class="kpi">
-    <h2>Orders</h2>
+    <h2>Order</h2>
     <p class="figure">{{ (view.pipeline.orders.submitted or 0) + (view.pipeline.orders.filled or 0) }}</p>
     <p class="meta">pending {{ view.pipeline.orders.pending or 0 }} · submitted {{ view.pipeline.orders.submitted or 0 }} · filled {{ view.pipeline.orders.filled or 0 }} · rejected {{ view.pipeline.orders.rejected or 0 }}</p>
   </article>
   <article class="kpi">
-    <h2>Research queue</h2>
-    <p class="figure">{{ view.pipeline.research.queued or 0 }}</p>
-    <p class="meta">researching {{ view.pipeline.research.researching or 0 }} · done {{ view.pipeline.research.completed or 0 }} · rejected {{ view.pipeline.research.rejected or 0 }}{% if view.pipeline.research.current_symbol %} · now {{ view.pipeline.research.current_symbol }}{% endif %}</p>
-  </article>
-  <article class="kpi">
-    <h2>Watch / theses</h2>
-    <p class="figure">{{ view.pipeline.watchlist.active or 0 }}</p>
-    <p class="meta">{{ view.pipeline.watchlist.count or 0 }} stored · reports {{ view.pipeline.research.reports or 0 }}</p>
-  </article>
-  <article class="kpi">
-    <h2>Approvals</h2>
-    <p class="figure">{{ view.pipeline.approvals.pending or 0 }}</p>
-    <p class="meta">{% if view.live_order_placement_enabled %}LIVE ORDER PLACEMENT: ON · human required{% else %}LIVE ORDER PLACEMENT: OFF · human required{% endif %}</p>
+    <h2>Position</h2>
+    <p class="figure">{{ view.pipeline.positions.count if view.pipeline.positions else 0 }}</p>
+    <p class="meta">{{ (view.pipeline.lifecycle or ['Discovery','Research','Thesis/Decision','Approval','Order','Position'])|join(' → ') }}</p>
   </article>
 </section>
 {% endif %}

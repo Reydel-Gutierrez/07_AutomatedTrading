@@ -240,6 +240,10 @@ def report_from_dict(raw: dict[str, Any]) -> ResearchReport:
         ai_call_id=raw.get("ai_call_id"),
         estimated_cost=float(raw["estimated_cost"]) if raw.get("estimated_cost") is not None else None,
         actual_cost=float(raw["actual_cost"]) if raw.get("actual_cost") is not None else None,
+        evidence_fingerprint=raw.get("evidence_fingerprint"),
+        research_generation=int(raw.get("research_generation") or 1),
+        runtime_mode=raw.get("runtime_mode"),
+        production_artifact=raw.get("production_artifact", True),
     )
 
 

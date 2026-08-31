@@ -34,13 +34,13 @@ from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.live_approval import LiveApprovalEngine
 from agentic_portfolio.notify import NotificationEngine, NotificationKind
 from agentic_portfolio.paper_fill.store import PaperFillStore
-from agentic_portfolio.paths import project_root
+from agentic_portfolio.policy import load_research_config
 from agentic_portfolio.research.collect import collect_research_payload
-from agentic_portfolio.research.engine import run_research
+from agentic_portfolio.research.engine import evidence_fingerprint, run_research
 from agentic_portfolio.research.packet import ResearchPayload
 from agentic_portfolio.research.reasoner import ResearchReasoner
 from agentic_portfolio.research.store import ResearchStore
-from agentic_portfolio.research.types import ResearchConclusion, ResearchReport, ResearchStatus
+from agentic_portfolio.research.types import ResearchConclusion, ResearchFreshness, ResearchReport, ResearchStatus
 from agentic_portfolio.research.validate import ResearchValidationError
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, LIVE_SOURCE_OF_TRUTH, RuntimeMode, discovery_state_dir, live_placement_enabled
 from agentic_portfolio.schemas import (
@@ -127,22 +127,8 @@ def resolve_queue_stores(
     *,
     runtime_mode: RuntimeMode | str,
 ) -> tuple[CandidateStore, ResearchQueue]:
-    """LIVE artifacts live under state/live_ai. Fall back to state/ for recovered Pi queues."""
-    mode = runtime_mode.value if isinstance(runtime_mode, RuntimeMode) else str(runtime_mode).upper()
-    base = Path(root)
-    primary_dir = discovery_state_dir(base, mode=RuntimeMode(mode))
-    candidates = CandidateStore(primary_dir / "candidates.json", runtime_mode=mode)
-    queue = ResearchQueue(primary_dir / "research_queue.json", runtime_mode=mode)
-    if mode == RuntimeMode.LIVE.value:
-        queued = [e for e in queue.all() if e.status is ResearchQueueStatus.QUEUED]
-        if not queued:
-            fallback = ResearchQueue(base / "state" / "research_queue.json", runtime_mode=mode)
-            if any(e.status is ResearchQueueStatus.QUEUED for e in fallback.all()):
-                queue = fallback
-                paper_cand = CandidateStore(base / "state" / "candidates.json", runtime_mode=mode)
-                if paper_cand.all():
-                    candidates = paper_cand
-    return candidates, queue
+    """LIVE binds only to state/live_ai. Never falls back to PAPER/legacy state/."""
+    return primary_queue_stores(root, runtime_mode=runtime_mode)
 
 
 def primary_queue_stores(
@@ -418,17 +404,47 @@ class ResearchQueueWorker:
         if candidate is None:
             self.queue.set_status(entry.queue_id, ResearchQueueStatus.DROPPED, skipped_reason="missing_candidate")
             return {"symbol": entry.symbol, "status": "FAILED", "reason": "missing_candidate"}
-        existing = self.research_store.by_candidate(candidate.candidate_id)
-        complete = [r for r in existing if r.research_status in {ResearchStatus.RESEARCH_COMPLETE, ResearchStatus.RESEARCH_REJECTED, ResearchStatus.RESEARCH_INCONCLUSIVE}]
-        if complete:
-            report = sorted(complete, key=lambda r: r.started_at, reverse=True)[0]
+        try:
+            payload = self._payload(candidate)
+        except Exception as exc:  # noqa: BLE001
             self.queue.set_status(
                 entry.queue_id,
-                _queue_status_for(report),
-                research_id=report.research_id,
-                skipped_reason="idempotent_existing_report",
+                ResearchQueueStatus.QUEUED,
+                last_error=f"{type(exc).__name__}: {exc}",
+                claimed_at=None,
+                skipped_reason="payload_failed",
             )
-            return self._apply_report(report, candidate, context, entry, ai_calls=0, duplicate=True)
+            return {"symbol": candidate.symbol, "status": "FAILED", "reason": f"{type(exc).__name__}: {exc}"}
+        fingerprint = evidence_fingerprint(candidate, payload=payload)
+        existing = self.research_store.by_candidate(candidate.candidate_id) or self.research_store.by_symbol(candidate.symbol)
+        complete = [
+            r
+            for r in existing
+            if r.research_status
+            in {ResearchStatus.RESEARCH_COMPLETE, ResearchStatus.RESEARCH_REJECTED, ResearchStatus.RESEARCH_INCONCLUSIVE}
+        ]
+        if complete:
+            report = sorted(complete, key=lambda r: r.started_at, reverse=True)[0]
+            same_evidence = (report.evidence_fingerprint or fingerprint) == fingerprint
+            retry_due = _inconclusive_retry_due(report, entry, self.now())
+            if same_evidence and not retry_due:
+                self.queue.set_status(
+                    entry.queue_id,
+                    _queue_status_for(report),
+                    research_id=report.research_id,
+                    evidence_fingerprint=fingerprint,
+                    skipped_reason="idempotent_existing_report",
+                )
+                return self._apply_report(report, candidate, context, entry, ai_calls=0, duplicate=True)
+            if same_evidence and report.research_status is ResearchStatus.RESEARCH_COMPLETE and not retry_due:
+                self.queue.set_status(
+                    entry.queue_id,
+                    _queue_status_for(report),
+                    research_id=report.research_id,
+                    evidence_fingerprint=fingerprint,
+                    skipped_reason="idempotent_existing_report",
+                )
+                return self._apply_report(report, candidate, context, entry, ai_calls=0, duplicate=True)
 
         stamp = self.now()
         self.queue.set_status(
@@ -437,9 +453,9 @@ class ResearchQueueWorker:
             claimed_at=stamp.isoformat(),
             last_attempt_at=stamp.isoformat(),
             attempt_count=int(entry.attempt_count or 0) + 1,
+            evidence_fingerprint=fingerprint,
         )
         try:
-            payload = self._payload(candidate)
             out = run_research(
                 candidate,
                 payload,
@@ -456,17 +472,18 @@ class ResearchQueueWorker:
         except (ResearchValidationError, BudgetDenied, BudgetExhausted) as exc:
             self.queue.set_status(
                 entry.queue_id,
-                ResearchQueueStatus.INCONCLUSIVE,
+                ResearchQueueStatus.QUEUED,
                 last_error=str(exc),
                 claimed_at=None,
+                skipped_reason="provider_or_schema_failure",
             )
             self._notify(
-                NotificationKind.RESEARCH_REJECTED,
-                title=f"Research inconclusive — {candidate.symbol}",
+                NotificationKind.SERVICE_ERROR,
+                title=f"Research call failed — {candidate.symbol}",
                 body=str(exc),
                 payload={"symbol": candidate.symbol, "reason": str(exc)},
             )
-            return {"symbol": candidate.symbol, "status": "DEGRADED", "reason": str(exc), "ai_calls": 1, "rejected": 1}
+            return {"symbol": candidate.symbol, "status": "DEGRADED", "reason": str(exc), "ai_calls": 0, "rejected": 0}
         except AIError as exc:
             self.queue.set_status(
                 entry.queue_id,
@@ -493,12 +510,14 @@ class ResearchQueueWorker:
             return {"symbol": candidate.symbol, "status": "FAILED", "reason": f"{type(exc).__name__}: {exc}"}
 
         report = out.report
+        report.evidence_fingerprint = report.evidence_fingerprint or fingerprint
         self._persist_ai_research(report, candidate)
         self.queue.set_status(
             entry.queue_id,
             _queue_status_for(report),
             research_id=report.research_id,
             claimed_at=None,
+            evidence_fingerprint=report.evidence_fingerprint,
         )
         self._notify(
             NotificationKind.RESEARCH_COMPLETED,
@@ -551,10 +570,12 @@ class ResearchQueueWorker:
             return row
         if conclusion in {ResearchConclusion.NEED_MORE_DATA} or report.research_status is ResearchStatus.RESEARCH_INCONCLUSIVE:
             row["rejected"] = 0
+            self.candidates.set_status(candidate.candidate_id, CandidateStatus.RESEARCH_INCONCLUSIVE, reason="need_more_data")
             return row
         if conclusion is ResearchConclusion.KEEP_WATCHING:
             created = self._watch_from_research(candidate, report, status=WatchStatus.WATCH, reason="keep_watching")
             row["watches_created"] = 1 if created else 0
+            self.candidates.set_status(candidate.candidate_id, CandidateStatus.WATCHING, reason="keep_watching")
             return row
         if conclusion is not ResearchConclusion.ADVANCE_TO_THESIS:
             return row
@@ -602,6 +623,7 @@ class ResearchQueueWorker:
         if name.decision in {Decision.REJECT}:
             row["rejected"] = 1
             self._watch_from_research(candidate, report, thesis=thesis, status=WatchStatus.REJECTED, reason="portfolio_reject")
+            self.candidates.set_status(candidate.candidate_id, CandidateStatus.REJECTED, reason="portfolio_reject")
             return row
         if name.decision in {Decision.WATCH, Decision.NO_ACTION, Decision.HOLD}:
             created = self._watch_from_research(
@@ -613,6 +635,7 @@ class ResearchQueueWorker:
             )
             row["watches_created"] = 1 if created else 0
             row["decision"] = name.decision.value
+            self.candidates.set_status(candidate.candidate_id, CandidateStatus.WATCHING, reason=f"decision_{name.decision.value.lower()}")
             return row
         if name.decision not in ACTIONABLE:
             row["decision"] = name.decision.value
@@ -723,6 +746,10 @@ class ResearchQueueWorker:
             "model": getattr(gw, "model", None) if gw else None,
             "quote_at_proposal": action.current_price or candidate.current_price,
             "nav_at_proposal": nav,
+            "bull_case": report.bull_case.summary if report.bull_case else None,
+            "base_case": report.base_case.summary if report.base_case else None,
+            "bear_case": report.bear_case.summary if report.bear_case else None,
+            "expected_order_type": "market",
         }
         for key, value in extras.items():
             if hasattr(item, key):
@@ -789,7 +816,14 @@ class ResearchQueueWorker:
             item.reason_for_watch = reason
         if approval_id:
             item.approval_id = approval_id
-        next_review = self.now() + timedelta(hours=12)
+        hours = 12.0
+        try:
+            cfg = load_research_config()
+            sleeve = (thesis.sleeve.value if thesis and thesis.sleeve else candidate.provisional_sleeve.value)
+            hours = float(((cfg.get("reassessment") or {}).get("watch_min_retry_hours") or {}).get(sleeve) or 12)
+        except Exception:  # noqa: BLE001
+            hours = 12.0
+        next_review = self.now() + timedelta(hours=hours)
         item.next_review_at = next_review.isoformat()
         self.watch.store.save(item)
         if existing is None and status is WatchStatus.WATCH:
@@ -911,6 +945,27 @@ class ResearchQueueWorker:
                 payload={"approval_id": item.approval_id, "ticker": item.ticker},
             )
         return {"expired": len(expired), "superseded": superseded}
+
+
+def _inconclusive_retry_due(report: ResearchReport, entry: ResearchQueueEntry, now: datetime) -> bool:
+    if report.research_status is not ResearchStatus.RESEARCH_INCONCLUSIVE and report.research_conclusion is not ResearchConclusion.NEED_MORE_DATA:
+        return False
+    cfg = load_research_config()
+    hours = float((cfg.get("reassessment") or {}).get("need_more_data_min_retry_hours") or 24)
+    raw = report.completed_at or report.started_at or entry.last_attempt_at or entry.enqueued_at
+    if not raw:
+        return True
+    try:
+        stamp = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    if (now - stamp).total_seconds() >= hours * 3600:
+        return True
+    if report.freshness is ResearchFreshness.RESEARCH_REFRESH_REQUIRED:
+        return True
+    return False
 
 
 def _queue_status_for(report: ResearchReport) -> ResearchQueueStatus:

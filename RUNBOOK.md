@@ -1,12 +1,12 @@
 # Runbook
 
-Paper pipeline. Robinhood `review_equity_order` after a still-valid APPROVED packet. No place/cancel. No transfers.
+LIVE path: discovery → research → thesis → portfolio decision → Risk Gate → human approval → send-time revalidation → `LiveOrderExecutor` (only if `AGENTIC_LIVE_ORDER_PLACEMENT=true`). Paper pipeline remains for tests/dev.
 
-Policy: `PORTFOLIO_POLICY.md`. Config: `config/pipeline.json`, `config/portfolio_policy.json`, `config/account_rules.json`.
+Policy: `PORTFOLIO_POLICY.md`. Config: `config/pipeline.json`, `config/portfolio_policy.json`, `config/account_rules.json`, `config/live_execution.json`.
 
-## Execution state (unchanged)
+## Execution state
 
-`HUMAN_APPROVAL` · `auto_execution=false` · `live_trade_actions_allowed=false` · `require_human_approval=true`.
+`HUMAN_APPROVAL` · `auto_execution=false` · `require_human_approval=true`. Committed `LIVE_ORDER_PLACEMENT=false`. Enabling placement is a Pi env change only.
 
 `HALTED` keeps auto-exec false. Human-only resume.
 
@@ -23,8 +23,10 @@ Policy: `PORTFOLIO_POLICY.md`. Config: `config/pipeline.json`, `config/portfolio
 9. Risk: concentration matrix, sleeve Spec 5%, daily halt, HWM state, BP  
 10. Order plan (paper Execution Controller). BUY/ADD/REDUCE/SELL only. HOLD/WATCH/REJECT/NO_ACTION create no plan.  
 11. **Paper fill / blotter** — simulate PAPER_ONLY fills on an isolated paper book. Reconcile cash/quantity/P&L/NAV. No review/place/cancel. No stop orders.  
-12. **Human approval packet** — package the OrderPlan for a human. `APPROVED` does not place.  
-13. **Robinhood review-only** — revalidate + Risk Gate re-check + `review_equity_order`. Persist `ReviewResult`. **Stop.** `REVIEW_ACCEPTED` does not execute. No place/cancel.  
+12. **Human approval packet** — package the Risk-Gate-approved action. `APPROVED` does not place while placement is off.  
+13. **Send-time revalidation** — quote, NAV, cash, buying power, tradability, session, Risk Gate, thesis, duplicate-order, idempotency. Fail closed if anything changed.  
+14. **LiveOrderExecutor** — sole `place_equity_order` caller, only if `AGENTIC_LIVE_ORDER_PLACEMENT=true`. Prefer fractional/dollar BUY. Ambiguous timeouts do not retry.  
+15. **Reconcile** — poll broker status/fills, refresh account/positions, mark approval EXECUTED, journal.  
 14. **Position monitoring** — existing holdings; facts/triggers; optional Research refresh; thesis reassessment; HOLD/ADD/REDUCE/SELL/NO_ACTION to Risk Gate. Exit conditions are not broker stops.  
 15. Journal  
 
@@ -77,6 +79,8 @@ $env:DASHBOARD_ENVIRONMENT = "LIVE"
 python scripts/run_service.py
 ```
 
-Dashboard: `http://127.0.0.1:3100` (localhost only). APPROVE is required. Default LIVE ORDER PLACEMENT is OFF.
+Dashboard: `http://127.0.0.1:3100` (localhost only). Approvals: `http://127.0.0.1:3100/approvals`. APPROVE is required. Default LIVE ORDER PLACEMENT is OFF.
+
+Classify leftover scripted/PAPER/duplicate rows without deleting history: `PYTHONPATH=src python scripts/classify_artifacts.py`.
 
 Raspberry Pi production: install as dedicated user `agentic` (or replace `User=`/`Group=` in the unit), venv at `/opt/agentic-portfolio/.venv`, secrets in `/etc/agentic-portfolio/env`. OAuth must be created as the same user that runs systemd. Full procedure: `deploy/README.md`. Unit: `deploy/systemd/agentic-portfolio.service`. Do not run as root. SSH tunnel: `ssh -L 3100:127.0.0.1:3100 <pi>`.

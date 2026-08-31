@@ -255,8 +255,12 @@ class AgentRuntime:
     def _openai_state(self) -> dict[str, Any]:
         if self.services.budget_exhausted:
             return {"state": "BUDGET_EXHAUSTED", "calls_allowed": False}
-        key = bool(os.environ.get("OPENAI_API_KEY"))
-        return {"state": "CONFIGURED" if key else "UNCONFIGURED", "calls_allowed": key}
+        gateway = getattr(self.services, "gateway", None)
+        adapter = None
+        if gateway is not None:
+            adapter = (gateway.providers or {}).get("openai")
+        ready = bool(adapter.available()) if adapter is not None else bool(os.environ.get("OPENAI_API_KEY"))
+        return {"state": "READY" if ready else "UNCONFIGURED", "calls_allowed": ready}
 
     def cycle(self) -> list[dict[str, Any]]:
         stamp = self.now()

@@ -9,7 +9,7 @@ from typing import Any
 
 from agentic_portfolio.agent.activity import read_activity
 from agentic_portfolio.agent.heartbeat import load_health
-from agentic_portfolio.agent.pipeline import resolve_queue_stores
+from agentic_portfolio.agent.pipeline import primary_queue_stores
 from agentic_portfolio.approval.engine import record_human_decision
 from agentic_portfolio.approval.report import render_packet
 from agentic_portfolio.approval.store import ApprovalStore
@@ -118,10 +118,9 @@ def dashboard_state(root: Path | None = None) -> DashboardState:
     paper_queue = ResearchQueue(state_dir / "research_queue.json", runtime_mode=RuntimeMode.PAPER.value)
     paper_discovery = DiscoveryRunStore(state_dir / "discovery_runs.json", runtime_mode=RuntimeMode.PAPER.value)
     if runtime is RuntimeMode.LIVE:
-        active_candidates, active_queue = resolve_queue_stores(base, runtime_mode=runtime)
+        active_candidates, active_queue = primary_queue_stores(base, runtime_mode=runtime)
         live_runs = DiscoveryRunStore(discovery_dir / "discovery_runs.json", runtime_mode=RuntimeMode.LIVE.value)
-        paper_runs_as_fallback = DiscoveryRunStore(state_dir / "discovery_runs.json", runtime_mode=RuntimeMode.LIVE.value)
-        active_discovery = live_runs if live_runs.all() else paper_runs_as_fallback
+        active_discovery = live_runs
     else:
         active_candidates = paper_candidates
         active_queue = paper_queue
@@ -643,6 +642,29 @@ def notifications_view(state: DashboardState) -> dict[str, Any]:
     return {"rows": items, "unread": unread, "unread_count": len(unread)}
 
 
+def _openai_card(health: dict[str, Any], state: DashboardState) -> dict[str, Any]:
+    raw = dict(health.get("openai") or {})
+    budget = dict(health.get("ai_budget") or {})
+    try:
+        summary = ai_summary(state)
+        providers = dict(summary.get("providers") or {})
+        if providers.get("openai"):
+            raw["state"] = "READY"
+            raw["calls_allowed"] = True
+        spent = float(summary.get("spent") or budget.get("spent") or 0)
+        calls = int(summary.get("calls_month") or budget.get("calls_month") or 0)
+        if spent > 0 or calls > 0:
+            if raw.get("state") in {None, "", "UNCONFIGURED"}:
+                raw["state"] = "READY"
+                raw["calls_allowed"] = True
+        raw["spent"] = spent
+        raw["calls_month"] = calls
+    except Exception:  # noqa: BLE001
+        if float(budget.get("spent") or 0) > 0 and raw.get("state") == "UNCONFIGURED":
+            raw["state"] = "READY"
+    return raw
+
+
 def agent_runtime_view(state: DashboardState) -> dict[str, Any]:
     health = load_health(state.root)
     err = live_error_state(state)
@@ -655,7 +677,7 @@ def agent_runtime_view(state: DashboardState) -> dict[str, Any]:
         "last_cycle": health.get("last_cycle"),
         "next_jobs": health.get("next_jobs") or [],
         "robinhood": health.get("robinhood") or {},
-        "openai": health.get("openai") or {},
+        "openai": _openai_card(health, state),
         "ai_budget": health.get("ai_budget") or {},
         "cycles": health.get("cycles") or 0,
         "live_error_code": err.get("code"),
@@ -803,45 +825,63 @@ def _merge_theses(state: DashboardState, flags: dict[str, Any] | None = None) ->
 def _live_research_rows(state: DashboardState) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[str] = set()
+    latest_by_key: dict[str, dict[str, Any]] = {}
     for row in _ai_store(state, RuntimeMode.LIVE.value).research_reports():
         if artifact_environment(row) != RuntimeMode.LIVE.value:
             continue
+        if str(row.get("research_source") or "").lower() == "scripted":
+            row = dict(row)
+            row["production_artifact"] = False
         ticker = str(row.get("ticker") or row.get("symbol") or "").upper()
         rid = str(row.get("research_id") or "")
         seen.add(rid)
-        rows.append(
-            {
-                "research_id": row.get("research_id"),
-                "symbol": ticker,
-                "research_conclusion": row.get("recommended_action") or row.get("research_conclusion"),
-                "research_status": "COMPLETE" if row.get("research_id") else "NONE",
-                "executive_summary": row.get("thesis") or row.get("executive_summary"),
-                "freshness": row.get("freshness") or "FRESH",
-                "confidence": row.get("confidence"),
-                "provisional_sleeve": row.get("provisional_sleeve"),
-                "bull_case": {"summary": row.get("bull_case")} if row.get("bull_case") else None,
-                "base_case": {"summary": row.get("base_case")} if row.get("base_case") else None,
-                "bear_case": {"summary": row.get("bear_case")} if row.get("bear_case") else None,
-                "key_risks": list(row.get("risks") or row.get("key_risks") or []),
-                "invalidation_candidates": list(row.get("invalidation_candidates") or []),
-                "completed_at": row.get("created_at") or row.get("completed_at"),
-                "started_at": row.get("created_at"),
-                "runtime_mode": RuntimeMode.LIVE.value,
-                "source_of_truth": get_active_portfolio_source(),
-                "research_source": row.get("research_source"),
-                "provider": row.get("provider"),
-                "model": row.get("model"),
-                "ai_call_id": row.get("ai_call_id"),
-                "estimated_cost": row.get("estimated_cost"),
-                "actual_cost": row.get("actual_cost"),
-                "originating_candidate_id": row.get("candidate_id"),
-            }
-        )
+        built = {
+            "research_id": row.get("research_id"),
+            "symbol": ticker,
+            "research_conclusion": row.get("recommended_action") or row.get("research_conclusion"),
+            "research_status": "COMPLETE" if row.get("research_id") else "NONE",
+            "executive_summary": row.get("thesis") or row.get("executive_summary"),
+            "freshness": row.get("freshness") or "FRESH",
+            "confidence": row.get("confidence"),
+            "provisional_sleeve": row.get("provisional_sleeve"),
+            "bull_case": {"summary": row.get("bull_case")} if row.get("bull_case") else None,
+            "base_case": {"summary": row.get("base_case")} if row.get("base_case") else None,
+            "bear_case": {"summary": row.get("bear_case")} if row.get("bear_case") else None,
+            "key_risks": list(row.get("risks") or row.get("key_risks") or []),
+            "invalidation_candidates": list(row.get("invalidation_candidates") or []),
+            "completed_at": row.get("created_at") or row.get("completed_at"),
+            "started_at": row.get("created_at"),
+            "runtime_mode": RuntimeMode.LIVE.value,
+            "source_of_truth": get_active_portfolio_source(),
+            "research_source": row.get("research_source"),
+            "provider": row.get("provider"),
+            "model": row.get("model"),
+            "ai_call_id": row.get("ai_call_id"),
+            "estimated_cost": row.get("estimated_cost"),
+            "actual_cost": row.get("actual_cost"),
+            "originating_candidate_id": row.get("candidate_id"),
+            "evidence_fingerprint": row.get("evidence_fingerprint"),
+            "production_artifact": row.get("production_artifact", str(row.get("research_source") or "").lower() != "scripted"),
+        }
+        key = f"{ticker}:{(row.get('evidence_fingerprint') or rid)}"
+        prior = latest_by_key.get(key)
+        if prior is None or str(built.get("completed_at") or "") > str(prior.get("completed_at") or ""):
+            latest_by_key[key] = built
     for report in state.research.all_reports():
         if report.research_id in seen:
             continue
+        if getattr(report, "runtime_mode", None) == RuntimeMode.PAPER.value:
+            continue
+        if str(report.research_source or "").lower() == "scripted":
+            continue
         seen.add(report.research_id)
-        rows.append(to_dict(report))
+        data = to_dict(report)
+        ticker = str(data.get("symbol") or "").upper()
+        key = f"{ticker}:{(data.get('evidence_fingerprint') or data.get('research_id'))}"
+        prior = latest_by_key.get(key)
+        if prior is None or str(data.get("completed_at") or "") > str(prior.get("completed_at") or ""):
+            latest_by_key[key] = data
+    rows = list(latest_by_key.values())
     rows.sort(key=lambda r: str(r.get("completed_at") or r.get("started_at") or ""), reverse=True)
     return rows
 
@@ -859,7 +899,14 @@ def research_view(state: DashboardState) -> dict[str, Any]:
         reports = [to_dict(r) for r in state.research.all_reports()]
         reports.sort(key=lambda r: str(r.get("completed_at") or r.get("started_at") or ""), reverse=True)
     theses = _merge_theses(state, flags)
-    queue = [to_dict(q) for q in state.queue.all()]
+    raw_queue = [to_dict(q) for q in state.queue.all()]
+    by_symbol: dict[str, dict[str, Any]] = {}
+    for row in raw_queue:
+        key = str(row.get("symbol") or "").upper()
+        prior = by_symbol.get(key)
+        if prior is None or str(row.get("enqueued_at") or "") >= str(prior.get("enqueued_at") or ""):
+            by_symbol[key] = row
+    queue = list(by_symbol.values())
     counts = {
         "queued": sum(1 for q in queue if q.get("status") == "QUEUED"),
         "researching": sum(1 for q in queue if q.get("status") in {"RESEARCHING", "IN_PROGRESS"}),
@@ -1004,6 +1051,12 @@ def _broker_order_summary(state: DashboardState) -> dict[str, int]:
         elif status in {"CANCELED"}:
             counts["canceled"] += 1
     return counts
+
+
+def _live_position_count(state: DashboardState) -> dict[str, int]:
+    ctx = live_context(state) if get_active_runtime() is RuntimeMode.LIVE else {}
+    positions = ctx.get("positions") or []
+    return {"count": len(positions) if isinstance(positions, list) else 0}
 
 
 def journal_view(state: DashboardState, *, limit: int = 250) -> dict[str, Any]:
@@ -1822,6 +1875,10 @@ def pipeline_status(state: DashboardState) -> dict[str, Any]:
             "active": watches.get("active") or 0,
             "count": watches.get("count") or 0,
         },
+        "theses": {
+            "count": len(_merge_theses(state, flags)),
+            "draft_or_active": len([t for t in _merge_theses(state, flags) if t.get("active_or_draft")]),
+        },
         "approvals": {
             "pending": approvals.get("pending_count") or 0,
         },
@@ -1833,6 +1890,8 @@ def pipeline_status(state: DashboardState) -> dict[str, Any]:
         },
         "live_order_placement_enabled": live_placement_enabled(),
         "orders": _broker_order_summary(state),
+        "positions": _live_position_count(state),
+        "lifecycle": ["Discovery", "Research", "Thesis/Decision", "Approval", "Order", "Position"],
     }
 
 

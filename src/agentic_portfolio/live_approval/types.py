@@ -84,6 +84,10 @@ class LiveApproval:
     model: str | None = None
     quote_at_proposal: float | None = None
     nav_at_proposal: float | None = None
+    bull_case: str | None = None
+    base_case: str | None = None
+    bear_case: str | None = None
+    expected_order_type: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = to_dict(self)

@@ -16,6 +16,7 @@ from typing import Any, Mapping
 
 from agentic_portfolio.ai.errors import MalformedResponse, ProviderOutage, ProviderTimeout, SchemaViolation
 from agentic_portfolio.ai.providers.base import ProviderRequest, ProviderResponse
+from agentic_portfolio.ai.schemas import to_openai_strict_schema
 
 _SECRET = re.compile(r"(sk-[A-Za-z0-9_\-]{8,}|Bearer\s+\S+)", re.IGNORECASE)
 
@@ -63,7 +64,7 @@ class OpenAIProvider:
                     "type": "json_schema",
                     "name": request.schema_name,
                     "strict": True,
-                    "schema": request.schema,
+                    "schema": to_openai_strict_schema(request.schema),
                 }
             },
         }

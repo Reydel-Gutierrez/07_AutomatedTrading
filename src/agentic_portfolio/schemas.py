@@ -499,6 +499,9 @@ class CandidateStatus(str, Enum):
     REJECTED = "REJECTED"
     EXPIRED = "EXPIRED"
     PROMOTED_TO_RESEARCH = "PROMOTED_TO_RESEARCH"
+    WATCHING = "WATCHING"
+    RESEARCH_COMPLETE = "RESEARCH_COMPLETE"
+    RESEARCH_INCONCLUSIVE = "RESEARCH_INCONCLUSIVE"
 
 
 class DiscoveryPriority(str, Enum):
@@ -690,6 +693,8 @@ class ResearchQueueEntry:
     last_attempt_at: str | None = None
     claimed_at: str | None = None
     skipped_reason: str | None = None
+    evidence_fingerprint: str | None = None
+    research_generation: int = 1
 
 
 @dataclass

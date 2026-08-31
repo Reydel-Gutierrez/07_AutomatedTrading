@@ -240,6 +240,49 @@ SCHEMAS = {
 }
 
 
+def to_openai_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
+    """Convert a permissive internal schema to OpenAI Structured Outputs strict mode.
+
+    Internal canonical schemas may keep optional properties out of `required`.
+    OpenAI strict objects must list every property in `required` and set
+    `additionalProperties=false`. Previously-optional fields become nullable.
+    """
+    return _strict_node(schema)
+
+
+def _strict_node(spec: dict[str, Any]) -> dict[str, Any]:
+    out = dict(spec)
+    raw_type = out.get("type")
+    types = raw_type if isinstance(raw_type, list) else ([raw_type] if raw_type else [])
+    if "object" in types or (not types and "properties" in out):
+        props_in = dict(out.get("properties") or {})
+        originally_required = set(out.get("required") or [])
+        props: dict[str, Any] = {}
+        for key, child in props_in.items():
+            node = _strict_node(child) if isinstance(child, dict) else child
+            if key not in originally_required and isinstance(node, dict):
+                node = _make_nullable(node)
+            props[key] = node
+        out["type"] = "object"
+        out["properties"] = props
+        out["required"] = list(props.keys())
+        out["additionalProperties"] = False
+    if "array" in types and isinstance(out.get("items"), dict):
+        out["items"] = _strict_node(out["items"])
+    return out
+
+
+def _make_nullable(spec: dict[str, Any]) -> dict[str, Any]:
+    child = dict(spec)
+    raw_type = child.get("type")
+    if raw_type is None:
+        return child
+    types = raw_type if isinstance(raw_type, list) else [raw_type]
+    if "null" not in types:
+        child["type"] = [*types, "null"]
+    return child
+
+
 def validate_against_schema(payload: Any, schema: dict[str, Any], *, name: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise SchemaViolation(f"{name}: expected object, got {type(payload).__name__}")

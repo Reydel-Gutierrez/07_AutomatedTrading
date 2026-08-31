@@ -30,6 +30,21 @@ from agentic_portfolio.schemas import (
 )
 
 
+ACTIVE_QUEUE_STATUSES = {
+    ResearchQueueStatus.QUEUED,
+    ResearchQueueStatus.RESEARCHING,
+    ResearchQueueStatus.IN_PROGRESS,
+}
+
+STABLE_CANDIDATE_STATUSES = {
+    CandidateStatus.WATCHING,
+    CandidateStatus.RESEARCH_COMPLETE,
+    CandidateStatus.RESEARCH_INCONCLUSIVE,
+    CandidateStatus.REJECTED,
+    CandidateStatus.EXPIRED,
+}
+
+
 def candidates_path(root: Path | None = None) -> Path:
     return (root or project_root()) / "state" / "candidates.json"
 
@@ -65,7 +80,14 @@ class CandidateStore:
 
     def active_for_symbol(self, symbol: str) -> Candidate | None:
         want = symbol.upper()
-        live = {CandidateStatus.DISCOVERED, CandidateStatus.SHORTLISTED, CandidateStatus.PROMOTED_TO_RESEARCH}
+        live = {
+            CandidateStatus.DISCOVERED,
+            CandidateStatus.SHORTLISTED,
+            CandidateStatus.PROMOTED_TO_RESEARCH,
+            CandidateStatus.WATCHING,
+            CandidateStatus.RESEARCH_COMPLETE,
+            CandidateStatus.RESEARCH_INCONCLUSIVE,
+        }
         found: Candidate | None = None
         for raw in self._data.get("records", {}).values():
             if str(raw.get("symbol", "")).upper() != want:
@@ -125,29 +147,43 @@ class ResearchQueue:
         return [_queue_from_dict(r) for r in self._data.get("records", {}).values()]
 
     def blocking_entry(self, *, symbol: str, candidate_id: str | None = None) -> ResearchQueueEntry | None:
-        """Return an existing row that must not be duplicated or re-researched."""
+        """Active duplicate blocker: QUEUED / RESEARCHING / IN_PROGRESS only."""
+        return self.active_entry(symbol=symbol, candidate_id=candidate_id)
+
+    def active_entry(self, *, symbol: str, candidate_id: str | None = None) -> ResearchQueueEntry | None:
         want = symbol.upper()
-        blocked = {
-            ResearchQueueStatus.QUEUED,
-            ResearchQueueStatus.RESEARCHING,
-            ResearchQueueStatus.IN_PROGRESS,
-            ResearchQueueStatus.COMPLETED,
-            ResearchQueueStatus.NEED_MORE_DATA,
-            ResearchQueueStatus.INCONCLUSIVE,
-        }
+        found: ResearchQueueEntry | None = None
         for entry in self.all():
             same = entry.symbol.upper() == want or (candidate_id and entry.candidate_id == candidate_id)
-            if same and entry.status in blocked:
-                return entry
-        return None
+            if same and entry.status in ACTIVE_QUEUE_STATUSES:
+                if found is None or (entry.enqueued_at or "") > (found.enqueued_at or ""):
+                    found = entry
+        return found
+
+    def latest_for_symbol(self, symbol: str, *, candidate_id: str | None = None) -> ResearchQueueEntry | None:
+        want = symbol.upper()
+        found: ResearchQueueEntry | None = None
+        for entry in self.all():
+            same = entry.symbol.upper() == want or (candidate_id and entry.candidate_id == candidate_id)
+            if not same:
+                continue
+            if found is None or (entry.enqueued_at or "") > (found.enqueued_at or ""):
+                found = entry
+        return found
 
     def enqueue(self, entry: ResearchQueueEntry) -> ResearchQueueEntry:
         from agentic_portfolio.discovery.freshness import normalize_queue_freshness
 
+        existing = self.active_entry(symbol=entry.symbol, candidate_id=entry.candidate_id)
+        if existing is not None:
+            return existing
         if not entry.queue_id:
             entry.queue_id = str(uuid4())
         if not entry.enqueued_at:
             entry.enqueued_at = _now()
+        if not entry.research_generation:
+            prior = self.latest_for_symbol(entry.symbol, candidate_id=entry.candidate_id)
+            entry.research_generation = int(prior.research_generation or 0) + 1 if prior is not None else 1
         entry = normalize_queue_freshness(entry)
         data = to_dict(entry)
         if self.runtime_mode:
@@ -309,6 +345,8 @@ def _queue_from_dict(raw: dict[str, Any]) -> ResearchQueueEntry:
         last_attempt_at=raw.get("last_attempt_at"),
         claimed_at=raw.get("claimed_at"),
         skipped_reason=raw.get("skipped_reason"),
+        evidence_fingerprint=raw.get("evidence_fingerprint"),
+        research_generation=int(raw.get("research_generation") or 1),
     )
 
 

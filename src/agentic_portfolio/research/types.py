@@ -272,6 +272,10 @@ class ResearchReport:
     ai_call_id: str | None = None
     estimated_cost: float | None = None
     actual_cost: float | None = None
+    evidence_fingerprint: str | None = None
+    research_generation: int = 1
+    runtime_mode: str | None = None
+    production_artifact: bool = True
 
 
 @dataclass

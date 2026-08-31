@@ -126,11 +126,19 @@ def run_discovery(
             # it does not discard a shortlisted candidate from the queue.
             if c.priority in {DiscoveryPriority.LOW} and not c.deferred_due_to_overlap:
                 continue
+            prior = qstore.latest_for_symbol(c.symbol, candidate_id=c.candidate_id) if persist and qstore is not None else None
             if persist and qstore is not None:
-                blocked = qstore.blocking_entry(symbol=c.symbol, candidate_id=c.candidate_id)
+                blocked = qstore.active_entry(symbol=c.symbol, candidate_id=c.candidate_id)
                 if blocked is not None:
                     continue
+                allowed, _why = may_reopen_research(c, prior, now=now, config=cfg)
+                if not allowed:
+                    c.status = _stable_status_for(prior)
+                    cstore.upsert(c)
+                    continue
             entry = _queue_entry(c, cfg, now=now)
+            if prior is not None:
+                entry.research_generation = int(prior.research_generation or 1) + 1
             c.status = CandidateStatus.PROMOTED_TO_RESEARCH
             promoted_ids.append(c.candidate_id)
             queue_entries.append(entry)
@@ -501,6 +509,71 @@ def _apply_overlap_priority(candidates: list[Candidate], cfg: dict) -> list[Cand
             if "OVERLAP_PRIORITY_PENALTY" not in c.reasons:
                 c.reasons.append("OVERLAP_PRIORITY_PENALTY")
     return candidates
+
+
+def _stable_status_for(prior: ResearchQueueEntry | None) -> CandidateStatus:
+    if prior is None:
+        return CandidateStatus.DISCOVERED
+    if prior.status is ResearchQueueStatus.REJECTED:
+        return CandidateStatus.REJECTED
+    if prior.status in {ResearchQueueStatus.NEED_MORE_DATA, ResearchQueueStatus.INCONCLUSIVE}:
+        return CandidateStatus.RESEARCH_INCONCLUSIVE
+    if prior.status is ResearchQueueStatus.COMPLETED:
+        return CandidateStatus.WATCHING
+    return CandidateStatus.DISCOVERED
+
+
+def may_reopen_research(
+    candidate: Candidate,
+    prior: ResearchQueueEntry | None,
+    *,
+    now: datetime,
+    config: dict | None = None,
+) -> tuple[bool, str]:
+    """Fresh discovery may reopen research only after a legitimate trigger."""
+    if prior is None:
+        return True, "no_prior"
+    if prior.status in {ResearchQueueStatus.QUEUED, ResearchQueueStatus.RESEARCHING, ResearchQueueStatus.IN_PROGRESS}:
+        return False, "active_queue"
+    cfg = config or load_discovery_config()
+    retry = dict(cfg.get("reassessment") or {})
+    sleeve = candidate.provisional_sleeve.value if candidate.provisional_sleeve else "CORE_GROWTH"
+    flags = {str(f).upper() for f in (candidate.event_flags or [])}
+    material = bool(
+        flags
+        & {"EARNINGS", "EARNINGS_EVENT", "MAJOR_NEWS", "MATERIAL_FILING", "REGIME_CHANGE", "HUMAN_REQUEST"}
+        or any(
+            "earnings" in str(r).lower() or "filing" in str(r).lower() or "news" in str(r).lower()
+            for r in (candidate.reasons or [])
+        )
+    )
+    last = _parse(prior.last_attempt_at or prior.enqueued_at) if (prior.last_attempt_at or prior.enqueued_at) else None
+    elapsed_h = ((now - last).total_seconds() / 3600.0) if last else 10**9
+    if prior.status in {ResearchQueueStatus.NEED_MORE_DATA, ResearchQueueStatus.INCONCLUSIVE}:
+        hours = float(retry.get("need_more_data_min_retry_hours") or 24)
+        if material or elapsed_h >= hours:
+            return True, "need_more_data_retry"
+        return False, "need_more_data_cooldown"
+    if prior.status is ResearchQueueStatus.REJECTED:
+        hours = float(retry.get("reject_min_retry_hours") or 168)
+        if material or elapsed_h >= hours:
+            return True, "reject_retry"
+        return False, "reject_stable"
+    if prior.status is ResearchQueueStatus.COMPLETED:
+        watch_hours = dict(retry.get("watch_min_retry_hours") or {})
+        hours = float(watch_hours.get(sleeve) or retry.get("completed_min_retry_hours") or 72)
+        expired = False
+        if prior.freshness_deadline:
+            try:
+                expired = _parse(prior.freshness_deadline) <= now
+            except ValueError:
+                expired = False
+        if material or expired or elapsed_h >= hours:
+            return True, "completed_stale_or_trigger"
+        return False, "completed_waiting"
+    if prior.status in {ResearchQueueStatus.EXPIRED, ResearchQueueStatus.DROPPED}:
+        return True, "prior_terminal_expired"
+    return False, "stable"
 
 
 def _queue_entry(cand: Candidate, cfg: dict, *, now: datetime) -> ResearchQueueEntry:

@@ -18,10 +18,17 @@ from agentic_portfolio.schemas import PortfolioContext
 
 LIVE_DISCOVERY_WIRED = True
 LIVE_DISCOVERY_SKIP_REASON = "no_live_fetcher"
-LIGHTWEIGHT_DISCOVERY_SOURCES = ("account_positions", "account_watchlists", "earnings_calendar")
-LIGHTWEIGHT_MAX_UNIVERSE = 15
-LIGHTWEIGHT_MAX_SNAPSHOTS = 12
-LIGHTWEIGHT_MAX_PER_SOURCE = 10
+LIGHTWEIGHT_DISCOVERY_SOURCES = (
+    "account_positions",
+    "account_watchlists",
+    "popular_watchlists",
+    "earnings_calendar",
+    "core_liquid",
+    "liquid_etfs",
+)
+LIGHTWEIGHT_MAX_UNIVERSE = 24
+LIGHTWEIGHT_MAX_SNAPSHOTS = 20
+LIGHTWEIGHT_MAX_PER_SOURCE = 12
 
 
 def live_discovery_status() -> dict[str, object]:
