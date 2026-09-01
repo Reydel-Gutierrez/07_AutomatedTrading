@@ -19,6 +19,14 @@ class MalformedResponse(AIError):
     """Provider returned non-JSON or otherwise unusable payload."""
 
 
+def is_incomplete_max_output_tokens(exc: BaseException) -> bool:
+    """True only for OpenAI incomplete responses caused by max_output_tokens."""
+    if not isinstance(exc, MalformedResponse):
+        return False
+    text = str(exc).lower()
+    return "incomplete" in text and "max_output_tokens" in text
+
+
 class SchemaViolation(AIError):
     """Structured output did not match the required schema."""
 

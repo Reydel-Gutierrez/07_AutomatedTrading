@@ -361,3 +361,59 @@ def test_openai_strict_schema_requires_all_properties_only_at_adapter_boundary()
     assert captured["strict"] is True
     assert set(sent["required"]) == set(sent["properties"])
     assert set(RESEARCH_REPORT_SCHEMA["required"]) != set(sent["required"])
+    assert sent["properties"]["key_catalysts"]["maxItems"] == 5
+    assert sent["properties"]["ai_interpretations"]["maxItems"] == 5
+
+
+def test_openai_incomplete_max_output_tokens_does_not_parse_truncated_json():
+    from agentic_portfolio.ai.providers.base import ProviderRequest
+    from agentic_portfolio.ai.schemas import RESEARCH_REPORT_SCHEMA
+
+    def transport(url, body, timeout):
+        return {
+            "status": "incomplete",
+            "incomplete_details": {"reason": "max_output_tokens"},
+            "output_text": '{"executive_summary": "truncated',
+            "model": "gpt-5.6-terra",
+            "usage": {"input_tokens": 100, "output_tokens": 4000},
+        }
+
+    adapter = OpenAIProvider(api_key="sk-test", transport=transport)
+    with pytest.raises(MalformedResponse, match=r"incomplete \(max_output_tokens\)"):
+        adapter.complete(
+            ProviderRequest(
+                model="gpt-5.6-terra",
+                messages=[{"role": "user", "content": "x"}],
+                schema_name="research_report",
+                schema=RESEARCH_REPORT_SCHEMA,
+            )
+        )
+
+
+def test_research_schema_max_items_are_preserved_in_strict_conversion():
+    from agentic_portfolio.ai.schemas import RESEARCH_REPORT_SCHEMA, to_openai_strict_schema, validate_against_schema
+
+    props = RESEARCH_REPORT_SCHEMA["properties"]
+    for key in (
+        "key_catalysts",
+        "key_risks",
+        "invalidation_candidates",
+        "missing_information",
+        "conflicting_evidence",
+        "ai_interpretations",
+    ):
+        assert props[key]["maxItems"] == 5
+    strict = to_openai_strict_schema(RESEARCH_REPORT_SCHEMA)
+    assert strict["properties"]["key_catalysts"]["maxItems"] == 5
+    assert strict["properties"]["ai_interpretations"]["maxItems"] == 5
+    with pytest.raises(SchemaViolation, match="more than 5 items"):
+        validate_against_schema(
+            {
+                "research_conclusion": "KEEP_WATCHING",
+                "confidence": "MEDIUM",
+                "executive_summary": "ok",
+                "key_catalysts": ["a", "b", "c", "d", "e", "f"],
+            },
+            RESEARCH_REPORT_SCHEMA,
+            name="research_report",
+        )

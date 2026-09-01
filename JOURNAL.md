@@ -433,6 +433,18 @@ Committed defaults unchanged: `auto_execution=false`, `require_human_approval=tr
 
 ---
 
+## 2026-09-01 — Terra research truncation retry (max_output_tokens)
+
+**Type:** `research`
+
+`RESEARCH_QUEUE_WORKER` was DEGRADED on names such as CVX because Terra's structured ResearchReport hit `max_output_tokens` at the existing 4000 ceiling. Incomplete JSON is not a report. Fix: keep the 4000 research output ceiling and the $10/month combined AI cap; require concise ResearchReport prose in `REASONER_INSTRUCTIONS`; bound verbose arrays with `maxItems` where OpenAI strict structured output supports them; retry **once** with an aggressive-conciseness instruction, re-authorizing through the AI budget; fail closed on a second incomplete or budget denial; do not persist a truncated ResearchReport. Queue entries remain QUEUED/retryable. MARKET_OPEN `max_items=1` unchanged. Does not weaken evidence rules, conclusions, Risk Gate, or human approval.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Committed defaults unchanged: `auto_execution=false`, `require_human_approval=true`, `LIVE_ORDER_PLACEMENT=false`.
+
+---
+
 ## Template
 
 ```

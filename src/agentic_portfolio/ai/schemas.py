@@ -91,17 +91,25 @@ PORTFOLIO_DECISION_SCHEMA = _object(
     ],
 )
 
+
+def _str_array(*, max_items: int | None = None) -> dict[str, Any]:
+    spec: dict[str, Any] = {"type": "array", "items": {"type": "string"}}
+    if max_items is not None:
+        spec["maxItems"] = max_items
+    return spec
+
+
 _CASE = _object(
     {
         "case": {"type": "string"},
         "summary": {"type": "string"},
-        "major_assumptions": {"type": "array", "items": {"type": "string"}},
+        "major_assumptions": _str_array(max_items=5),
         "expected_business_outcome": {"type": ["string", "null"]},
         "major_risk": {"type": ["string", "null"]},
         "attractiveness_implication": {"type": ["string", "null"]},
         "evidence_refs": {"type": "array", "items": {"type": "string"}},
         "price_target": {"type": ["number", "null", "string"]},
-        "notes": {"type": "array", "items": {"type": "string"}},
+        "notes": _str_array(max_items=5),
     },
     ["summary"],
 )
@@ -146,14 +154,14 @@ RESEARCH_REPORT_SCHEMA = _object(
         "bear_case": _CASE,
         "temporary_dislocation_assessment": _DISLOCATION,
         "fundamental_deterioration_assessment": _DISLOCATION,
-        "key_catalysts": {"type": "array", "items": {"type": "string"}},
-        "key_risks": {"type": "array", "items": {"type": "string"}},
-        "invalidation_candidates": {"type": "array", "items": {"type": "string"}},
+        "key_catalysts": _str_array(max_items=5),
+        "key_risks": _str_array(max_items=5),
+        "invalidation_candidates": _str_array(max_items=5),
         "expected_horizon": {"type": "string"},
-        "missing_information": {"type": "array", "items": {"type": "string"}},
-        "conflicting_evidence": {"type": "array", "items": {"type": "string"}},
+        "missing_information": _str_array(max_items=5),
+        "conflicting_evidence": _str_array(max_items=5),
         "evidence_refs": {"type": "array", "items": {"type": "string"}},
-        "ai_interpretations": {"type": "array", "items": _INTERP},
+        "ai_interpretations": {"type": "array", "items": _INTERP, "maxItems": 5},
         "confidence": {"type": "string", "enum": _CONF},
         "research_conclusion": {
             "type": "string",
@@ -340,6 +348,9 @@ def _check_value(value: Any, spec: dict[str, Any], *, path: str) -> Any:
             out[key] = _check_value(value[key], child, path=f"{path}.{key}")
         return out
     if "array" in types and isinstance(value, list):
+        max_items = spec.get("maxItems")
+        if max_items is not None and len(value) > int(max_items):
+            raise SchemaViolation(f"{path}: more than {max_items} items")
         item_spec = spec.get("items") or {"type": "string"}
         return [_check_value(item, item_spec, path=f"{path}[]") for item in value]
     raise SchemaViolation(f"{path}: expected {allowed}, got {type(value).__name__}")

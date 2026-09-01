@@ -42,6 +42,19 @@ Hard rules:
 - Separate repeated reporting of one news event from independent developments.
 - Filing analysis must reason over provided excerpts/facts, not keyword counts.
 
+Brevity (mandatory; the structured response must complete within the output-token budget):
+- executive_summary: <= 120 words
+- individual analysis string fields: <= 80 words each
+- bull/base/bear summaries: <= 80 words each
+- assessment reasoning: <= 80 words
+- recommended_next_step: <= 60 words
+- key_catalysts, key_risks, invalidation_candidates, missing_information, conflicting_evidence: concise lists, maximum 5 entries each
+- ai_interpretations: maximum 5 entries
+- evidence_refs: include only directly relevant evidence IDs
+- Do not repeat the same fact across multiple sections
+- Use empty strings or empty lists for non-applicable optional analysis sections rather than verbose explanations
+- Preserve research quality: still choose ADVANCE_TO_THESIS, KEEP_WATCHING, REJECT, or NEED_MORE_DATA; still provide confidence, bull/base/bear reasoning, dislocation/deterioration assessment, earnings effect, catalysts, risks, invalidation, and evidence refs
+
 Return JSON only with these keys:
 executive_summary, business_summary, investment_question,
 fundamental_analysis, financial_analysis, valuation_analysis, earnings_analysis,
@@ -64,6 +77,17 @@ reasoning, evidence_refs.
 
 ai_interpretations: list of {name, value, evidence_refs}.
 """
+
+
+CONCISE_RETRY_INSTRUCTION = (
+    "AGGRESSIVE CONCISENESS REQUIRED. A prior attempt was discarded because it was "
+    "incomplete (max_output_tokens) and must not be used as a ResearchReport. "
+    "Return a COMPLETE structured ResearchReport that fits the output-token budget. "
+    "Follow the word and list limits already specified. Do not truncate JSON. "
+    "Use empty strings or empty lists for non-applicable sections. "
+    "Do not repeat the same fact across sections. Research quality and conclusions "
+    "must still be evidence-based."
+)
 
 
 class ResearchReasoner(Protocol):

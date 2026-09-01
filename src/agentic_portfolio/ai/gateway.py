@@ -20,6 +20,7 @@ from agentic_portfolio.ai.errors import (
     ProviderOutage,
     ProviderTimeout,
     SchemaViolation,
+    is_incomplete_max_output_tokens,
 )
 from agentic_portfolio.ai.ledger import UsageLedger
 from agentic_portfolio.ai.pricing import estimate_cost, estimate_tokens
@@ -159,6 +160,10 @@ class AIGateway:
                 return self._call_adapter(adapter, request, reservation, schema_body, role_name, purpose, ticker, False)
             except (ProviderOutage, ProviderTimeout, MalformedResponse, SchemaViolation) as exc:
                 last_error = exc
+                if is_incomplete_max_output_tokens(exc):
+                    # Truncation is recovered by a concise same-model retry, not by
+                    # spending the fallback budget on a shorter-token Claude call.
+                    allow_fallback = False
         if allow_fallback:
             fallback_spec = role_spec(self.config, ModelRole.FALLBACK.value)
             fb_provider = str(fallback_spec["provider"])
