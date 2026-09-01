@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping
 
 from agentic_portfolio.adapters.discovery_source import (
@@ -38,6 +38,7 @@ class UniverseMember:
     reasons: list[str] = field(default_factory=list)
     skipped: bool = False
     skip_reason: str | None = None
+    earnings_upcoming_days: int | None = None
 
 
 @dataclass
@@ -95,6 +96,7 @@ def construct_universe(
     attempts: list[SourceAttempt] = []
     by_symbol: dict[str, UniverseMember] = {}
     errors: list[str] = []
+    earnings_days: dict[str, int] = {}
 
     def add(symbols: list[str], source: str, reason: str) -> list[str]:
         kept: list[str] = []
@@ -121,7 +123,7 @@ def construct_universe(
         "account_watchlists": lambda: _run_watchlists(fetcher),
         "popular_watchlists": lambda: _run_popular(fetcher, cfg),
         "saved_scans": lambda: _run_scans(fetcher),
-        "earnings_calendar": lambda: _run_earnings(fetcher, cfg, now or _now()),
+        "earnings_calendar": lambda: _run_earnings(fetcher, cfg, now or _now(), earnings_days),
         "portfolio_adjacent": lambda: _run_adjacent(held),
         "core_liquid": lambda: _run_configured(cfg, "core_liquid_symbols"),
         "liquid_etfs": lambda: _run_configured(cfg, "liquid_etf_symbols"),
@@ -158,6 +160,10 @@ def construct_universe(
 
     unique = _bound_fair(valid_map, attempts, max_size, held)
     kept_members = [by_symbol[s] for s in unique]
+    for member in kept_members:
+        days = earnings_days.get(member.symbol)
+        if days is not None and member.earnings_upcoming_days is None:
+            member.earnings_upcoming_days = days
 
     quotes = _safe_quotes(fetcher, unique)
     trad = _safe_tradability(fetcher, unique)
@@ -223,6 +229,8 @@ def snapshots_for_universe(
     quotes = _safe_quotes(fetcher, symbols)
     trad = _safe_tradability(fetcher, symbols)
     funds = _safe_fundamentals(fetcher, symbols)
+    financials = _safe_financials(fetcher, symbols)
+    historicals = _safe_historicals(fetcher, symbols, now or _now())
     out: list[SecuritySnapshot] = []
     by_symbol = {m.symbol: m for m in universe.members}
     for symbol in symbols:
@@ -235,12 +243,16 @@ def snapshots_for_universe(
             tradability=_wrap_row(trad.get(symbol), symbol),
             fundamentals=_wrap_row(funds.get(symbol), symbol),
             quotes=_wrap_row(quotes.get(symbol), symbol),
+            financials=_wrap_row(financials.get(symbol), symbol),
+            historicals=_historicals_for_symbol(historicals, symbol),
             observed_at=stamp,
         )
         snap = assemble_snapshot(payload, source_id="robinhood")
         if member:
             snap.sources = list(member.sources)
             snap.evidence_refs = list(dict.fromkeys(list(snap.evidence_refs) + [f"universe:{r}" for r in member.reasons]))
+            if member.earnings_upcoming_days is not None and snap.earnings_upcoming_days is None:
+                snap.earnings_upcoming_days = member.earnings_upcoming_days
         out.append(snap)
     return out
 
@@ -385,14 +397,19 @@ def _run_scans(fetcher: Any) -> list[str]:
     return out
 
 
-def _run_earnings(fetcher: Any, cfg: Mapping[str, Any], now: datetime) -> list[str]:
+def _run_earnings(fetcher: Any, cfg: Mapping[str, Any], now: datetime, earnings_days: dict[str, int]) -> list[str]:
     days = int(cfg.get("earnings_days") or 7)
     filt = cfg.get("earnings_filter")
     kwargs: dict[str, Any] = {"days": days}
     if filt:
         kwargs["filter"] = filt
     payload = _call(fetcher, "earnings_calendar", **kwargs) or _call(fetcher, "get_earnings_calendar", **kwargs)
-    return [sym for sym, _days in symbols_from_earnings_calendar(payload)]
+    out: list[str] = []
+    for sym, until in symbols_from_earnings_calendar(payload):
+        out.append(sym)
+        if until is not None:
+            earnings_days[sym] = until
+    return out
 
 
 def _run_adjacent(held: set[str]) -> list[str]:
@@ -448,6 +465,67 @@ def _safe_fundamentals(fetcher: Any, symbols: list[str]) -> dict[str, dict[str, 
             continue
         out.update(_index_by_symbol(payload))
     return out
+
+
+def _safe_financials(fetcher: Any, symbols: list[str]) -> dict[str, dict[str, Any]]:
+    """Company financial series. Missing method is not fatal; Core equities need this."""
+    if not symbols:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for chunk in _chunks(symbols, 10):
+        try:
+            payload = (
+                _call(fetcher, "financials", chunk, period="quarterly", limit=8)
+                or _call(fetcher, "get_financials", chunk, period="quarterly", limit=8)
+                or _call(fetcher, "financials", chunk)
+                or _call(fetcher, "get_financials", chunk)
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        out.update(_index_financials(payload, chunk))
+    return out
+
+
+def _safe_historicals(fetcher: Any, symbols: list[str], now: datetime) -> dict[str, Any]:
+    """Daily bars used for returns, SMA, RSI. Tactical cannot nominate without these."""
+    if not symbols:
+        return {}
+    start = (now - timedelta(days=400)).date().isoformat()
+    try:
+        payload = (
+            _call(fetcher, "historicals", symbols, start_time=start, interval="day")
+            or _call(fetcher, "get_equity_historicals", symbols, start_time=start, interval="day")
+            or _call(fetcher, "historicals", symbols, start_time=start)
+            or _call(fetcher, "get_equity_historicals", symbols, start_time=start)
+        )
+    except Exception:  # noqa: BLE001
+        payload = None
+    return payload if isinstance(payload, dict) else {}
+
+
+def _historicals_for_symbol(payload: Mapping[str, Any] | None, symbol: str) -> dict[str, Any] | None:
+    if not payload:
+        return None
+    return dict(payload)
+
+
+def _index_financials(payload: Mapping[str, Any] | None, symbols: list[str]) -> dict[str, dict[str, Any]]:
+    indexed = _index_by_symbol(payload)
+    if indexed:
+        return indexed
+    if not payload:
+        return {}
+    data = payload.get("data", payload) if isinstance(payload, Mapping) else {}
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    results = data.get("results") or data.get("financials") or []
+    if isinstance(results, list) and results:
+        # One blob for the whole chunk; assemble_snapshot filters by symbol.
+        for symbol in symbols:
+            out[symbol] = {"symbol": symbol, "financials": results}
+        return out
+    return {}
 
 
 def _call(fetcher: Any, name: str, *args: Any, **kwargs: Any) -> Mapping[str, Any] | None:

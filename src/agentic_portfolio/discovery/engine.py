@@ -329,11 +329,10 @@ def _evaluate_symbol(
     for nom in nominations:
         sc, breakdown = score_signals(nom.signals, nom.sleeve, cfg)
         scored.append((nom, sc, breakdown))
-    scored.sort(key=lambda x: x[1], reverse=True)
-    primary_nom, primary_score, breakdown = scored[0]
+    primary_nom, primary_score, breakdown = _select_primary_nomination(scored)
     alternatives = [
         SleeveHypothesis(sleeve=n.sleeve, reason=n.sleeve_reason, confidence=n.sleeve_confidence)
-        for n, s, _ in scored[1:]
+        for n, s, _ in sorted(scored, key=lambda x: x[1], reverse=True)
         if n.sleeve != primary_nom.sleeve
     ]
 
@@ -389,6 +388,41 @@ def _evaluate_symbol(
 
     _apply_portfolio_priority(cand, context, cfg, primary_score)
     return cand, False
+
+
+def _select_primary_nomination(
+    scored: list[tuple[ChannelNomination, float, dict]],
+) -> tuple[ChannelNomination, float, dict]:
+    """Pick the sleeve whose distinctive evidence actually applies.
+
+    Highest raw score is not enough: opportunistic drawdown-from-high must not
+    swallow a core, tactical, or speculative nomination that has its own setup.
+    """
+    if len(scored) == 1:
+        return scored[0]
+
+    def distinctive(nom: ChannelNomination) -> bool:
+        names = {s.name for s in nom.signals}
+        if nom.sleeve == Sleeve.OPPORTUNISTIC:
+            return "selloff" in names or "post_earnings_overreaction" in names
+        if nom.sleeve == Sleeve.TACTICAL:
+            return bool(names & {"sma_alignment", "trend", "breakout", "pullback", "expansion", "medium_term"})
+        if nom.sleeve == Sleeve.SPECULATIVE:
+            return bool(names & {"asymmetric_upside", "optionality", "binary_or_pipeline", "high_growth_uncertainty"})
+        if nom.sleeve == Sleeve.CORE_GROWTH:
+            return bool(names & {"profitability", "revenue_growth", "diversified_fund", "competitive_position"})
+        return True
+
+    eligible = [row for row in scored if distinctive(row[0])] or list(scored)
+    # A genuine selloff / post-earnings overreaction is the live setup.
+    # Core quality may still exist as an alternative sleeve, but must not win
+    # the primary route just because compounding scores higher than dislocation.
+    if any(row[0].sleeve == Sleeve.OPPORTUNISTIC for row in eligible):
+        without_core = [row for row in eligible if row[0].sleeve != Sleeve.CORE_GROWTH]
+        if without_core:
+            eligible = without_core
+    eligible.sort(key=lambda row: row[1], reverse=True)
+    return eligible[0]
 
 
 def _blank_candidate(

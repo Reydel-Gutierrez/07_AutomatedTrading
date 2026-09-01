@@ -66,6 +66,7 @@ def _candidate(
     sector="INFORMATION_TECHNOLOGY",
     price=100.0,
     cid=None,
+    security_class=SecurityClass.INDIVIDUAL_EQUITY,
 ):
     return Candidate(
         candidate_id=cid or f"cand-{symbol}",
@@ -74,13 +75,13 @@ def _candidate(
         discovery_source="test",
         provisional_sleeve=sleeve,
         primary_provisional_sleeve=sleeve,
-        security_class=SecurityClass.INDIVIDUAL_EQUITY,
+        security_class=security_class,
         classification_status=ClassificationStatus.VALIDATED,
         current_price=price,
         sector=sector,
         discovery_score=score,
         status=CandidateStatus.PROMOTED_TO_RESEARCH,
-        industry="Semiconductors",
+        industry="Semiconductors" if security_class is SecurityClass.INDIVIDUAL_EQUITY else "Investment Trusts Or Mutual Funds",
     )
 
 
@@ -164,6 +165,41 @@ def _payload(symbol="QUAL", *, rich=True, news=None, extra=None):
         for k, v in extra.items():
             setattr(p, k, v)
     return p
+
+
+def _etf_payload(symbol="SPY"):
+    """Broad-market ETF packet: mandate and price, no company financials."""
+    return ResearchPayload(
+        symbol=symbol,
+        observed_at=TS,
+        sources_attempted=[
+            "get_equity_quotes",
+            "get_equity_fundamentals",
+            "get_equity_tradability",
+            "search",
+            "get_financials",
+            "get_sec_filing_index",
+            "get_equity_news",
+        ],
+        sources_observed=["get_equity_quotes", "get_equity_fundamentals", "get_equity_tradability", "search"],
+        sources_unavailable=["get_financials", "get_sec_filing_index", "get_equity_news", "get_earnings_results"],
+        tradability=_wrap(symbol, name=f"State Street {symbol} S&P 500 ETF Trust", state="active", tradeable=True),
+        fundamentals=_wrap(
+            symbol,
+            description=f"{symbol} tracks a market cap-weighted index of US large- and mid-cap stocks.",
+            sector="Miscellaneous",
+            industry="Investment Trusts Or Mutual Funds",
+            market_cap=8.14e11,
+            pe_ratio=26.24,
+            average_volume_2_weeks=3.63e7,
+            high_52_weeks=779.37,
+        ),
+        quotes=_wrap(symbol, last_trade_price=500.0, previous_close=499.0, bid_price=499.9, ask_price=500.1, volume=3.6e7),
+        financials=None,
+        news=None,
+        sec_index=None,
+        classification=_cls(symbol, sector=CanonicalSector.UNKNOWN, sc=SecurityClass.BROAD_MARKET_INDEX_ETF),
+    )
 
 
 def _cases():
@@ -532,6 +568,53 @@ def test_collect_resolves_adapter_method_aliases():
 
     assert evaluate_evidence_sufficiency(packet).sufficient is True
     assert packet.completeness != "INCOMPLETE"
+
+
+def test_broad_market_etf_without_company_financials_is_sufficient():
+    from agentic_portfolio.research.sufficiency import evaluate_evidence_sufficiency
+
+    cand = _candidate("SPY", security_class=SecurityClass.BROAD_MARKET_INDEX_ETF, sector="UNKNOWN")
+    packet = build_packet(_etf_payload("SPY"), cand, ctx(500))
+    names = {e.name for e in packet.facts}
+    assert "etf_mandate" in names
+    assert "net_assets" in names
+    assert "revenue_periods" not in names
+    assert "financials.revenue" not in packet.missing_information
+    assert "fundamentals_or_financials" not in packet.missing_information
+    assert packet.completeness != "INCOMPLETE"
+    assert packet.policy_context.get("etf_company_financials_not_required") is True
+    assert evaluate_evidence_sufficiency(packet).sufficient is True
+    assert any("mandate" in q.lower() or "fund" in q.lower() for q in packet.sleeve_research_questions)
+
+
+def test_etf_missing_price_is_still_insufficient():
+    from agentic_portfolio.research.sufficiency import evaluate_evidence_sufficiency
+
+    payload = _etf_payload("VTI")
+    payload.quotes = None
+    payload.sources_observed = ["get_equity_fundamentals", "get_equity_tradability"]
+    cand = _candidate("VTI", security_class=SecurityClass.BROAD_MARKET_INDEX_ETF, sector="UNKNOWN")
+    packet = build_packet(payload, cand, ctx(500))
+    sufficiency = evaluate_evidence_sufficiency(packet)
+    assert sufficiency.sufficient is False
+    assert "market_price" in sufficiency.missing_core
+
+
+def test_etf_can_conclude_without_need_more_data():
+    cand = _candidate("VOO", security_class=SecurityClass.BROAD_MARKET_INDEX_ETF, sector="UNKNOWN")
+    out = run_research(
+        cand,
+        _etf_payload("VOO"),
+        ctx(500),
+        ScriptedResearchReasoner({"VOO": _ai("VOO", conclusion="KEEP_WATCHING")}),
+        persist=False,
+        now=NOW,
+        journal=None,
+    )
+    assert out.report.research_conclusion == ResearchConclusion.KEEP_WATCHING
+    assert out.report.research_conclusion != ResearchConclusion.NEED_MORE_DATA
+    assert out.report.buy_actions_created == 0
+    assert out.report.proposed_actions_created == 0
 
 
 def test_conflicting_evidence_lowers_confidence():

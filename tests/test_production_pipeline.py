@@ -40,7 +40,14 @@ from agentic_portfolio.live_approval import LiveApprovalEngine, LiveApprovalStat
 from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
 from agentic_portfolio.research.packet import ResearchPayload
 from agentic_portfolio.research.reasoner import ScriptedResearchReasoner
-from agentic_portfolio.research.types import ResearchConclusion, ResearchStatus
+from agentic_portfolio.research.store import ResearchStore
+from agentic_portfolio.research.types import (
+    ResearchConclusion,
+    ResearchConfidence,
+    ResearchReport,
+    ResearchStatus,
+    ResearchSubjectKind,
+)
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode, discovery_state_dir
 from agentic_portfolio.schemas import (
     CandidateStatus,
@@ -49,6 +56,7 @@ from agentic_portfolio.schemas import (
     ResearchQueueEntry,
     ResearchQueueStatus,
     RiskState,
+    SecurityClass,
     Sleeve,
     ThesisStatus,
     to_dict,
@@ -57,7 +65,7 @@ from agentic_portfolio.watch import WatchEngine, WatchStatus, WatchStore
 from tests.conftest import ctx
 from tests.test_ai_gateway import SCREEN
 from tests.test_decision import _payload as _decision_payload
-from tests.test_research import _ai, _candidate, _payload
+from tests.test_research import _ai, _candidate, _etf_payload, _payload
 
 NOW = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
 
@@ -71,8 +79,8 @@ def _live_book(root: Path, nav: float = 500.0) -> None:
     )
 
 
-def _seed(root: Path, symbol="QUAL", *, sleeve=Sleeve.CORE_GROWTH, score=72.0, cid=None):
-    cand = _candidate(symbol, sleeve=sleeve, score=score, cid=cid)
+def _seed(root: Path, symbol="QUAL", *, sleeve=Sleeve.CORE_GROWTH, score=72.0, cid=None, **candidate_kwargs):
+    cand = _candidate(symbol, sleeve=sleeve, score=score, cid=cid, **candidate_kwargs)
     cand.status = CandidateStatus.PROMOTED_TO_RESEARCH
     cand.priority = DiscoveryPriority.HIGH
     d = discovery_state_dir(root, mode=RuntimeMode.LIVE)
@@ -97,13 +105,14 @@ def _seed(root: Path, symbol="QUAL", *, sleeve=Sleeve.CORE_GROWTH, score=72.0, c
     return cand, queue.get(entry.queue_id)
 
 
-def _services(root: Path):
+def _services(root: Path, *, now=None):
+    clock = now or NOW
     watch_store = WatchStore(root, runtime_mode=RuntimeMode.LIVE)
     approval_store = LiveApprovalStore(root, runtime_mode=RuntimeMode.LIVE)
-    notify = NotificationEngine(NotificationStore(root), now_fn=lambda: NOW)
+    notify = NotificationEngine(NotificationStore(root), now_fn=lambda: clock)
     return (
-        WatchEngine(watch_store, journal=root / "logs" / "agent.jsonl", now_fn=lambda: NOW),
-        LiveApprovalEngine(approval_store, journal=root / "logs" / "approval.jsonl", now_fn=lambda: NOW),
+        WatchEngine(watch_store, journal=root / "logs" / "agent.jsonl", now_fn=lambda: clock),
+        LiveApprovalEngine(approval_store, journal=root / "logs" / "approval.jsonl", now_fn=lambda: clock),
         notify,
     )
 
@@ -116,8 +125,10 @@ def _worker(
     gateway=None,
     nav=500.0,
     halted=False,
+    now=None,
 ):
-    watch, approvals, notify = _services(root)
+    clock = now or NOW
+    watch, approvals, notify = _services(root, now=clock)
     context = ctx(nav)
     if halted:
         context.risk_state = RiskState.HALTED
@@ -136,7 +147,7 @@ def _worker(
         watch=watch,
         approvals=approvals,
         notify=notify,
-        now_fn=lambda: NOW,
+        now_fn=lambda: clock,
     )
 
 
@@ -286,6 +297,54 @@ def test_k_watch_creates_persistent_watch_item(tmp_path):
     assert item is not None
     assert item.status in {WatchStatus.WATCH, WatchStatus.WAITING_FOR_OPEN}
     assert item.research_thesis
+
+
+def test_keep_watching_waiting_for_open_schedules_next_regular_open(tmp_path):
+    from datetime import date, time
+
+    from agentic_portfolio.calendar import EASTERN
+    from agentic_portfolio.watch.types import parse_iso
+
+    pre = datetime(2026, 9, 1, 12, 49, tzinfo=timezone.utc)  # 08:49 ET Tuesday
+    _seed(tmp_path, symbol="HD", sleeve=Sleeve.OPPORTUNISTIC)
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"HD": _ai("HD", conclusion="KEEP_WATCHING")}),
+        now=pre,
+    )
+    result = worker.run_cycle()
+    assert result.watches_created == 1
+    item = worker.watch.store.by_ticker("HD")
+    assert item is not None
+    assert item.status is WatchStatus.WAITING_FOR_OPEN
+    nxt = parse_iso(item.next_review_at)
+    assert nxt is not None
+    local = nxt.astimezone(EASTERN)
+    assert local.date() == date(2026, 9, 1)
+    assert local.time() == time(9, 30)
+    # Opportunistic WATCH interval is 48h and must not apply here.
+    assert local.date() != date(2026, 9, 3)
+
+
+def test_keep_watching_during_rth_uses_sleeve_watch_interval(tmp_path):
+    from agentic_portfolio.watch.types import parse_iso
+
+    rth = datetime(2026, 9, 1, 14, 30, tzinfo=timezone.utc)  # 10:30 ET Tuesday
+    _seed(tmp_path, symbol="HD", sleeve=Sleeve.OPPORTUNISTIC)
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"HD": _ai("HD", conclusion="KEEP_WATCHING")}),
+        now=rth,
+    )
+    result = worker.run_cycle()
+    assert result.watches_created == 1
+    item = worker.watch.store.by_ticker("HD")
+    assert item is not None
+    assert item.status is WatchStatus.WATCH
+    nxt = parse_iso(item.next_review_at)
+    assert nxt is not None
+    hours = (nxt - rth).total_seconds() / 3600.0
+    assert 40.0 <= hours <= 56.0
 
 
 def test_l_buy_creates_proposed_action_not_direct_order(tmp_path):
@@ -1340,4 +1399,116 @@ def test_unfavorable_research_produces_no_buy(tmp_path):
     assert result.rejections == 1
     assert worker.approvals.store.pending() == []
     assert result.proposals_created == 0
+
+
+def _pre_fix_need_more_data_report(symbol: str, candidate_id: str) -> ResearchReport:
+    return ResearchReport(
+        research_id=f"pre-fix-{symbol.lower()}",
+        candidate_id=candidate_id,
+        symbol=symbol,
+        started_at=(NOW - timedelta(days=1)).isoformat(),
+        completed_at=(NOW - timedelta(days=1)).isoformat(),
+        provisional_sleeve=Sleeve.CORE_GROWTH,
+        security_class=SecurityClass.BROAD_MARKET_INDEX_ETF,
+        research_status=ResearchStatus.RESEARCH_INCONCLUSIVE,
+        subject_kind=ResearchSubjectKind.NEW_CANDIDATE,
+        executive_summary="Paid research skipped: core evidence is missing (fundamentals_or_financials).",
+        missing_information=["financials.revenue", "source_unavailable:get_financials"],
+        sources_observed=["get_equity_quotes"],
+        sources_unavailable=["get_financials", "get_equity_news", "get_sec_filing_index"],
+        confidence=ResearchConfidence.LOW,
+        research_conclusion=ResearchConclusion.NEED_MORE_DATA,
+        recommended_next_step="NEED_MORE_DATA",
+        research_source="deterministic",
+    )
+
+
+def test_pre_fix_spy_need_more_data_is_requeued_without_forcing_buy(tmp_path):
+    cand, entry = _seed(tmp_path, symbol="SPY", security_class=SecurityClass.BROAD_MARKET_INDEX_ETF)
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    queue.set_status(entry.queue_id, ResearchQueueStatus.NEED_MORE_DATA)
+    ResearchStore(tmp_path).save(_pre_fix_need_more_data_report("SPY", cand.candidate_id))
+
+    watch, approvals, notify = _services(tmp_path)
+    worker = ResearchQueueWorker(
+        tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        research_reasoner=ScriptedResearchReasoner({"SPY": _ai("SPY", conclusion="KEEP_WATCHING")}),
+        payload_fn=lambda candidate: _etf_payload(candidate.symbol),
+        context_fn=lambda: ctx(500),
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+        now_fn=lambda: NOW,
+    )
+    result = worker.run_cycle()
+    reports = worker.research_store.by_symbol("SPY")
+    assert len(reports) >= 2
+    latest = sorted(reports, key=lambda r: r.started_at, reverse=True)[0]
+    assert latest.research_id != "pre-fix-spy"
+    assert latest.research_conclusion is ResearchConclusion.KEEP_WATCHING
+    assert latest.research_conclusion is not ResearchConclusion.NEED_MORE_DATA
+    assert latest.buy_actions_created == 0
+    assert result.proposals_created == 0
+    assert worker.approvals.store.pending() == []
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    assert queue.all()[0].status is ResearchQueueStatus.COMPLETED
+    assert any(row.get("status") == "COLLECTOR_REPAIR_REQUEUE" for row in result.details)
+
+
+def test_pre_fix_etf_repair_does_not_requeue_the_same_report_twice(tmp_path):
+    cand, entry = _seed(tmp_path, symbol="VTI", security_class=SecurityClass.BROAD_MARKET_INDEX_ETF)
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    queue.set_status(entry.queue_id, ResearchQueueStatus.NEED_MORE_DATA)
+    ResearchStore(tmp_path).save(_pre_fix_need_more_data_report("VTI", cand.candidate_id))
+    watch, approvals, notify = _services(tmp_path)
+    worker = ResearchQueueWorker(
+        tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        research_reasoner=ScriptedResearchReasoner({"VTI": _ai("VTI", conclusion="KEEP_WATCHING")}),
+        payload_fn=lambda candidate: _etf_payload(candidate.symbol),
+        context_fn=lambda: ctx(500),
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+        now_fn=lambda: NOW,
+    )
+    first = worker.run_cycle()
+    second = worker.run_cycle()
+    assert first.reports_created == 1
+    assert second.reports_created == 0
+    assert not any(row.get("status") == "COLLECTOR_REPAIR_REQUEUE" for row in second.details)
+    assert worker.research_store.by_symbol("VTI")[-1].research_conclusion is ResearchConclusion.KEEP_WATCHING
+
+
+def test_requeued_etf_buy_still_goes_through_risk_gate(tmp_path):
+    cand, entry = _seed(tmp_path, symbol="VOO", security_class=SecurityClass.BROAD_MARKET_INDEX_ETF)
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    queue.set_status(entry.queue_id, ResearchQueueStatus.NEED_MORE_DATA)
+    ResearchStore(tmp_path).save(_pre_fix_need_more_data_report("VOO", cand.candidate_id))
+    research, decision = _buy_reasoners("VOO")
+    watch, approvals, notify = _services(tmp_path)
+    worker = ResearchQueueWorker(
+        tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        research_reasoner=research,
+        decision_reasoner=decision,
+        payload_fn=lambda candidate: _etf_payload(candidate.symbol),
+        context_fn=lambda: ctx(500),
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+        now_fn=lambda: NOW,
+    )
+    result = worker.run_cycle()
+    pending = worker.approvals.store.pending()
+    if result.proposals_created:
+        assert pending
+        assert pending[0].risk_gate_result
+        assert pending[0].ticker == "VOO"
+        assert pending[0].status.value == "PENDING"
+        assert pending[0].placed_order is False
+    assert LIVE_ORDER_PLACEMENT is False
+    latest = sorted(worker.research_store.by_symbol("VOO"), key=lambda r: r.started_at, reverse=True)[0]
+    assert latest.research_conclusion is not ResearchConclusion.NEED_MORE_DATA
 

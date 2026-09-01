@@ -170,10 +170,15 @@ def _core_quality(snap: SecuritySnapshot, regime: MarketRegime, cfg: dict) -> Ch
 def _opportunistic(snap: SecuritySnapshot, regime: MarketRegime, cfg: dict) -> ChannelNomination | None:
     ts = snap.observed_at
     src = snap.sources[0] if snap.sources else "snapshot"
-    selloff = (snap.return_21d is not None and snap.return_21d <= -0.12) or (
-        snap.drawdown_from_52w_high is not None and snap.drawdown_from_52w_high >= 0.20
+    # A print below the 52-week high is not a dislocation. Require a recent
+    # price event: a sharp 21-day selloff or a post-earnings overreaction.
+    sharp_selloff = snap.return_21d is not None and snap.return_21d <= -0.12
+    post_earnings = (
+        snap.earnings_surprise_last is not None
+        and snap.earnings_surprise_last < -0.05
+        and (snap.return_5d or 0) < -0.05
     )
-    if not selloff:
+    if not (sharp_selloff or post_earnings):
         return None
 
     signals: list[DiscoverySignal] = []

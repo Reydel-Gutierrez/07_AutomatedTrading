@@ -355,6 +355,34 @@ Invariants unchanged: `auto_execution=false`, `live_trade_actions_allowed=false`
 
 ---
 
+## 2026-09-01 — Collector-repair requeue for broad-market ETFs
+
+**Type:** `config_change` / `research`
+
+Pre-fix `NEED_MORE_DATA` reports for SPY/VTI/VOO are invalidated (history kept) and re-queued so the repaired collector can run a fresh research cycle. Broad-market / diversified ETFs now have an ETF completeness path: price + mandate/description (AUM when present) is core evidence. Company 10-Q/revenue/earnings are not required for funds and must not force `NEED_MORE_DATA`.
+
+This does **not** force BUY, skip Portfolio Decision, or bypass Risk Gate. A repaired packet may conclude ADVANCE_TO_THESIS, KEEP_WATCHING, REJECT, or later a Decision of BUY/WATCH/NO_ACTION/cash. Permission still belongs to Risk Gate. Placement remains off.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Execution flags unchanged: `auto_execution=false`, `live_trade_actions_allowed=false`, `LIVE_ORDER_PLACEMENT=false`.
+
+---
+
+## 2026-09-01 — Sleeve routing audit + WAITING_FOR_OPEN scheduling
+
+**Type:** `architecture` / `discovery` / `watch`
+
+Tactical was empty because live snapshots never fetched financials/historicals, so SMA/momentum/volume gates never fired. Opportunistic dominated because a 52-week drawdown alone nominated the sleeve, then winner-take-all by score swallowed Core/Tactical names sitting off highs (HD is a Core liquid equity that could be routed Opp and then given the 48h WATCH interval).
+
+Fixes: opportunistic now requires a 21d selloff or post-earnings overreaction; sleeve pick prefers distinctive evidence (genuine dislocation over Core compounding); live snapshots fetch financials + bars and derive SMA/RSI. `WAITING_FOR_OPEN` schedules the next regular open (today 9:30 if still premarket), not the sleeve WATCH interval. `MARKET_OPEN_AFTER_OFFHOURS` does not spend Terra. WATCHING still uses sleeve intervals; price/news/earnings still trigger earlier AI.
+
+ETF collector-repair requeue is unchanged. Scoring thresholds in `config/discovery.json` were not loosened. No forced BUY. Risk Gate / human approval unchanged. `LIVE_ORDER_PLACEMENT=false`.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+---
+
 ## Template
 
 ```

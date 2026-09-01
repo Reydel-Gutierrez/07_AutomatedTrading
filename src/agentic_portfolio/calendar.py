@@ -306,6 +306,30 @@ class NyseEquityCalendar:
                 return None
         return None
 
+    def next_regular_open(self, dt: datetime) -> datetime | None:
+        """UTC instant of the next regular-hours open, including today's if still pre-open.
+
+        `next_session` always skips a trading day once that calendar date exists, even
+        before the bell. WAITING_FOR_OPEN must not inherit that skip.
+        """
+        try:
+            et = self._as_et(dt)
+        except (ValueError, OverflowError):
+            return None
+        today = self.session_on(et.date())
+        if today is not None:
+            open_local = datetime.combine(today.session_date, today.regular_open, tzinfo=self.tz)
+            close_local = datetime.combine(today.session_date, today.close_time, tzinfo=self.tz)
+            if et < open_local:
+                return open_local.astimezone(timezone.utc)
+            if et < close_local:
+                return et.astimezone(timezone.utc)
+        nxt = self.next_session(dt)
+        if nxt is None:
+            return None
+        open_local = datetime.combine(nxt.session_date, nxt.regular_open, tzinfo=self.tz)
+        return open_local.astimezone(timezone.utc)
+
 
 def is_new_session(
     *,
@@ -353,6 +377,17 @@ def is_regular_hours(dt: datetime, calendar: MarketCalendar | None = None) -> bo
     if session is None:
         return False
     return REGULAR_OPEN <= et.time() < session.close_time
+
+
+def next_regular_open_at(dt: datetime, calendar: MarketCalendar | None = None) -> datetime:
+    """When WAITING_FOR_OPEN should next reassess: the next regular open, not a multi-day WATCH interval."""
+    cal = calendar or NyseEquityCalendar()
+    stamp = cal.next_regular_open(dt) if hasattr(cal, "next_regular_open") else None
+    if stamp is not None:
+        return stamp
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def utc_now() -> datetime:

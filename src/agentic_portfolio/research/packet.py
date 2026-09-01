@@ -22,6 +22,7 @@ from agentic_portfolio.adapters.robinhood_read import (
 from agentic_portfolio.classification import classify
 from agentic_portfolio.policy import load_policy, load_research_config
 from agentic_portfolio.research.filings import facts_from_sec, structured_filing_meta
+from agentic_portfolio.research.sufficiency import subject_is_etf
 from agentic_portfolio.discovery.snapshot import compute_spread_metrics
 from agentic_portfolio.research.metrics import (
     as_float,
@@ -206,6 +207,16 @@ def build_packet(
         cls = classify(payload.symbol, ev, policy)
         cls.liquidity = liq
 
+    is_etf = subject_is_etf(
+        classification=cls,
+        candidate=candidate,
+        instrument_kind=getattr(snap, "instrument_kind", None),
+        name=snap.name,
+        description=snap.description,
+        industry=snap.industry,
+        symbol=payload.symbol,
+    )
+
     def fact(name: str, value: Any, source: str, data_type: str = "number", raw_ref: str | None = None, notes: list[str] | None = None) -> None:
         if value is None or value == "" or value == []:
             return
@@ -260,6 +271,12 @@ def build_packet(
     fact("industry_label_raw", snap.industry, "get_equity_fundamentals", "string")
     fact("description", snap.description, "get_equity_fundamentals", "text")
     fact("legal_name", snap.name, "get_equity_tradability", "string")
+    if is_etf:
+        fact("instrument_kind", "etf", "derived:classification", "string")
+        fact("etf_mandate", snap.description or snap.name, "get_equity_fundamentals", "text")
+        fact("net_assets", snap.market_cap, "get_equity_fundamentals")
+        if snap.pe_ratio is not None:
+            fact("fund_pe_ratio", snap.pe_ratio, "get_equity_fundamentals")
     fact("high_52_week", snap.high_52_week, "get_equity_fundamentals")
     fact("low_52_week", snap.low_52_week, "get_equity_fundamentals")
     fact("average_volume", snap.average_volume, "get_equity_fundamentals")
@@ -345,8 +362,6 @@ def build_packet(
 
     missing: list[str] = []
     optional_gaps: list[str] = []
-    cls_value = cls.security_class.value if cls and cls.security_class else None
-    is_etf = bool(cls_value and "ETF" in cls_value)
 
     if snap.current_price is None:
         missing.append("market_price")
@@ -370,12 +385,23 @@ def build_packet(
         optional_gaps.append("valuation.pe_ratio")
     if not snap.news_headlines:
         optional_gaps.append("news")
-    if payload.sec_index is None:
+    if payload.sec_index is None and not is_etf:
         optional_gaps.append("sec_filings")
+    company_optional = {
+        "get_financials",
+        "get_sec_filing_index",
+        "get_sec_filing",
+        "get_sec_filing_facts",
+        "get_sec_filing_facts_catalog",
+        "get_earnings_results",
+        "get_earnings_calendar",
+    }
     for src in payload.sources_unavailable:
         label = f"source_unavailable:{src}"
         if src in {"get_equity_quotes", "get_equity_fundamentals", "get_equity_tradability"}:
             missing.append(label)
+        elif is_etf and src in company_optional:
+            continue
         else:
             optional_gaps.append(label)
 
@@ -391,6 +417,10 @@ def build_packet(
 
     sleeve = candidate.provisional_sleeve
     questions = list(cfg.get("sleeve_research_questions", {}).get(sleeve.value, []))
+    if is_etf:
+        etf_questions = list(cfg.get("etf_research_questions") or [])
+        if etf_questions:
+            questions = etf_questions
     tech_weight = (cfg.get("technical_weight") or {}).get(sleeve.value)
     investment_q = {
         Sleeve.CORE_GROWTH: "Is this opportunity attractive enough as a long-term compounding holding versus cash and broad-market exposure?",
@@ -398,6 +428,11 @@ def build_packet(
         Sleeve.TACTICAL: "Is there a specific, time-bounded setup with defined confirmation and invalidation?",
         Sleeve.SPECULATIVE: "Is the payoff actually asymmetric after survival, dilution, and catalyst-failure risk?",
     }.get(sleeve, "Is the opportunity attractive enough to justify an investment thesis?")
+    if is_etf:
+        investment_q = (
+            "Is this fund an attractive vehicle for its stated market exposure versus remaining in cash, "
+            "given mandate, liquidity, valuation of the underlying market, and tracking quality?"
+        )
 
     sources_obs = list(dict.fromkeys(payload.sources_observed))
     sources_unavail = list(dict.fromkeys(payload.sources_unavailable))
@@ -430,6 +465,7 @@ def build_packet(
             "no_universal_pe_or_growth_rules": True,
             "technical_weight": tech_weight,
             "subject_kind": subject_kind.value,
+            "etf_company_financials_not_required": is_etf,
         },
         missing_information=missing_information,
         comparison_group_id=candidate.comparison_group_id,

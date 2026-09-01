@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-08-30",
+    "updated_at": "2026-09-01",
   "description": "Deep Research configuration. Python collects facts and derived metrics. AI interprets. Research does not buy, size, or write ACTIVE theses.",
   "does_not_create_active_theses": true,
   "does_not_create_buy_actions": true,
@@ -83,7 +83,16 @@
       "Is the payoff distribution actually asymmetric?"
     ]
   },
-  "technical_weight": {
+    "etf_research_questions": [
+      "What index or mandate does this fund track?",
+      "Is the mandate truly broad-market or diversified as classified?",
+      "Are AUM/net assets and liquidity adequate for the intended size?",
+      "Is the current valuation of the underlying market reasonable versus cash?",
+      "What regime, drawdown, or tracking-error risk does this exposure carry?",
+      "Is this fund a better residual than remaining in cash at this NAV?",
+      "What would make this the wrong vehicle (structure, concentration, tracking)?"
+    ],
+    "technical_weight": {
     "CORE_GROWTH": "secondary_context",
     "OPPORTUNISTIC": "supporting_context",
     "TACTICAL": "primary_setup_context",

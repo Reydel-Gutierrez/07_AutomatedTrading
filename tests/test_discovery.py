@@ -190,9 +190,13 @@ def test_core_candidate_from_strong_quality_signals():
     assert live, out.rejected
     c = live[0]
     assert c.provisional_sleeve == Sleeve.CORE_GROWTH
+    assert c.security_class == SecurityClass.INDIVIDUAL_EQUITY
     assert c.discovery_score >= 55
+    assert "quality" in (c.score_breakdown or {})
+    assert "growth" in (c.score_breakdown or {})
     assert c.status in {CandidateStatus.SHORTLISTED, CandidateStatus.DISCOVERED, CandidateStatus.PROMOTED_TO_RESEARCH}
     assert any(s.signal_type == SignalType.FUNDAMENTAL and s.name == "revenue_growth" for s in c.signals)
+    assert "CORE_QUALITY_DISCOVERY" in (c.channels or [])
 
 
 def test_weak_core_rejected():
@@ -217,6 +221,8 @@ def test_post_selloff_quality_becomes_opportunistic():
     assert "TEMPORARY_PRICE_DISLOCATION_CANDIDATE" in c.event_flags or any(
         "TEMPORARY_PRICE_DISLOCATION" in q for q in c.research_questions
     )
+    assert any(s.name == "selloff" for s in c.signals)
+    assert "dislocation" in (c.score_breakdown or {})
     assert c.status != CandidateStatus.REJECTED
 
 
@@ -235,6 +241,8 @@ def test_valid_tactical_momentum_volume_setup():
     assert c.provisional_sleeve == Sleeve.TACTICAL
     assert any(s.signal_type == SignalType.VOLUME for s in c.signals)
     assert any(s.signal_type == SignalType.MOMENTUM or s.name in {"trend", "sma_alignment"} for s in c.signals)
+    assert any(k in (c.score_breakdown or {}) for k in ("trend", "momentum", "volume", "technical_structure"))
+    assert "TACTICAL_SETUP_DISCOVERY" in (c.channels or [])
 
 
 def test_tactical_expires_faster_than_core(tmp_path):
@@ -265,6 +273,9 @@ def test_speculative_with_catalyst_may_qualify():
     c = found[0]
     assert c.provisional_sleeve == Sleeve.SPECULATIVE
     assert "sleeve_cap_3pct_nav_per_name_5pct_total" in c.known_risks
+    assert any(s.name in {"asymmetric_upside", "optionality", "binary_or_pipeline"} for s in c.signals)
+    assert any(k in (c.score_breakdown or {}) for k in ("asymmetric_upside", "catalyst", "optionality", "survival"))
+    assert "SPECULATIVE_ASYMMETRY_DISCOVERY" in (c.channels or [])
 
 
 def test_low_share_price_alone_gives_no_positive_score():
@@ -596,3 +607,101 @@ def test_no_max_3_same_sector_sleeve_rejection():
         assert queued[c.symbol].deferred_due_to_research_queue_overlap is True
         assert queued[c.symbol].comparison_group_id == c.comparison_group_id
     assert not any(c.rejection_reason == "excessive_duplication_sector_sleeve" for c in out.rejected)
+
+
+def test_core_individual_equity_is_not_opportunistic_just_for_52w_drawdown():
+    snap = _quality_core("HDX")
+    snap.drawdown_from_52w_high = 0.22
+    snap.high_52_week = 110.0
+    snap.current_price = 85.8
+    snap.return_21d = 0.01
+    out = _run([snap], ctx(10_000))
+    c = next(x for x in out.candidates if x.symbol == "HDX")
+    assert c.provisional_sleeve == Sleeve.CORE_GROWTH
+    assert c.security_class == SecurityClass.INDIVIDUAL_EQUITY
+    assert "OPPORTUNISTIC_DISLOCATION_DISCOVERY" not in (c.channels or [])
+
+
+def test_52w_drawdown_alone_does_not_create_opportunistic_candidate():
+    snap = _snap(
+        symbol="OFFH",
+        current_price=80.0,
+        high_52_week=110.0,
+        drawdown_from_52w_high=0.27,
+        market_cap=5.0e10,
+        sector="CONSUMER_DISCRETIONARY",
+        classification=_cls("OFFH", CanonicalSector.CONSUMER_DISCRETIONARY),
+    )
+    out = _run([snap], ctx(10_000))
+    hit = next(x for x in out.candidates + out.rejected if x.symbol == "OFFH")
+    assert hit.provisional_sleeve != Sleeve.OPPORTUNISTIC or hit.status == CandidateStatus.REJECTED
+    assert "OPPORTUNISTIC_DISLOCATION_DISCOVERY" not in (hit.channels or [])
+
+
+def test_tactical_setup_is_not_swallowed_by_52w_drawdown():
+    snap = _tactical("TSET")
+    snap.drawdown_from_52w_high = 0.25
+    snap.high_52_week = 133.0
+    out = _run([snap], ctx(10_000))
+    c = next(x for x in out.candidates if x.symbol == "TSET")
+    assert c.provisional_sleeve == Sleeve.TACTICAL
+    assert "TACTICAL_SETUP_DISCOVERY" in (c.channels or [])
+
+
+def test_each_sleeve_qualifies_independently_on_its_own_inputs():
+    core = _run([_quality_core("CORE1")], ctx(10_000)).candidates[0]
+    opp = _run([_opp_quality_selloff("OPP1")], ctx(10_000)).candidates[0]
+    tact = _run([_tactical("TACT1")], ctx(10_000)).candidates[0]
+    spec = next(c for c in _run([_spec_catalyst("SPEC1")], ctx(10_000)).candidates if c.symbol == "SPEC1")
+    assert core.provisional_sleeve == Sleeve.CORE_GROWTH
+    assert opp.provisional_sleeve == Sleeve.OPPORTUNISTIC
+    assert tact.provisional_sleeve == Sleeve.TACTICAL
+    assert spec.provisional_sleeve == Sleeve.SPECULATIVE
+    assert core.status != CandidateStatus.REJECTED
+    assert opp.status != CandidateStatus.REJECTED
+    assert tact.status != CandidateStatus.REJECTED
+    assert spec.status != CandidateStatus.REJECTED
+
+
+def test_live_snapshots_fetch_financials_and_historicals():
+    from agentic_portfolio.discovery.universe import UniverseMember, UniverseResult, snapshots_for_universe
+
+    class Recording:
+        def __init__(self):
+            self.called = []
+
+        def quotes(self, symbols):
+            self.called.append("quotes")
+            return {"data": {"results": [{"symbol": "HDX", "last_trade_price": "80"}]}}
+
+        def tradability(self, symbols):
+            self.called.append("tradability")
+            return {"data": {"results": [{"symbol": "HDX", "tradeable": True, "type": "equity"}]}}
+
+        def fundamentals(self, symbols):
+            self.called.append("fundamentals")
+            return {"data": {"results": [{"symbol": "HDX", "market_cap": 3e11, "high_52_weeks": 110, "average_volume": 5e6}]}}
+
+        def financials(self, symbols, *, period="quarterly", limit=8):
+            self.called.append("financials")
+            return {"data": {"results": [{"symbol": "HDX", "revenue": 4e10, "net_income": 4e9}]}}
+
+        def historicals(self, symbols, *, start_time, interval="day"):
+            self.called.append("historicals")
+            bars = [{"close": 70 + i * 0.1, "volume": 1e6} for i in range(220)]
+            return {"data": {"results": [{"symbol": "HDX", "historicals": bars}]}}
+
+    fetcher = Recording()
+    universe = UniverseResult(
+        members=[UniverseMember(symbol="HDX", sources=["core_liquid"], reasons=["core_liquid_universe"])],
+        sources=[],
+        unique_symbols=["HDX"],
+        skipped=[],
+        errors=[],
+        unique_universe_size=1,
+    )
+    snaps = snapshots_for_universe(fetcher, universe, now=NOW)
+    assert "financials" in fetcher.called
+    assert "historicals" in fetcher.called
+    assert snaps and snaps[0].symbol == "HDX"
+    assert snaps[0].sma_50 is not None or snaps[0].return_21d is not None

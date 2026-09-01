@@ -125,3 +125,35 @@ def test_regular_hours_excludes_weekend_and_after_hours():
     assert is_regular_hours(friday_close, cal) is False
     assert is_regular_hours(sunday, cal) is False
     assert is_regular_hours(premarket, cal) is False
+
+
+def test_next_regular_open_is_today_when_still_premarket():
+    from datetime import date, time
+
+    from agentic_portfolio.calendar import next_regular_open_at
+
+    cal = NyseEquityCalendar()
+    pre = datetime(2026, 9, 1, 8, 49, tzinfo=EASTERN)
+    nxt = cal.next_regular_open(pre)
+    assert nxt is not None
+    local = nxt.astimezone(EASTERN)
+    assert local.date() == date(2026, 9, 1)
+    assert local.time() == time(9, 30)
+    # next_session still means the following trading day, even before today's open.
+    skipped = cal.next_session(pre)
+    assert skipped is not None
+    assert skipped.session_id == "2026-09-02"
+    helper = next_regular_open_at(pre)
+    assert helper.astimezone(EASTERN).date() == date(2026, 9, 1)
+
+
+def test_next_regular_open_after_close_skips_weekend_and_holiday():
+    from datetime import date, time
+
+    cal = NyseEquityCalendar()
+    friday_after = datetime(2026, 9, 4, 17, 0, tzinfo=EASTERN)
+    nxt = cal.next_regular_open(friday_after)
+    local = nxt.astimezone(EASTERN)
+    # Monday 2026-09-07 is Labor Day.
+    assert local.date() == date(2026, 9, 8)
+    assert local.time() == time(9, 30)

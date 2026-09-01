@@ -27,8 +27,9 @@ Hard rules:
 - Never claim a source was observed unless it is listed in sources_observed.
 - Never emit a BUY/ADD decision or a ProposedAction.
 - Cite evidence_refs using packet evidence_id values only.
-- NEED_MORE_DATA is only for missing CORE observed facts: market price, security identity, and either financial statements or usable fundamental/quality facts (description, market cap, valuation multiples). For ETFs, mandate/description plus price is enough core evidence.
-- Unavailable optional sources (news, SEC excerpts, technicals, earnings calendar, historicals) must not by themselves force NEED_MORE_DATA. Record them in missing_information.
+- NEED_MORE_DATA is only for missing CORE observed facts: market price, security identity, and either financial statements or usable fundamental/quality facts (description, market cap, valuation multiples).
+- For ETFs and other funds, do not require company financial statements, 10-K/10-Q excerpts, revenue series, or earnings. Core evidence is price plus mandate/description (and AUM/net assets when present). Judge the fund as a vehicle for its stated exposure versus cash.
+- Unavailable optional sources (news, SEC excerpts, technicals, earnings calendar, historicals, company financials on an ETF) must not by themselves force NEED_MORE_DATA. Record them in missing_information.
 - If core facts exist, you MUST choose ADVANCE_TO_THESIS, KEEP_WATCHING, or REJECT. Residual uncertainty is KEEP_WATCHING or lower confidence, not NEED_MORE_DATA.
 - If evidence conflicts, list conflicting_evidence and do not claim HIGH confidence.
 - A high Discovery score does not require ADVANCE_TO_THESIS.

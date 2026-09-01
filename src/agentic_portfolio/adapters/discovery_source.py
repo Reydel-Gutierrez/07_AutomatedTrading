@@ -109,6 +109,7 @@ def assemble_snapshot(payload: SymbolPayloads, *, source_id: str = SOURCE_ID_ROB
     volume = _f((fund or {}).get("volume") or (quote or {}).get("volume"))
     bars = _bars(payload.historicals, payload.symbol)
     rets = _returns_from_bars(bars)
+    derived_tech = _technicals_from_bars(bars)
     drawdown = None
     if high52 and price:
         drawdown = max(0.0, (high52 - price) / high52)
@@ -191,15 +192,15 @@ def assemble_snapshot(payload: SymbolPayloads, *, source_id: str = SOURCE_ID_ROB
         net_income_periods=fin["net_income"],
         net_margin_periods=fin["net_margin"],
         gross_profit_periods=fin["gross_profit"],
-        rsi=_latest_indicator(payload.rsi),
-        sma_50=_latest_indicator(payload.sma_50),
-        sma_200=_latest_indicator(payload.sma_200),
+        rsi=_latest_indicator(payload.rsi) or derived_tech.get("rsi"),
+        sma_50=_latest_indicator(payload.sma_50) or derived_tech.get("sma_50"),
+        sma_200=_latest_indicator(payload.sma_200) or derived_tech.get("sma_200"),
         return_5d=rets.get(5),
         return_21d=rets.get(21),
         return_63d=rets.get(63),
         return_252d=rets.get(252),
         drawdown_from_52w_high=drawdown,
-        volume_vs_avg=(volume / avg_vol) if volume and avg_vol else None,
+        volume_vs_avg=(volume / avg_vol) if volume and avg_vol else derived_tech.get("volume_vs_avg"),
         earnings_surprise_last=surprise,
         earnings_upcoming_days=upcoming,
         news_headlines=headlines,
@@ -417,22 +418,23 @@ def _bars(payload: Mapping[str, Any] | None, symbol: str) -> list[dict[str, Any]
         return []
     out = []
     for item in results:
-        if isinstance(item, dict):
-            if "symbol" in item and str(item.get("symbol", "")).upper() != symbol.upper():
-                inner = item.get("historicals") or item.get("data_points") or []
-                if isinstance(inner, list):
-                    out.extend(x for x in inner if isinstance(x, dict))
-                    continue
-            out.append(item)
+        if not isinstance(item, dict):
+            continue
+        item_sym = str(item.get("symbol") or "").upper()
+        inner = item.get("historicals") or item.get("data_points")
+        if isinstance(inner, list):
+            if item_sym and item_sym != symbol.upper():
+                continue
+            out.extend(x for x in inner if isinstance(x, dict))
+            continue
+        if item_sym and item_sym != symbol.upper():
+            continue
+        out.append(item)
     return out
 
 
 def _returns_from_bars(bars: list[dict[str, Any]]) -> dict[int, float | None]:
-    closes: list[float] = []
-    for b in bars:
-        c = _f(b.get("close") or b.get("close_price") or b.get("close_price_last"))
-        if c:
-            closes.append(c)
+    closes = _closes_from_bars(bars)
     out: dict[int, float | None] = {5: None, 21: None, 63: None, 252: None}
     if not closes:
         return out
@@ -441,6 +443,55 @@ def _returns_from_bars(bars: list[dict[str, Any]]) -> dict[int, float | None]:
         if len(closes) > n and closes[-1 - n]:
             out[n] = (last / closes[-1 - n]) - 1.0
     return out
+
+
+def _closes_from_bars(bars: list[dict[str, Any]]) -> list[float]:
+    closes: list[float] = []
+    for b in bars:
+        c = _f(b.get("close") or b.get("close_price") or b.get("close_price_last"))
+        if c:
+            closes.append(c)
+    return closes
+
+
+def _technicals_from_bars(bars: list[dict[str, Any]]) -> dict[str, float | None]:
+    """Derive SMA/RSI/volume confirmation when indicator payloads were not fetched."""
+    closes = _closes_from_bars(bars)
+    volumes: list[float] = []
+    for b in bars:
+        v = _f(b.get("volume") or b.get("volume_usd"))
+        if v:
+            volumes.append(v)
+    sma_50 = (sum(closes[-50:]) / 50.0) if len(closes) >= 50 else None
+    sma_200 = (sum(closes[-200:]) / 200.0) if len(closes) >= 200 else None
+    rsi = _rsi(closes, 14)
+    volume_vs_avg = None
+    if len(volumes) >= 21:
+        recent = volumes[-1]
+        avg = sum(volumes[-21:-1]) / 20.0
+        if avg:
+            volume_vs_avg = recent / avg
+    return {"sma_50": sma_50, "sma_200": sma_200, "rsi": rsi, "volume_vs_avg": volume_vs_avg}
+
+
+def _rsi(closes: list[float], period: int = 14) -> float | None:
+    if len(closes) < period + 1:
+        return None
+    gains = 0.0
+    losses = 0.0
+    window = closes[-(period + 1) :]
+    for i in range(1, len(window)):
+        change = window[i] - window[i - 1]
+        if change >= 0:
+            gains += change
+        else:
+            losses += abs(change)
+    avg_gain = gains / period
+    avg_loss = losses / period
+    if avg_loss == 0:
+        return 100.0
+    rs = avg_gain / avg_loss
+    return 100.0 - (100.0 / (1.0 + rs))
 
 
 def _latest_indicator(payload: Mapping[str, Any] | None) -> float | None:

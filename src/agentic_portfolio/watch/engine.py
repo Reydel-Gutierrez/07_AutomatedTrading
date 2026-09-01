@@ -12,8 +12,9 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from agentic_portfolio.agent.safety import assert_execution_disabled
+from agentic_portfolio.calendar import next_regular_open_at
 from agentic_portfolio.journal import append_jsonl
-from agentic_portfolio.policy import load_agent_config
+from agentic_portfolio.policy import load_agent_config, load_research_config
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode
 from agentic_portfolio.watch.store import WatchStore
 from agentic_portfolio.watch.types import (
@@ -24,6 +25,18 @@ from agentic_portfolio.watch.types import (
     WatchStatus,
     parse_iso,
 )
+
+# Session-open is a scheduling event. It must not spend Terra by itself.
+AI_REASSESS_TRIGGERS = {
+    ReassessTrigger.PRICE_MOVE,
+    ReassessTrigger.NEWS_CATALYST,
+    ReassessTrigger.EARNINGS_UPDATE,
+    ReassessTrigger.FUNDAMENTAL_UPDATE,
+    ReassessTrigger.THESIS_EXPIRED,
+    ReassessTrigger.ENTRY_APPROACHED,
+    ReassessTrigger.RISK_STATE_CHANGE,
+    ReassessTrigger.MANUAL,
+}
 
 
 def context_hash(payload: Mapping[str, Any]) -> str:
@@ -75,7 +88,9 @@ class WatchEngine:
         session_id: str | None = None,
         next_session_id: str | None = None,
         off_hours: bool = False,
+        prepare_conditional_plan: bool | None = None,
         context: Mapping[str, Any] | None = None,
+        sleeve: str | None = None,
     ) -> WatchItem:
         assert_execution_disabled()
         stamp = self.now()
@@ -106,22 +121,29 @@ class WatchEngine:
             existing.ai_context_ids = list(dict.fromkeys(list(existing.ai_context_ids) + list(ai_ids)))
         if last_price is not None:
             existing.last_price = last_price
+        if sleeve:
+            existing.sleeve = sleeve
         if existing.status in {WatchStatus.REJECTED, WatchStatus.EXPIRED, WatchStatus.INVALIDATED}:
             existing.status = status
         elif existing.status == WatchStatus.DISCOVERED:
             existing.status = status
         ttl_hours = int(self.watch_cfg.get("thesis_ttl_hours") or 168)
         existing.expiration = existing.expiration or (stamp + timedelta(hours=ttl_hours)).isoformat()
+        make_plan = prepare_conditional_plan if prepare_conditional_plan is not None else off_hours
         if off_hours:
             existing.required_market_confirmation = True
-            existing.status = WatchStatus.WAITING_FOR_OPEN if existing.status in ACTIVE_WATCH else existing.status
-            existing.conditional_plan = existing.conditional_plan or self.default_plan(
-                last_price=last_price,
-                prepared_session_id=session_id,
-                target_session_id=next_session_id,
-            )
+            existing.status = WatchStatus.WAITING_FOR_OPEN if existing.status in ACTIVE_WATCH or status in ACTIVE_WATCH else existing.status
+            if make_plan:
+                existing.conditional_plan = existing.conditional_plan or self.default_plan(
+                    last_price=last_price,
+                    prepared_session_id=session_id,
+                    target_session_id=next_session_id,
+                )
+            self.schedule_review(existing, waiting_for_open=True, sleeve=existing.sleeve)
         else:
             existing.status = status
+            if status is WatchStatus.WATCH:
+                self.schedule_review(existing, waiting_for_open=False, sleeve=existing.sleeve)
         hashed = context_hash(context or {"ticker": existing.ticker, "thesis": existing.research_thesis, "price": existing.last_price})
         existing.last_context_hash = hashed
         existing.last_updated = stamp.isoformat()
@@ -146,6 +168,39 @@ class WatchEngine:
             target_session_id=target_session_id,
         )
 
+    def schedule_review(
+        self,
+        item: WatchItem,
+        *,
+        waiting_for_open: bool,
+        sleeve: str | None = None,
+    ) -> WatchItem:
+        """WAITING_FOR_OPEN → next regular open. WATCH → sleeve interval. Clock ticks do not spend Terra."""
+        if waiting_for_open or item.status is WatchStatus.WAITING_FOR_OPEN:
+            nxt = next_regular_open_at(self.now())
+            item.next_review_at = nxt.isoformat()
+        else:
+            hours = _watch_retry_hours(sleeve or item.sleeve)
+            item.next_review_at = (self.now() + timedelta(hours=hours)).isoformat()
+        item.last_updated = self.now().isoformat()
+        self.store.save(item)
+        return item
+
+    def promote_waiting_for_open(self, *, regular_hours_open: bool) -> list[WatchItem]:
+        """At the open, KEEP_WATCHING items become WATCH. Conditional buy plans stay until evaluated."""
+        if not regular_hours_open:
+            return []
+        promoted: list[WatchItem] = []
+        for item in self.store.active():
+            if item.status is not WatchStatus.WAITING_FOR_OPEN:
+                continue
+            if item.conditional_plan is not None:
+                continue
+            self.set_status(item, WatchStatus.WATCH, reason="regular_session_open")
+            self.schedule_review(item, waiting_for_open=False, sleeve=item.sleeve)
+            promoted.append(item)
+        return promoted
+
     def should_spend_ai(
         self,
         item: WatchItem,
@@ -157,17 +212,11 @@ class WatchEngine:
     ) -> tuple[bool, str]:
         if not ai_allowed or budget_exhausted:
             return False, "ai_blocked"
+        material = [t for t in triggers if t in AI_REASSESS_TRIGGERS]
         hashed = context_hash(context)
-        if hashed == item.last_context_hash and not triggers:
-            return False, "unchanged_context"
-        if not triggers and item.last_ai_at:
-            cooldown = int(self.watch_cfg.get("ai_cooldown_minutes") or 180)
-            prior = parse_iso(item.last_ai_at)
-            if prior is not None and (self.now() - prior) < timedelta(minutes=cooldown):
-                return False, "cooldown"
-        if not triggers and hashed == item.last_context_hash:
-            return False, "no_material_change"
-        return True, "material_event" if triggers else "review_due"
+        if not material:
+            return False, "unchanged_context" if hashed == item.last_context_hash else "no_material_change"
+        return True, "material_event"
 
     def detect_triggers(
         self,
@@ -306,3 +355,14 @@ class WatchEngine:
         if extra:
             payload.update(extra)
         append_jsonl(payload, self.journal)
+
+
+def _watch_retry_hours(sleeve: str | None) -> float:
+    try:
+        cfg = load_research_config()
+        hours = ((cfg.get("reassessment") or {}).get("watch_min_retry_hours") or {}).get(sleeve or "")
+        if hours is not None:
+            return float(hours)
+    except Exception:  # noqa: BLE001
+        pass
+    return 12.0

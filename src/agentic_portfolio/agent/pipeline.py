@@ -10,7 +10,7 @@ Never places an order. Never treats a Candidate as a BUY.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from json import dumps as json_dumps
 from pathlib import Path
 from typing import Any, Mapping
@@ -39,13 +39,15 @@ from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.live_approval import LiveApprovalEngine
 from agentic_portfolio.notify import NotificationEngine, NotificationKind
 from agentic_portfolio.paper_fill.store import PaperFillStore
+from agentic_portfolio.calendar import is_regular_hours
 from agentic_portfolio.policy import load_research_config
 from agentic_portfolio.research.collect import collect_research_payload
 from agentic_portfolio.research.engine import evidence_fingerprint, run_research
 from agentic_portfolio.research.packet import ResearchPayload, build_packet
 from agentic_portfolio.research.reasoner import ResearchReasoner
+from agentic_portfolio.research.repair import invalidate_and_requeue_collector_bug_reports
 from agentic_portfolio.research.store import ResearchStore
-from agentic_portfolio.research.sufficiency import evaluate_evidence_sufficiency
+from agentic_portfolio.research.sufficiency import evaluate_evidence_sufficiency, looks_like_pre_fix_need_more_data
 from agentic_portfolio.research.types import ResearchConclusion, ResearchFreshness, ResearchReport, ResearchStatus
 from agentic_portfolio.research.validate import ResearchValidationError
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, LIVE_SOURCE_OF_TRUTH, RuntimeMode, discovery_state_dir, live_placement_enabled
@@ -482,6 +484,18 @@ class ResearchQueueWorker:
                 result.skipped_reason = "paper_nav_refused"
                 return result
         self.reclaim_stale_claims()
+        repair = invalidate_and_requeue_collector_bug_reports(
+            root=self.root,
+            research_store=self.research_store,
+            candidates=self.candidates,
+            queue=self.queue,
+            runtime_mode=self.runtime_mode,
+            now=self.now(),
+            journal=self.root / "logs" / "research.jsonl",
+        )
+        if repair.requeued:
+            result.details.append({"status": "COLLECTOR_REPAIR_REQUEUE", **repair.as_dict()})
+            self.reload_stores()
         pending = self.pending_entries()
         result.items_considered = len(pending)
         if not pending:
@@ -546,6 +560,7 @@ class ResearchQueueWorker:
             for r in existing
             if r.research_status
             in {ResearchStatus.RESEARCH_COMPLETE, ResearchStatus.RESEARCH_REJECTED, ResearchStatus.RESEARCH_INCONCLUSIVE}
+            and not looks_like_pre_fix_need_more_data(r)
         ]
         if complete:
             report = sorted(complete, key=lambda r: r.started_at, reverse=True)[0]
@@ -951,6 +966,10 @@ class ResearchQueueWorker:
                     existing.approval_id = approval_id
                 self.watch.store.save(existing)
                 return existing
+        sleeve = thesis.sleeve.value if thesis and thesis.sleeve else (
+            candidate.provisional_sleeve.value if candidate.provisional_sleeve else None
+        )
+        off_hours = status is WatchStatus.WATCH and not is_regular_hours(self.now())
         item = self.watch.upsert_from_candidate(
             ticker=report.symbol,
             score=candidate.discovery_score,
@@ -960,7 +979,9 @@ class ResearchQueueWorker:
             risks=list(report.key_risks or []),
             last_price=report.market_price or candidate.current_price,
             status=status,
-            off_hours=status is WatchStatus.WATCH,
+            off_hours=off_hours,
+            prepare_conditional_plan=False,
+            sleeve=sleeve,
             context={
                 "ticker": report.symbol,
                 "research_id": report.research_id,
@@ -978,22 +999,15 @@ class ResearchQueueWorker:
         if hasattr(item, "thesis_id") and thesis is not None:
             item.thesis_id = thesis.thesis_id
         if hasattr(item, "sleeve"):
-            item.sleeve = (thesis.sleeve.value if thesis and thesis.sleeve else candidate.provisional_sleeve.value)
+            item.sleeve = sleeve
         if hasattr(item, "catalysts"):
             item.catalysts = list(report.key_catalysts or [])
         if hasattr(item, "reason_for_watch"):
             item.reason_for_watch = reason
         if approval_id:
             item.approval_id = approval_id
-        hours = 12.0
-        try:
-            cfg = load_research_config()
-            sleeve = (thesis.sleeve.value if thesis and thesis.sleeve else candidate.provisional_sleeve.value)
-            hours = float(((cfg.get("reassessment") or {}).get("watch_min_retry_hours") or {}).get(sleeve) or 12)
-        except Exception:  # noqa: BLE001
-            hours = 12.0
-        next_review = self.now() + timedelta(hours=hours)
-        item.next_review_at = next_review.isoformat()
+        if status is WatchStatus.WATCH:
+            self.watch.schedule_review(item, waiting_for_open=off_hours, sleeve=sleeve)
         self.watch.store.save(item)
         if existing is None and status is WatchStatus.WATCH:
             self._notify(
@@ -1051,6 +1065,7 @@ class ResearchQueueWorker:
             return {"job": job, "status": "SKIPPED_NO_WORK", "watch_items": 0, "skipped": "no_watch_items", "items_considered": 0}
         processed = 0
         expired = self.watch.expire_stale()
+        opened = self.watch.promote_waiting_for_open(regular_hours_open=is_regular_hours(self.now()))
         for item in items:
             self.watch.mark_reassessed(item)
             processed += 1
@@ -1061,6 +1076,7 @@ class ResearchQueueWorker:
             "items_considered": len(items),
             "items_processed": processed,
             "expired": len(expired),
+            "promoted_from_waiting_for_open": len(opened),
             "ai_calls": 0,
             "placement_attempted": False,
         }

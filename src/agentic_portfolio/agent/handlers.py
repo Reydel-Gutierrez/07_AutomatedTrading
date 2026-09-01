@@ -617,6 +617,7 @@ def _ai_reassess(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]
     spent = 0
     skipped = 0
     session = _session(ctx)
+    services.watch.promote_waiting_for_open(regular_hours_open=session.regular_hours_open)
     quotes = _quotes_for(services, [item.ticker for item in services.watch_store.active()])
     for item in services.watch_store.active():
         quote = quotes.get(item.ticker) or {}

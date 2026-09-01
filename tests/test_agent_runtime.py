@@ -29,6 +29,7 @@ from agentic_portfolio.live_approval import (
 from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode
 from agentic_portfolio.watch import ReassessTrigger, WatchEngine, WatchStatus, WatchStore
+from agentic_portfolio.watch.types import parse_iso
 
 FRIDAY_OPEN = datetime(2026, 8, 28, 10, 0, tzinfo=EASTERN)
 FRIDAY_PRE = datetime(2026, 8, 28, 7, 0, tzinfo=EASTERN)
@@ -178,6 +179,76 @@ def test_material_event_triggers_reassessment(tmp_path):
     )
     assert allow is True
     assert why == "material_event"
+
+
+def test_waiting_for_open_schedules_next_regular_open_not_sleeve_interval(tmp_path):
+    from datetime import date, time
+
+    pre = datetime(2026, 9, 1, 8, 49, tzinfo=EASTERN)
+    services = _services(tmp_path, now=lambda: pre)
+    item = services.watch.upsert_from_candidate(
+        ticker="HD",
+        thesis="keep watching",
+        last_price=180.0,
+        status=WatchStatus.WATCH,
+        off_hours=True,
+        prepare_conditional_plan=False,
+        sleeve="OPPORTUNISTIC",
+    )
+    assert item.status is WatchStatus.WAITING_FOR_OPEN
+    nxt = parse_iso(item.next_review_at)
+    assert nxt is not None
+    local = nxt.astimezone(EASTERN)
+    assert local.date() == date(2026, 9, 1)
+    assert local.time() == time(9, 30)
+    # Opportunistic WATCH interval is 48h; that must not apply to WAITING_FOR_OPEN.
+    assert local.date() != date(2026, 9, 3)
+
+
+def test_watching_during_rth_uses_sleeve_interval(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 30, tzinfo=EASTERN)
+    services = _services(tmp_path, now=lambda: rth)
+    item = services.watch.upsert_from_candidate(
+        ticker="HD",
+        thesis="keep watching",
+        last_price=180.0,
+        status=WatchStatus.WATCH,
+        off_hours=False,
+        prepare_conditional_plan=False,
+        sleeve="OPPORTUNISTIC",
+    )
+    assert item.status is WatchStatus.WATCH
+    nxt = parse_iso(item.next_review_at)
+    assert nxt is not None
+    hours = (nxt - rth).total_seconds() / 3600.0
+    assert 40.0 <= hours <= 56.0
+
+
+def test_market_open_trigger_does_not_spend_ai_without_material_evidence(tmp_path):
+    now = lambda: FRIDAY_OPEN
+    services = _services(tmp_path, now=now)
+    item = services.watch.upsert_from_candidate(
+        ticker="HD",
+        thesis="keep watching",
+        last_price=180.0,
+        off_hours=True,
+        prepare_conditional_plan=False,
+        status=WatchStatus.WAITING_FOR_OPEN,
+    )
+    triggers = services.watch.detect_triggers(item, price=180.0, regular_hours_open=True)
+    assert ReassessTrigger.MARKET_OPEN_AFTER_OFFHOURS in triggers
+    allow, why = services.watch.should_spend_ai(
+        item,
+        context={"ticker": "HD", "price": 180.0, "thesis": "keep watching"},
+        triggers=triggers,
+        ai_allowed=True,
+        budget_exhausted=False,
+    )
+    assert allow is False
+    assert why in {"unchanged_context", "no_material_change"}
+    promoted = services.watch.promote_waiting_for_open(regular_hours_open=True)
+    assert any(p.ticker == "HD" for p in promoted)
+    assert services.watch_store.by_ticker("HD").status is WatchStatus.WATCH
 
 
 def test_market_open_validates_conditional_plan(tmp_path):
