@@ -815,6 +815,8 @@ class ResearchQueueWorker:
                 thesis=thesis,
                 status=WatchStatus.WATCH,
                 reason=f"decision_{name.decision.value.lower()}",
+                proposed_notional=None,
+                desired_allocation_pct=name.desired_allocation_pct,
             )
             row["watches_created"] = 1 if created else 0
             row["decision"] = name.decision.value
@@ -824,8 +826,18 @@ class ResearchQueueWorker:
             row["decision"] = name.decision.value
             return row
         gated = next((g for g in decided.gated_actions if g.proposed_action.symbol.upper() == report.symbol.upper()), None)
+        notional = gated.proposed_action.proposed_notional if gated is not None else None
+        alloc_pct = name.desired_allocation_pct
         if gated is None:
-            self._watch_from_research(candidate, report, thesis=thesis, status=WatchStatus.WATCH, reason="no_proposed_action")
+            self._watch_from_research(
+                candidate,
+                report,
+                thesis=thesis,
+                status=WatchStatus.WATCH,
+                reason="no_proposed_action",
+                proposed_notional=notional,
+                desired_allocation_pct=alloc_pct,
+            )
             row["watches_created"] = 1
             row["decision"] = name.decision.value
             return row
@@ -833,7 +845,15 @@ class ResearchQueueWorker:
         if verdict not in RISK_PERMIT:
             row["decision"] = name.decision.value
             row["risk_verdict"] = verdict.value if hasattr(verdict, "value") else str(verdict)
-            self._watch_from_research(candidate, report, thesis=thesis, status=WatchStatus.WATCH, reason="risk_gate_blocked")
+            self._watch_from_research(
+                candidate,
+                report,
+                thesis=thesis,
+                status=WatchStatus.WATCH,
+                reason="risk_gate_blocked",
+                proposed_notional=notional,
+                desired_allocation_pct=alloc_pct,
+            )
             row["watches_created"] = 1
             self._notify(
                 NotificationKind.RISK_GATE_BLOCKED,
@@ -853,6 +873,8 @@ class ResearchQueueWorker:
             status=WatchStatus.APPROVAL_REQUIRED,
             reason="approval_created",
             approval_id=approval.approval_id,
+            proposed_notional=notional,
+            desired_allocation_pct=alloc_pct,
         )
         if watch:
             row["watches_created"] = 1
@@ -951,6 +973,8 @@ class ResearchQueueWorker:
         status: WatchStatus,
         reason: str,
         approval_id: str | None = None,
+        proposed_notional: float | None = None,
+        desired_allocation_pct: float | None = None,
     ) -> WatchItem | None:
         if self.watch is None:
             return None
@@ -964,6 +988,12 @@ class ResearchQueueWorker:
                 existing.last_updated = self.now().isoformat()
                 if approval_id:
                     existing.approval_id = approval_id
+                if proposed_notional is not None:
+                    existing.proposed_notional = proposed_notional
+                if desired_allocation_pct is not None:
+                    existing.desired_allocation_pct = desired_allocation_pct
+                if existing.conditional_plan is not None:
+                    self.watch._copy_sizing_onto_plan(existing)
                 self.watch.store.save(existing)
                 return existing
         sleeve = thesis.sleeve.value if thesis and thesis.sleeve else (
@@ -982,6 +1012,8 @@ class ResearchQueueWorker:
             off_hours=off_hours,
             prepare_conditional_plan=False,
             sleeve=sleeve,
+            proposed_notional=proposed_notional,
+            desired_allocation_pct=desired_allocation_pct,
             context={
                 "ticker": report.symbol,
                 "research_id": report.research_id,
@@ -1004,6 +1036,12 @@ class ResearchQueueWorker:
             item.catalysts = list(report.key_catalysts or [])
         if hasattr(item, "reason_for_watch"):
             item.reason_for_watch = reason
+        if proposed_notional is not None:
+            item.proposed_notional = proposed_notional
+        if desired_allocation_pct is not None:
+            item.desired_allocation_pct = desired_allocation_pct
+        if item.conditional_plan is not None:
+            self.watch._copy_sizing_onto_plan(item)
         if approval_id:
             item.approval_id = approval_id
         if status is WatchStatus.WATCH:

@@ -67,6 +67,8 @@ class ConditionalPlan:
     notes: str | None = None
     prepared_session_id: str | None = None
     target_session_id: str | None = None
+    proposed_notional: float | None = None
+    desired_allocation_pct: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return to_dict(self)
@@ -112,6 +114,8 @@ class WatchItem:
     catalysts: list[str] = field(default_factory=list)
     price_levels: dict[str, Any] = field(default_factory=dict)
     reason_for_watch: str | None = None
+    proposed_notional: float | None = None
+    desired_allocation_pct: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = to_dict(self)
@@ -138,6 +142,8 @@ def watch_from_dict(raw: dict[str, Any]) -> WatchItem:
             notes=plan_raw.get("notes"),
             prepared_session_id=plan_raw.get("prepared_session_id"),
             target_session_id=plan_raw.get("target_session_id"),
+            proposed_notional=_opt_float(plan_raw.get("proposed_notional")),
+            desired_allocation_pct=_opt_float(plan_raw.get("desired_allocation_pct")),
         )
     item = WatchItem(watch_id=str(data.pop("watch_id")), ticker=str(data.pop("ticker")).upper(), status=status, **_watch_kwargs(data))
     item.conditional_plan = plan
@@ -186,11 +192,16 @@ def _watch_kwargs(data: dict[str, Any]) -> dict[str, Any]:
         "catalysts",
         "price_levels",
         "reason_for_watch",
+        "proposed_notional",
+        "desired_allocation_pct",
     }
     out: dict[str, Any] = {}
     for key, value in data.items():
         if key in allowed:
             out[key] = value
+    for key in ("proposed_notional", "desired_allocation_pct"):
+        if key in out:
+            out[key] = _opt_float(out[key])
     return out
 
 

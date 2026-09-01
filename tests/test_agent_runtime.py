@@ -27,10 +27,12 @@ from agentic_portfolio.live_approval import (
     LiveApprovalStore,
 )
 from agentic_portfolio.live_approval.types import LiveApproval
+from agentic_portfolio.live_approval.sizing import MISSING_ORDER_SIZING
 from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode
 from agentic_portfolio.watch import ConditionalPlan, ReassessTrigger, WatchEngine, WatchItem, WatchStatus, WatchStore
 from agentic_portfolio.watch.types import parse_iso
+from tests.conftest import ctx as portfolio_ctx
 
 FRIDAY_OPEN = datetime(2026, 8, 28, 10, 0, tzinfo=EASTERN)
 FRIDAY_PRE = datetime(2026, 8, 28, 7, 0, tzinfo=EASTERN)
@@ -40,7 +42,33 @@ SATURDAY = datetime(2026, 8, 29, 14, 0, tzinfo=EASTERN)
 LABOR_DAY = datetime(2026, 9, 7, 12, 0, tzinfo=EASTERN)
 
 
-def _services(tmp_path: Path, *, now, quotes=None, candidates=None, exhausted=False, bootstrap=None):
+def _services(tmp_path: Path, *, now, quotes=None, candidates=None, exhausted=False, bootstrap=None, last_context=None):
+    watch_store = WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    approval_store = LiveApprovalStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    notify = NotificationEngine(NotificationStore(tmp_path), now_fn=now)
+    conn = ConnectionManager(
+        bootstrap=bootstrap or (lambda **kwargs: ReadonlyBrokerRuntime(bound=True)),
+        notify=notify,
+        root=tmp_path,
+        now_fn=now,
+    )
+    journal = tmp_path / "logs" / "agent.jsonl"
+    return AgentServices(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        watch=WatchEngine(watch_store, journal=journal, now_fn=now),
+        watch_store=watch_store,
+        approvals=LiveApprovalEngine(approval_store, journal=journal, now_fn=now),
+        approval_store=approval_store,
+        notify=notify,
+        connection=conn,
+        now_fn=now,
+        quotes_fn=quotes,
+        candidates_fn=candidates,
+        budget_exhausted=exhausted,
+        ai_allowed=not exhausted,
+        last_context=last_context,
+    )
     watch_store = WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
     approval_store = LiveApprovalStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
     notify = NotificationEngine(NotificationStore(tmp_path), now_fn=now)
@@ -236,6 +264,11 @@ def _persist_waiting_for_open(
     watch_id="w-hd-pre-fix",
     status=WatchStatus.WAITING_FOR_OPEN,
     plan: bool = False,
+    proposed_notional: float | None = None,
+    desired_allocation_pct: float | None = None,
+    research_id=None,
+    thesis_id=None,
+    catalysts=None,
 ) -> WatchStore:
     store = WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
     item = WatchItem(
@@ -255,6 +288,12 @@ def _persist_waiting_for_open(
         last_context_hash="abc123",
         last_price=180.0,
         LIVE_ORDER_PLACEMENT=False,
+        proposed_notional=proposed_notional,
+        desired_allocation_pct=desired_allocation_pct,
+        research_id=research_id,
+        thesis_id=thesis_id,
+        catalysts=list(catalysts or []),
+        risks=["housing slowdown"],
     )
     if plan:
         item.conditional_plan = ConditionalPlan(
@@ -265,9 +304,31 @@ def _persist_waiting_for_open(
             require_cash_available=True,
             require_risk_gate_pass=True,
             require_regular_hours_quotes=True,
+            proposed_notional=proposed_notional,
+            desired_allocation_pct=desired_allocation_pct,
         )
     store.save(item)
     return store
+
+
+def _hd_sized_watch(tmp_path: Path, **kwargs):
+    kwargs.setdefault("next_review", "2026-09-03T04:11:00+00:00")
+    kwargs.setdefault("plan", True)
+    kwargs.setdefault("proposed_notional", 25.0)
+    kwargs.setdefault("desired_allocation_pct", 5.0)
+    kwargs.setdefault("research_id", "r-hd-1")
+    kwargs.setdefault("thesis_id", "t-hd-1")
+    kwargs.setdefault("catalysts", ["housing demand"])
+    return _persist_waiting_for_open(tmp_path, **kwargs)
+
+
+def _enable_live_placement(monkeypatch):
+    def on(**_kwargs):
+        return True
+
+    monkeypatch.setattr("agentic_portfolio.runtime.live_placement_enabled", on)
+    monkeypatch.setattr("agentic_portfolio.live_approval.sizing.live_placement_enabled", on)
+    monkeypatch.setattr("agentic_portfolio.agent.handlers.live_placement_enabled", on)
 
 
 def test_waiting_for_open_pre_fix_rows_migrate_on_engine_init(tmp_path):
@@ -518,7 +579,7 @@ def test_market_open_validates_conditional_plan(tmp_path):
     def quotes(tickers):
         return {"QUAL": {"price": 49.0, "spread_bps": 10.0, "dollar_volume": 5_000_000, "adverse_catalyst": False}}
 
-    services = _services(tmp_path, now=now, quotes=quotes)
+    services = _services(tmp_path, now=now, quotes=quotes, last_context=portfolio_ctx(500.0))
     services.watch.upsert_from_candidate(
         ticker="QUAL",
         thesis="next session if cheap",
@@ -527,6 +588,8 @@ def test_market_open_validates_conditional_plan(tmp_path):
         session_id="2026-08-27",
         next_session_id="2026-08-28",
         status=WatchStatus.WAITING_FOR_OPEN,
+        proposed_notional=25.0,
+        desired_allocation_pct=5.0,
     )
     orch = JobOrchestrator(tmp_path, handlers=build_handlers(services), now_fn=now)
     row = orch.run_job("MARKET_OPEN_CONDITIONAL_VALIDATE", now=FRIDAY_OPEN)
@@ -535,7 +598,14 @@ def test_market_open_validates_conditional_plan(tmp_path):
     assert len(pending) == 1
     assert pending[0].ticker == "QUAL"
     assert pending[0].placed_order is False
+    assert pending[0].proposed_dollar_amount == pytest.approx(25.0)
+    assert pending[0].proposed_allocation_pct == pytest.approx(5.0)
+    assert pending[0].expected_order_type == "market"
+    assert pending[0].nav_at_proposal == pytest.approx(500.0)
+    assert pending[0].auto_execution is False
     assert services.watch_store.by_ticker("QUAL").status is WatchStatus.APPROVAL_REQUIRED
+    assert services.watch_store.by_ticker("QUAL").proposed_notional == pytest.approx(25.0)
+    assert services.watch_store.by_ticker("QUAL").desired_allocation_pct == pytest.approx(5.0)
 
 
 def test_invalid_condition_does_not_create_approval(tmp_path):
@@ -616,12 +686,12 @@ def test_watch_quotes_from_payload_uses_fundamentals_average_volume_2_weeks():
 
 def test_normalized_liquid_quote_no_longer_fails_liquidity(tmp_path):
     rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
-    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+    _hd_sized_watch(tmp_path)
 
     def quotes(tickers):
         return watch_quotes_from_payload(_mcp_quote_payload(volume="100000"))
 
-    services = _services(tmp_path, now=lambda: rth, quotes=quotes)
+    services = _services(tmp_path, now=lambda: rth, quotes=quotes, last_context=portfolio_ctx(500.0))
     orch = JobOrchestrator(tmp_path, handlers=build_handlers(services), now_fn=lambda: rth)
     row = orch.run_job("MARKET_OPEN_CONDITIONAL_VALIDATE", now=rth)
     hd = services.watch_store.by_ticker("HD")
@@ -644,12 +714,12 @@ def _liquid_hd_quotes(_tickers=None):
 
 def test_duplicate_validate_plans_creates_one_hd_pending_approval(tmp_path):
     rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
-    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
-    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes)
-    ctx = {"session": classify_market_phase(rth), "job": "MARKET_OPEN_CONDITIONAL_VALIDATE"}
+    _hd_sized_watch(tmp_path)
+    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes, last_context=portfolio_ctx(500.0))
+    session_ctx = {"session": classify_market_phase(rth), "job": "MARKET_OPEN_CONDITIONAL_VALIDATE"}
 
-    first = _validate_plans(services, ctx)
-    second = _validate_plans(services, ctx, job="WATCH_CONDITION_MONITOR")
+    first = _validate_plans(services, session_ctx)
+    second = _validate_plans(services, session_ctx, job="WATCH_CONDITION_MONITOR")
 
     pending = services.approval_store.pending()
     assert first["approvals_created"] == 1
@@ -660,6 +730,12 @@ def test_duplicate_validate_plans_creates_one_hd_pending_approval(tmp_path):
     assert pending[0].status is LiveApprovalStatus.PENDING
     assert pending[0].placed_order is False
     assert pending[0].LIVE_ORDER_PLACEMENT is False
+    assert pending[0].proposed_dollar_amount == pytest.approx(25.0)
+    assert pending[0].proposed_allocation_pct == pytest.approx(5.0)
+    assert pending[0].expected_order_type == "market"
+    assert pending[0].nav_at_proposal == pytest.approx(500.0)
+    assert pending[0].sleeve == "OPPORTUNISTIC"
+    assert pending[0].research_id == "r-hd-1"
     hd = services.watch_store.by_ticker("HD")
     assert hd.status is WatchStatus.APPROVAL_REQUIRED
     assert hd.approval_id == pending[0].approval_id
@@ -670,14 +746,14 @@ def test_duplicate_validate_plans_creates_one_hd_pending_approval(tmp_path):
 
 def test_validate_plans_restart_reuses_same_hd_pending_approval(tmp_path):
     rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
-    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
-    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes)
-    ctx = {"session": classify_market_phase(rth), "job": "MARKET_OPEN_CONDITIONAL_VALIDATE"}
-    first = _validate_plans(services, ctx)
+    _hd_sized_watch(tmp_path)
+    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes, last_context=portfolio_ctx(500.0))
+    session_ctx = {"session": classify_market_phase(rth), "job": "MARKET_OPEN_CONDITIONAL_VALIDATE"}
+    first = _validate_plans(services, session_ctx)
     original = services.approval_store.pending()[0]
 
-    restarted = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes)
-    retry = _validate_plans(restarted, ctx, job="WATCH_CONDITION_MONITOR")
+    restarted = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes, last_context=portfolio_ctx(500.0))
+    retry = _validate_plans(restarted, session_ctx, job="WATCH_CONDITION_MONITOR")
 
     pending = restarted.approval_store.pending()
     assert first["approvals_created"] == 1
@@ -689,6 +765,175 @@ def test_validate_plans_restart_reuses_same_hd_pending_approval(tmp_path):
     assert hd.status is WatchStatus.APPROVAL_REQUIRED
     assert pending[0].placed_order is False
     assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_watch_preserves_proposed_notional_and_allocation_pct(tmp_path):
+    now = lambda: SATURDAY
+    services = _services(tmp_path, now=now)
+    item = services.watch.upsert_from_candidate(
+        ticker="HD",
+        thesis="core liquid equity",
+        last_price=180.0,
+        off_hours=True,
+        proposed_notional=25.0,
+        desired_allocation_pct=5.0,
+        sleeve="CORE_GROWTH",
+    )
+    stored = services.watch_store.by_ticker("HD")
+    assert stored.watch_id == item.watch_id
+    assert stored.proposed_notional == pytest.approx(25.0)
+    assert stored.desired_allocation_pct == pytest.approx(5.0)
+    assert stored.conditional_plan is not None
+    assert stored.conditional_plan.proposed_notional == pytest.approx(25.0)
+    assert stored.conditional_plan.desired_allocation_pct == pytest.approx(5.0)
+    assert stored.LIVE_ORDER_PLACEMENT is False
+
+
+def test_watch_to_approval_uses_watch_sizing_not_quote_sizing(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _hd_sized_watch(tmp_path)
+
+    def quotes(_tickers=None):
+        payload = watch_quotes_from_payload(_mcp_quote_payload(volume="100000"))
+        payload["HD"]["proposed_dollar_amount"] = 999.0
+        payload["HD"]["proposed_allocation_pct"] = 99.0
+        return payload
+
+    services = _services(tmp_path, now=lambda: rth, quotes=quotes, last_context=portfolio_ctx(500.0))
+    row = _validate_plans(services, {"session": classify_market_phase(rth)})
+    assert row["approvals_created"] == 1
+    pending = services.approval_store.pending()[0]
+    assert pending.proposed_dollar_amount == pytest.approx(25.0)
+    assert pending.proposed_allocation_pct == pytest.approx(5.0)
+    assert pending.proposed_dollar_amount != 999.0
+    assert pending.expected_order_type == "market"
+    assert pending.nav_at_proposal == pytest.approx(500.0)
+    assert pending.placed_order is False
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_pct_only_watch_sizing_derives_dollars_from_live_nav(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _persist_waiting_for_open(
+        tmp_path,
+        next_review="2026-09-03T04:11:00+00:00",
+        plan=True,
+        proposed_notional=None,
+        desired_allocation_pct=5.0,
+        research_id="r-hd-1",
+        thesis_id="t-hd-1",
+        catalysts=["housing demand"],
+    )
+    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes, last_context=portfolio_ctx(1000.0))
+    row = _validate_plans(services, {"session": classify_market_phase(rth)})
+    assert row["approvals_created"] == 1
+    pending = services.approval_store.pending()[0]
+    assert pending.proposed_allocation_pct == pytest.approx(5.0)
+    assert pending.proposed_dollar_amount == pytest.approx(50.0)
+    assert pending.nav_at_proposal == pytest.approx(1000.0)
+    assert pending.expected_order_type == "market"
+    assert pending.placed_order is False
+
+
+def test_missing_watch_sizing_fails_closed_and_does_not_invent_amount(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+
+    def quotes(_tickers=None):
+        payload = watch_quotes_from_payload(_mcp_quote_payload(volume="100000"))
+        payload["HD"]["proposed_dollar_amount"] = 999.0
+        payload["HD"]["proposed_allocation_pct"] = 99.0
+        return payload
+
+    services = _services(tmp_path, now=lambda: rth, quotes=quotes, last_context=portfolio_ctx(500.0))
+    row = _validate_plans(services, {"session": classify_market_phase(rth)})
+    assert row["approvals_created"] == 0
+    assert services.approval_store.pending() == []
+    assert services.watch_store.by_ticker("HD").status is not WatchStatus.APPROVAL_REQUIRED
+    reasons = [item.get("reason") for item in read_activity(tmp_path)]
+    assert MISSING_ORDER_SIZING in reasons
+    assert LIVE_ORDER_PLACEMENT is False
+    assert row.get("placement_attempted") is False
+
+
+def test_placement_false_at_watch_true_at_approval_uses_current_execution_context(tmp_path, monkeypatch):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _hd_sized_watch(tmp_path)
+    hd = WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE).by_ticker("HD")
+    assert hd.LIVE_ORDER_PLACEMENT is False
+    _enable_live_placement(monkeypatch)
+    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes, last_context=portfolio_ctx(500.0))
+    row = _validate_plans(services, {"session": classify_market_phase(rth)})
+    assert row["approvals_created"] == 1
+    pending = services.approval_store.pending()[0]
+    assert pending.LIVE_ORDER_PLACEMENT is True
+    assert pending.live_execution_blocked is False
+    assert pending.live_trade_actions_allowed is True
+    assert pending.auto_execution is False
+    assert pending.proposed_dollar_amount == pytest.approx(25.0)
+    assert pending.proposed_allocation_pct == pytest.approx(5.0)
+    assert pending.expected_order_type == "market"
+    assert pending.nav_at_proposal == pytest.approx(500.0)
+    assert pending.placed_order is False
+    assert pending.broker_submitted is False
+    refreshed = services.watch_store.by_ticker("HD")
+    assert refreshed.LIVE_ORDER_PLACEMENT is False
+    assert LIVE_ORDER_PLACEMENT is False
+    assert row.get("placement_attempted") is False
+
+
+def test_malformed_existing_approval_is_not_silently_upgraded(tmp_path, monkeypatch):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _hd_sized_watch(tmp_path)
+    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes, last_context=portfolio_ctx(500.0))
+    malformed = LiveApproval(
+        approval_id="malformed-hd-null-sizing",
+        ticker="HD",
+        proposed_action="BUY",
+        status=LiveApprovalStatus.PENDING,
+        watch_id="w-hd-pre-fix",
+        proposed_dollar_amount=None,
+        proposed_allocation_pct=None,
+        LIVE_ORDER_PLACEMENT=False,
+        live_execution_blocked=True,
+        live_trade_actions_allowed=False,
+        created_at="2026-09-01T14:00:00+00:00",
+    )
+    services.approval_store.save(malformed)
+    hd = services.watch_store.by_ticker("HD")
+    hd.approval_id = malformed.approval_id
+    services.watch_store.save(hd)
+    _enable_live_placement(monkeypatch)
+    row = _validate_plans(services, {"session": classify_market_phase(rth)})
+    old = services.approval_store.get(malformed.approval_id)
+    assert old.status is LiveApprovalStatus.SUPERSEDED
+    assert old.LIVE_ORDER_PLACEMENT is False
+    assert old.live_execution_blocked is True
+    assert old.live_trade_actions_allowed is False
+    assert old.proposed_dollar_amount is None
+    assert old.placed_order is False
+    pending = services.approval_store.pending()
+    assert row["approvals_created"] == 1
+    assert len(pending) == 1
+    created = pending[0]
+    assert created.approval_id != malformed.approval_id
+    assert created.proposed_dollar_amount == pytest.approx(25.0)
+    assert created.proposed_allocation_pct == pytest.approx(5.0)
+    assert created.LIVE_ORDER_PLACEMENT is True
+    assert created.live_execution_blocked is False
+    assert created.live_trade_actions_allowed is True
+    assert created.auto_execution is False
+    assert created.expected_order_type == "market"
+    assert created.nav_at_proposal == pytest.approx(500.0)
+    assert created.sleeve == "OPPORTUNISTIC"
+    assert created.research_id == "r-hd-1"
+    assert created.thesis_id == "t-hd-1"
+    assert "housing demand" in list(created.catalysts or [])
+    assert old.superseded_by == created.approval_id
+    assert LIVE_ORDER_PLACEMENT is False
+    assert row.get("placement_attempted") is False
+    with pytest.raises(Exception):
+        services.approvals.record_decision(old.approval_id, LiveApprovalStatus.APPROVED)
 
 
 def test_create_is_idempotent_for_same_watch_action_generation(tmp_path):
@@ -779,7 +1024,7 @@ def test_rejected_watch_can_open_next_generation_pending(tmp_path):
 
 def test_duplicate_validators_still_honor_risk_gate(tmp_path):
     rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
-    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+    _hd_sized_watch(tmp_path)
     services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes)
     services.risk_fn = lambda *_args, **_kwargs: False
     ctx = {"session": classify_market_phase(rth)}
@@ -794,7 +1039,7 @@ def test_duplicate_validators_still_honor_risk_gate(tmp_path):
 
 def test_normalized_quote_without_volume_still_fails_closed(tmp_path):
     rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
-    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+    _hd_sized_watch(tmp_path)
 
     def quotes(tickers):
         return watch_quotes_from_payload(_mcp_quote_payload())

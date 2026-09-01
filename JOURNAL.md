@@ -419,6 +419,20 @@ Execution flags unchanged: `auto_execution=false`, `live_trade_actions_allowed=f
 
 ---
 
+## 2026-09-01 — WATCH → APPROVAL uses persisted sizing, not quotes
+
+**Type:** `approval` / `watch`
+
+`_validate_plans()` was reading `proposed_dollar_amount` / `proposed_allocation_pct` from the live quote payload (market data). Production HD therefore got a PENDING BUY with both fields null. Sizing now lives on the WatchItem / ConditionalPlan (`proposed_notional`, `desired_allocation_pct`) from the research/decision result. Approval creation uses that persisted sizing; if only a target % exists, dollars are `pct * current LIVE NAV`. Missing sizing fails closed (`missing_order_sizing`) and does not invent an amount. Execution flags on a new packet snapshot `live_placement_enabled()` at creation time; a watch stamped while placement was off can still produce a correctly flagged approval later. Malformed or stale-blocked PENDING packets are superseded, not mutated into an executable order.
+
+Does not approve, place, or weaken Risk Gate / send-time revalidation / human approval. Duplicate validators still collapse to one canonical PENDING.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Committed defaults unchanged: `auto_execution=false`, `require_human_approval=true`, `LIVE_ORDER_PLACEMENT=false`.
+
+---
+
 ## Template
 
 ```

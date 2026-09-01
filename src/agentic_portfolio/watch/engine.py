@@ -106,6 +106,8 @@ class WatchEngine:
         prepare_conditional_plan: bool | None = None,
         context: Mapping[str, Any] | None = None,
         sleeve: str | None = None,
+        proposed_notional: float | None = None,
+        desired_allocation_pct: float | None = None,
     ) -> WatchItem:
         assert_execution_disabled()
         stamp = self.now()
@@ -138,6 +140,10 @@ class WatchEngine:
             existing.last_price = last_price
         if sleeve:
             existing.sleeve = sleeve
+        if proposed_notional is not None:
+            existing.proposed_notional = proposed_notional
+        if desired_allocation_pct is not None:
+            existing.desired_allocation_pct = desired_allocation_pct
         if existing.status in {WatchStatus.REJECTED, WatchStatus.EXPIRED, WatchStatus.INVALIDATED}:
             existing.status = status
         elif existing.status == WatchStatus.DISCOVERED:
@@ -153,10 +159,14 @@ class WatchEngine:
                     last_price=last_price,
                     prepared_session_id=session_id,
                     target_session_id=next_session_id,
+                    proposed_notional=existing.proposed_notional,
+                    desired_allocation_pct=existing.desired_allocation_pct,
                 )
+            self._copy_sizing_onto_plan(existing)
             self.schedule_review(existing, waiting_for_open=True, sleeve=existing.sleeve)
         else:
             existing.status = status
+            self._copy_sizing_onto_plan(existing)
             if status is WatchStatus.WATCH:
                 self.schedule_review(existing, waiting_for_open=False, sleeve=existing.sleeve)
         hashed = context_hash(context or {"ticker": existing.ticker, "thesis": existing.research_thesis, "price": existing.last_price})
@@ -166,7 +176,15 @@ class WatchEngine:
         self._log("WATCH_UPSERTED", existing)
         return existing
 
-    def default_plan(self, *, last_price: float | None, prepared_session_id: str | None, target_session_id: str | None) -> ConditionalPlan:
+    def default_plan(
+        self,
+        *,
+        last_price: float | None,
+        prepared_session_id: str | None,
+        target_session_id: str | None,
+        proposed_notional: float | None = None,
+        desired_allocation_pct: float | None = None,
+    ) -> ConditionalPlan:
         max_price = None
         if last_price is not None:
             max_price = round(float(last_price) * 1.01, 4)
@@ -181,7 +199,18 @@ class WatchEngine:
             notes="Next-session confirmation required. Off-hours liquidity is not executable.",
             prepared_session_id=prepared_session_id,
             target_session_id=target_session_id,
+            proposed_notional=proposed_notional,
+            desired_allocation_pct=desired_allocation_pct,
         )
+
+    def _copy_sizing_onto_plan(self, item: WatchItem) -> None:
+        plan = item.conditional_plan
+        if plan is None:
+            return
+        if plan.proposed_notional is None and item.proposed_notional is not None:
+            plan.proposed_notional = item.proposed_notional
+        if plan.desired_allocation_pct is None and item.desired_allocation_pct is not None:
+            plan.desired_allocation_pct = item.desired_allocation_pct
 
     def schedule_review(
         self,

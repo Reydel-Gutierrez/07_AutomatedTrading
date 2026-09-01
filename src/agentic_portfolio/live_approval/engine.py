@@ -15,6 +15,7 @@ from agentic_portfolio.live_approval.types import (
     LiveApprovalStatus,
     approval_idempotency_key,
 )
+from agentic_portfolio.live_approval.sizing import snapshot_execution_flags
 from agentic_portfolio.policy import load_account_rules, load_agent_config
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode, live_placement_enabled
 
@@ -71,6 +72,8 @@ class LiveApprovalEngine:
         watch_id: str | None = None,
         ttl_hours: int | None = None,
         preferred_approval_id: str | None = None,
+        expected_order_type: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> LiveApproval:
         item, _created = self.get_or_create(
             ticker=ticker,
@@ -87,6 +90,8 @@ class LiveApprovalEngine:
             watch_id=watch_id,
             ttl_hours=ttl_hours,
             preferred_approval_id=preferred_approval_id,
+            expected_order_type=expected_order_type,
+            metadata=metadata,
         )
         return item
 
@@ -107,6 +112,8 @@ class LiveApprovalEngine:
         watch_id: str | None = None,
         ttl_hours: int | None = None,
         preferred_approval_id: str | None = None,
+        expected_order_type: str | None = None,
+        metadata: Mapping[str, Any] | None = None,
     ) -> tuple[LiveApproval, bool]:
         """Return the active PENDING packet for this watch/proposal, creating at most one.
 
@@ -148,6 +155,7 @@ class LiveApprovalEngine:
                 proposed_action=action_u,
                 generation=generation,
             )
+            flags = snapshot_execution_flags()
             item = LiveApproval(
                 approval_id=str(uuid4()),
                 ticker=ticker_u,
@@ -169,10 +177,19 @@ class LiveApprovalEngine:
                 watch_id=watch_id,
                 runtime_mode=mode,
                 paper_environment=mode == RuntimeMode.PAPER.value,
-                LIVE_ORDER_PLACEMENT=live_placement_enabled(),
+                LIVE_ORDER_PLACEMENT=bool(flags["LIVE_ORDER_PLACEMENT"]),
+                live_execution_blocked=bool(flags["live_execution_blocked"]),
+                live_trade_actions_allowed=bool(flags["live_trade_actions_allowed"]),
+                auto_execution=False,
+                expected_order_type=expected_order_type or "market",
                 idempotency_key=key,
                 generation=generation,
             )
+            for key_name, value in dict(metadata or {}).items():
+                if hasattr(item, key_name) and value is not None:
+                    setattr(item, key_name, value)
+            if item.nav_at_proposal is None:
+                item.nav_at_proposal = _f((portfolio_impact or {}).get("nav"))
             self.store.save(item)
             self._log("APPROVAL_CREATED", item)
             return item, True
@@ -237,6 +254,27 @@ class LiveApprovalEngine:
         packet.placed_order = False
         packet.execution_attempted = False
         packet.LIVE_ORDER_PLACEMENT = live_placement_enabled()
+        self.store.save(packet)
+        self._log("APPROVAL_SUPERSEDED", packet)
+        return packet
+
+    def retire_pending(self, item: LiveApproval | str, *, reason: str) -> LiveApproval:
+        """Terminalize a malformed/stale PENDING packet without upgrading its execution flags.
+
+        Never places. Never mutates the packet into an executable approval.
+        """
+        self._assert_flags()
+        packet = item if isinstance(item, LiveApproval) else self.store.get(str(item))
+        if packet is None:
+            raise KeyError(item if isinstance(item, str) else getattr(item, "approval_id", item))
+        if packet.status is not LiveApprovalStatus.PENDING:
+            return packet
+        packet.status = LiveApprovalStatus.SUPERSEDED
+        packet.decided_at = self.now().isoformat()
+        packet.decision_note = reason
+        packet.broker_submitted = False
+        packet.placed_order = False
+        packet.execution_attempted = False
         self.store.save(packet)
         self._log("APPROVAL_SUPERSEDED", packet)
         return packet

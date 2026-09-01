@@ -16,8 +16,15 @@ from agentic_portfolio.agent.safety import assert_auto_execution_disabled
 from agentic_portfolio.agent.session import MarketPhase, SessionSnapshot
 from agentic_portfolio.live_approval import LiveApprovalEngine, LiveApprovalStore
 from agentic_portfolio.live_approval.types import LiveApprovalStatus
+from agentic_portfolio.live_approval.sizing import (
+    MISSING_ORDER_SIZING,
+    pending_is_reusable,
+    resolve_order_sizing,
+    sizing_from_watch,
+    snapshot_execution_flags,
+)
 from agentic_portfolio.notify import NotificationEngine, NotificationKind
-from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode
+from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, LIVE_SOURCE_OF_TRUTH, RuntimeMode, live_placement_enabled
 from agentic_portfolio.watch import ReassessTrigger, WatchEngine, WatchStatus, WatchStore, context_hash
 
 
@@ -529,6 +536,39 @@ def _watch_conditions(services: AgentServices, ctx: dict[str, Any]) -> dict[str,
     return _validate_plans(services, ctx, job="WATCH_CONDITION_MONITOR")
 
 
+def _current_nav(services: AgentServices) -> float | None:
+    ctx_obj = services.last_context
+    if ctx_obj is None and services.context_fn is not None:
+        try:
+            ctx_obj = services.context_fn()
+            services.last_context = ctx_obj
+        except Exception:  # noqa: BLE001 — fail closed on nav; do not invent
+            ctx_obj = None
+    nav = getattr(ctx_obj, "current_nav", None) if ctx_obj is not None else None
+    try:
+        value = float(nav) if nav is not None else None
+    except (TypeError, ValueError):
+        return None
+    if value is None or value != value or value <= 0:
+        return None
+    return value
+
+
+def _watch_approval_metadata(item, *, nav: float | None, price: float | None) -> dict[str, Any]:
+    return {
+        "sleeve": item.sleeve,
+        "research_id": item.research_id,
+        "thesis_id": item.thesis_id,
+        "research_summary": item.research_thesis,
+        "catalysts": list(item.catalysts or []),
+        "key_risks": list(item.risks or []),
+        "invalidation": list(item.invalidating_conditions or []),
+        "quote_at_proposal": price if price is not None else item.last_price,
+        "nav_at_proposal": nav,
+        "expected_order_type": "market",
+    }
+
+
 def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MARKET_OPEN_CONDITIONAL_VALIDATE") -> dict[str, Any]:
     session = _session(ctx)
     created = 0
@@ -538,20 +578,38 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
         return _ok(job, skipped="off_hours_liquidity_not_executable", create_approval=False)
     tickers = [item.ticker for item in services.watch_store.active()]
     quotes = _quotes_for(services, tickers)
+    nav = _current_nav(services)
+    placement = live_placement_enabled()
     for item in services.watch_store.active():
         if item.conditional_plan is None and item.status not in {WatchStatus.WAITING_FOR_OPEN, WatchStatus.READY_FOR_RISK_GATE, WatchStatus.WATCH}:
             continue
+        quote = quotes.get(item.ticker) or {}
+        notional, alloc_pct = sizing_from_watch(item)
+        dollars, pct, sizing_error = resolve_order_sizing(
+            proposed_notional=notional,
+            desired_allocation_pct=alloc_pct,
+            nav=nav,
+        )
         existing = services.approvals.canonical_pending(
             ticker=item.ticker,
             proposed_action="BUY",
             watch_id=item.watch_id,
             preferred_approval_id=item.approval_id,
         )
-        if existing is not None:
+        if existing is not None and pending_is_reusable(existing, dollars=dollars, placement_enabled=placement):
             _bind_watch_approval(services, item, existing, created=False)
             reused += 1
             continue
-        quote = quotes.get(item.ticker) or {}
+        if existing is not None:
+            services.approvals.retire_pending(existing, reason="malformed_or_stale_execution_context")
+            log_activity(
+                services.root,
+                "APPROVAL_SUPERSEDED",
+                ticker=item.ticker,
+                approval_id=existing.approval_id,
+                watch_id=item.watch_id,
+                reason="malformed_or_stale_execution_context",
+            )
         price = quote.get("price") or quote.get("last")
         spread = quote.get("spread_bps")
         volume = quote.get("dollar_volume")
@@ -563,7 +621,7 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
             spread_bps=spread,
             dollar_volume=volume,
             adverse_catalyst=adverse,
-            cash_available=_cash_available(services, item.conditional_plan.max_price if item.conditional_plan else None),
+            cash_available=_cash_available(services, dollars if dollars is not None else (item.conditional_plan.max_price if item.conditional_plan else None)),
             risk_pass=_risk_pass(services, item, quote),
         )
         if not result.get("create_approval"):
@@ -572,21 +630,52 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
                 log_activity(services.root, "RISK_GATE_REJECTED", ticker=item.ticker, watch_id=item.watch_id)
             log_activity(services.root, "WATCH_CONDITION_TRIGGERED", ticker=item.ticker, ok=False, reason=result.get("reason"))
             continue
+        if sizing_error or dollars is None:
+            failed += 1
+            log_activity(
+                services.root,
+                "WATCH_CONDITION_TRIGGERED",
+                ticker=item.ticker,
+                watch_id=item.watch_id,
+                ok=False,
+                reason=MISSING_ORDER_SIZING,
+                create_approval=False,
+            )
+            continue
+        flags = snapshot_execution_flags(placement_enabled=placement)
+        ctx_obj = services.last_context
+        impact = {
+            "nav": nav,
+            "cash": getattr(ctx_obj, "cash", None) if ctx_obj is not None else None,
+            "buying_power": getattr(ctx_obj, "buying_power", None) if ctx_obj is not None else None,
+            "source_of_truth": LIVE_SOURCE_OF_TRUTH if services.runtime_mode is RuntimeMode.LIVE else "isolated_paper_book",
+            "proposed_notional": dollars,
+            "desired_allocation_pct": pct,
+            "LIVE_ORDER_PLACEMENT": flags["LIVE_ORDER_PLACEMENT"],
+            "live_execution_blocked": flags["live_execution_blocked"],
+            "live_trade_actions_allowed": flags["live_trade_actions_allowed"],
+            "auto_execution": False,
+        }
         approval, is_new = services.approvals.get_or_create(
             ticker=item.ticker,
             proposed_action="BUY",
-            proposed_dollar_amount=quote.get("proposed_dollar_amount"),
-            proposed_allocation_pct=quote.get("proposed_allocation_pct"),
+            proposed_dollar_amount=dollars,
+            proposed_allocation_pct=pct,
             reason="Conditional next-session plan passed live regular-hours confirmation.",
             ai_rationale=item.research_thesis,
             supporting_thesis=item.research_thesis,
             current_quote=price,
             current_spread_bps=spread,
             risk_gate_result={"verdict": "PASS"},
-            portfolio_impact={"cash_check": True},
+            portfolio_impact=impact,
             watch_id=item.watch_id,
             preferred_approval_id=item.approval_id,
+            expected_order_type="market",
+            metadata=_watch_approval_metadata(item, nav=nav, price=price),
         )
+        if is_new and existing is not None:
+            existing.superseded_by = approval.approval_id
+            services.approval_store.save(existing)
         _bind_watch_approval(services, item, approval, created=is_new)
         if is_new:
             created += 1

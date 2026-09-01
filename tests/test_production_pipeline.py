@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
+import pytest
+
 from agentic_portfolio.agent.handlers import AgentServices, build_handlers
 from agentic_portfolio.agent.jobs import specs_by_name
 from agentic_portfolio.agent.orchestrator import JobOrchestrator
@@ -347,6 +349,23 @@ def test_keep_watching_during_rth_uses_sleeve_watch_interval(tmp_path):
     assert 40.0 <= hours <= 56.0
 
 
+def test_watch_decision_preserves_desired_allocation_pct(tmp_path):
+    _seed(tmp_path)
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="ADVANCE_TO_THESIS")}),
+        decision=ScriptedDecisionReasoner(_decision_payload("QUAL", decision="WATCH", alloc=5.0)),
+        nav=500.0,
+    )
+    result = worker.run_cycle()
+    assert result.watches_created == 1
+    item = worker.watch.store.by_ticker("QUAL")
+    assert item is not None
+    assert item.desired_allocation_pct == pytest.approx(5.0)
+    assert worker.approvals.store.pending() == []
+    assert LIVE_ORDER_PLACEMENT is False
+
+
 def test_l_buy_creates_proposed_action_not_direct_order(tmp_path):
     _seed(tmp_path)
     research, decision = _buy_reasoners()
@@ -361,6 +380,13 @@ def test_l_buy_creates_proposed_action_not_direct_order(tmp_path):
     journal = (tmp_path / "logs").rglob("*.jsonl")
     blob = "".join(p.read_text(encoding="utf-8") for p in journal if p.exists())
     assert "place_equity_order" not in blob
+    watch = worker.watch.store.by_ticker("QUAL")
+    assert watch is not None
+    assert watch.desired_allocation_pct == pytest.approx(5.0)
+    assert watch.proposed_notional == pytest.approx(25.0)
+    assert pending[0].proposed_dollar_amount == pytest.approx(25.0)
+    assert pending[0].proposed_allocation_pct == pytest.approx(5.0)
+    assert pending[0].expected_order_type == "market"
 
 
 def test_m_risk_gate_denial_prevents_approval(tmp_path):
