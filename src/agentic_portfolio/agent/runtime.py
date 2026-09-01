@@ -104,7 +104,18 @@ class AgentRuntime:
                 if fetcher is None or not hasattr(fetcher, "get_equity_quotes"):
                     raise LiveDataUnavailable("bound Robinhood runtime cannot fetch quotes")
                 payload = fetcher.get_equity_quotes(list(tickers))
-                return watch_quotes_from_payload(payload)
+                fundamentals = None
+                getter = getattr(fetcher, "fundamentals", None)
+                if not callable(getter):
+                    getter = getattr(fetcher, "get_equity_fundamentals", None)
+                if callable(getter):
+                    try:
+                        raw = getter(list(tickers))
+                    except Exception:  # noqa: BLE001 — quotes still usable; volume fails closed
+                        raw = None
+                    if isinstance(raw, Mapping):
+                        fundamentals = raw
+                return watch_quotes_from_payload(payload, fundamentals=fundamentals)
 
             from agentic_portfolio.ai.gateway import build_gateway
             from agentic_portfolio.live_execution import ExecutionStore, LiveOrderExecutor, bind_live_write_broker

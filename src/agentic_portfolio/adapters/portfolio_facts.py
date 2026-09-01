@@ -268,6 +268,59 @@ def quote_price(quote: Mapping[str, Any] | None) -> float | None:
     return None
 
 
+# Share-count fields for dollar volume. Same order as adapt_liquidity_evidence
+# (ADV proxy) then SecuritySnapshot.dollar_volume (session volume fallback).
+_SHARE_VOLUME_FIELDS = (
+    "average_volume_2_weeks",
+    "average_volume_30_days",
+    "average_volume",
+    "volume",
+)
+_PRECOMPUTED_DOLLAR_VOLUME_FIELDS = (
+    "dollar_volume",
+    "volume_usd",
+    "recent_dollar_volume",
+)
+
+
+def quote_share_volume(quote: Mapping[str, Any] | None) -> float | None:
+    """Usable share count for dollar volume. Fail closed when none is present."""
+    if not quote:
+        return None
+    for key in _SHARE_VOLUME_FIELDS:
+        value = _optional_float(quote.get(key))
+        if value is not None and value > 0:
+            return value
+    return None
+
+
+def quote_dollar_volume(quote: Mapping[str, Any] | None, *, price: float | None = None) -> float | None:
+    """price × share volume, or an already-dollar field when the source provides one."""
+    if not quote:
+        return None
+    for key in _PRECOMPUTED_DOLLAR_VOLUME_FIELDS:
+        value = _optional_float(quote.get(key))
+        if value is not None and value > 0:
+            return value
+    px = price if price is not None else quote_price(quote)
+    if px is None or px <= 0:
+        return None
+    shares = quote_share_volume(quote)
+    if shares is None:
+        return None
+    return shares * px
+
+
+def _overlay_volume_fields(quote: dict[str, Any], extra: Mapping[str, Any] | None) -> dict[str, Any]:
+    merged = dict(quote)
+    if not extra:
+        return merged
+    for key in _SHARE_VOLUME_FIELDS + _PRECOMPUTED_DOLLAR_VOLUME_FIELDS:
+        if _optional_float(merged.get(key)) is None and extra.get(key) not in (None, ""):
+            merged[key] = extra[key]
+    return merged
+
+
 def parse_spy(payload: Mapping[str, Any] | None) -> SpyBenchmark | None:
     quote = quote_map(payload).get("SPY")
     if not quote:
@@ -361,13 +414,24 @@ def parse_positions(
     return positions
 
 
-def watch_quotes_from_payload(payload: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
-    """Normalize MCP quote payloads into the watch/condition {symbol: {price, ...}} map."""
+def watch_quotes_from_payload(
+    payload: Mapping[str, Any] | None,
+    *,
+    fundamentals: Mapping[str, Any] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Normalize MCP quote payloads into the watch/condition {symbol: {price, ...}} map.
+
+    Live get_equity_quotes has bid/ask/last but no volume. Overlay get_equity_fundamentals
+    when provided so dollar_volume can use the same share-count fields as discovery liquidity.
+    Missing volume stays None (fail closed).
+    """
+    funds = quote_map(fundamentals) if fundamentals else {}
     out: dict[str, dict[str, Any]] = {}
     for symbol, quote in quote_map(payload).items():
-        price = quote_price(quote)
-        bid = _optional_float(quote.get("bid_price"))
-        ask = _optional_float(quote.get("ask_price"))
+        merged = _overlay_volume_fields(dict(quote), funds.get(symbol))
+        price = quote_price(merged)
+        bid = _optional_float(merged.get("bid_price"))
+        ask = _optional_float(merged.get("ask_price"))
         spread_bps = None
         if bid is not None and ask is not None and (bid + ask) > 0:
             spread_bps = ((ask - bid) / ((ask + bid) / 2.0)) * 10_000.0
@@ -377,5 +441,6 @@ def watch_quotes_from_payload(payload: Mapping[str, Any] | None) -> dict[str, di
             "spread_bps": spread_bps,
             "bid": bid,
             "ask": ask,
+            "dollar_volume": quote_dollar_volume(merged, price=price),
         }
     return out

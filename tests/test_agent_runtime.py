@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable, StaticPortfolioFetcher
+from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable, StaticPortfolioFetcher, watch_quotes_from_payload
 from agentic_portfolio.adapters.readonly_runtime import ReadonlyBrokerRuntime
 from agentic_portfolio.agent.activity import read_activity
 from agentic_portfolio.agent.connection import ConnectionManager
@@ -571,6 +571,91 @@ def test_off_hours_does_not_treat_liquidity_as_executable(tmp_path):
     assert services.approval_store.pending() == []
 
 
+def _mcp_quote_payload(
+    symbol="HD",
+    *,
+    last="180.00",
+    bid="179.91",
+    ask="180.09",
+    volume=None,
+    **extra,
+):
+    quote = {
+        "symbol": symbol,
+        "last_trade_price": last,
+        "bid_price": bid,
+        "ask_price": ask,
+        **extra,
+    }
+    if volume is not None:
+        quote["volume"] = volume
+    return {"data": {"results": [{"quote": quote}]}}
+
+
+def test_watch_quotes_from_payload_computes_spread_and_dollar_volume():
+    out = watch_quotes_from_payload(_mcp_quote_payload(volume="100000"))["HD"]
+    assert out["price"] == 180.0
+    assert out["bid"] == 179.91
+    assert out["ask"] == 180.09
+    assert abs(out["spread_bps"] - 10.0) < 1e-9
+    assert out["dollar_volume"] == 180.0 * 100_000
+
+
+def test_watch_quotes_from_payload_missing_volume_is_none():
+    out = watch_quotes_from_payload(_mcp_quote_payload())["HD"]
+    assert out["spread_bps"] is not None
+    assert out["dollar_volume"] is None
+
+
+def test_watch_quotes_from_payload_uses_fundamentals_average_volume_2_weeks():
+    funds = {"data": {"results": [{"symbol": "HD", "average_volume_2_weeks": "3973030.083613", "volume": "827060"}]}}
+    out = watch_quotes_from_payload(_mcp_quote_payload(), fundamentals=funds)["HD"]
+    assert out["dollar_volume"] == pytest.approx(180.0 * 3973030.083613)
+
+
+def test_normalized_liquid_quote_no_longer_fails_liquidity(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+
+    def quotes(tickers):
+        return watch_quotes_from_payload(_mcp_quote_payload(volume="100000"))
+
+    services = _services(tmp_path, now=lambda: rth, quotes=quotes)
+    orch = JobOrchestrator(tmp_path, handlers=build_handlers(services), now_fn=lambda: rth)
+    row = orch.run_job("MARKET_OPEN_CONDITIONAL_VALIDATE", now=rth)
+    hd = services.watch_store.by_ticker("HD")
+    assert hd.status is not WatchStatus.WAITING_FOR_LIQUIDITY
+    assert row["approvals_created"] == 1
+    pending = services.approval_store.pending()
+    assert len(pending) == 1
+    assert pending[0].ticker == "HD"
+    assert pending[0].placed_order is False
+    assert hd.status is WatchStatus.APPROVAL_REQUIRED
+    assert hd.last_ai_at == "2026-08-31T16:00:00+00:00"
+    assert hd.LIVE_ORDER_PLACEMENT is False
+    assert LIVE_ORDER_PLACEMENT is False
+    assert row.get("placement_attempted") is False
+
+
+def test_normalized_quote_without_volume_still_fails_closed(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+
+    def quotes(tickers):
+        return watch_quotes_from_payload(_mcp_quote_payload())
+
+    services = _services(tmp_path, now=lambda: rth, quotes=quotes)
+    orch = JobOrchestrator(tmp_path, handlers=build_handlers(services), now_fn=lambda: rth)
+    row = orch.run_job("MARKET_OPEN_CONDITIONAL_VALIDATE", now=rth)
+    hd = services.watch_store.by_ticker("HD")
+    assert row["approvals_created"] == 0
+    assert hd.status is WatchStatus.WAITING_FOR_LIQUIDITY
+    assert services.approval_store.pending() == []
+    assert hd.last_ai_at == "2026-08-31T16:00:00+00:00"
+    assert LIVE_ORDER_PLACEMENT is False
+    assert row.get("placement_attempted") is False
+
+
 def test_approval_persists_expires_and_cannot_place(tmp_path):
     frozen = {"t": datetime(2026, 8, 28, 10, 0, tzinfo=timezone.utc)}
 
@@ -811,6 +896,42 @@ def test_production_runtime_wires_live_refresh_fn(tmp_path):
     assert runtime.services.candidates_fn is None
     assert LIVE_ORDER_PLACEMENT is False
     assert runtime.runtime_mode is RuntimeMode.LIVE
+
+
+def test_quotes_live_overlays_fundamentals_volume_when_quote_has_none(tmp_path):
+    class _Fetcher:
+        def __init__(self):
+            self.calls = []
+
+        def get_equity_quotes(self, symbols):
+            self.calls.append("get_equity_quotes")
+            return _mcp_quote_payload()
+
+        def get_equity_fundamentals(self, symbols):
+            self.calls.append("get_equity_fundamentals")
+            return {
+                "data": {
+                    "results": [
+                        {"symbol": "HD", "average_volume_2_weeks": "50000", "volume": "20000"}
+                    ]
+                }
+            }
+
+    fetcher = _Fetcher()
+    runtime, _ = _wired_runtime(tmp_path, now=lambda: FRIDAY_OPEN, fetcher=fetcher)
+    out = runtime.services.quotes_fn(["HD"])
+    assert "get_equity_quotes" in fetcher.calls
+    assert "get_equity_fundamentals" in fetcher.calls
+    assert out["HD"]["dollar_volume"] == pytest.approx(180.0 * 50_000)
+    assert abs(out["HD"]["spread_bps"] - 10.0) < 1e-9
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_quotes_live_without_volume_source_fails_closed(tmp_path):
+    runtime, _ = _wired_runtime(tmp_path, now=lambda: FRIDAY_OPEN)
+    out = runtime.services.quotes_fn(["MSFT"])
+    assert out["MSFT"]["price"] == 513.67
+    assert out["MSFT"]["dollar_volume"] is None
 
 
 def test_live_refresh_uses_bound_readonly_fetcher(tmp_path):
