@@ -383,6 +383,18 @@ ETF collector-repair requeue is unchanged. Scoring thresholds in `config/discove
 
 ---
 
+## 2026-09-01 — Reconcile persisted WAITING_FOR_OPEN schedules
+
+**Type:** `watch` / `runtime`
+
+Existing `WAITING_FOR_OPEN` rows kept the pre-fix `next_review_at` (sleeve interval, often +48h). Watch-engine init and agent startup now recompute those timestamps onto the next regular open, including stale past times. Thesis, invalidation, sleeve, score, expiry, and evidence are unchanged. A timestamp rewrite is not a Terra event. Already-correct rows are not rewritten.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Execution flags unchanged: `auto_execution=false`, `live_trade_actions_allowed=false`, `LIVE_ORDER_PLACEMENT=false`.
+
+---
+
 ## Template
 
 ```

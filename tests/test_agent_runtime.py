@@ -28,7 +28,7 @@ from agentic_portfolio.live_approval import (
 )
 from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode
-from agentic_portfolio.watch import ReassessTrigger, WatchEngine, WatchStatus, WatchStore
+from agentic_portfolio.watch import ReassessTrigger, WatchEngine, WatchItem, WatchStatus, WatchStore
 from agentic_portfolio.watch.types import parse_iso
 
 FRIDAY_OPEN = datetime(2026, 8, 28, 10, 0, tzinfo=EASTERN)
@@ -222,6 +222,168 @@ def test_watching_during_rth_uses_sleeve_interval(tmp_path):
     assert nxt is not None
     hours = (nxt - rth).total_seconds() / 3600.0
     assert 40.0 <= hours <= 56.0
+
+
+def _persist_waiting_for_open(
+    tmp_path: Path,
+    *,
+    ticker="HD",
+    next_review: str,
+    thesis="keep watching HD",
+    sleeve="OPPORTUNISTIC",
+    last_updated="2026-09-01T08:00:00-04:00",
+    watch_id="w-hd-pre-fix",
+    status=WatchStatus.WAITING_FOR_OPEN,
+) -> WatchStore:
+    store = WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    item = WatchItem(
+        watch_id=watch_id,
+        ticker=ticker,
+        status=status,
+        created_at="2026-09-01T08:00:00-04:00",
+        last_updated=last_updated,
+        research_thesis=thesis,
+        invalidating_conditions=["break of thesis"],
+        sleeve=sleeve,
+        source_candidate_score=61.2,
+        expiration="2026-09-15T00:00:00+00:00",
+        next_review_at=next_review,
+        last_ai_at="2026-08-31T16:00:00+00:00",
+        last_ai_cost=0.12,
+        last_context_hash="abc123",
+        last_price=180.0,
+        LIVE_ORDER_PLACEMENT=False,
+    )
+    store.save(item)
+    return store
+
+
+def test_waiting_for_open_pre_fix_rows_migrate_on_engine_init(tmp_path):
+    from datetime import date, time
+
+    pre = datetime(2026, 9, 1, 8, 49, tzinfo=EASTERN)
+    store = _persist_waiting_for_open(tmp_path, next_review="2026-09-03T12:49:00+00:00")
+    watching = WatchItem(
+        watch_id="w-msft-watch",
+        ticker="MSFT",
+        status=WatchStatus.WATCH,
+        created_at="2026-09-01T08:00:00-04:00",
+        last_updated="2026-09-01T08:00:00-04:00",
+        research_thesis="core compounder",
+        sleeve="CORE_GROWTH",
+        next_review_at="2026-09-08T08:00:00-04:00",
+        expiration="2026-09-15T00:00:00+00:00",
+        LIVE_ORDER_PLACEMENT=False,
+    )
+    store.save(watching)
+
+    engine = WatchEngine(store, now_fn=lambda: pre)
+    hd = store.by_ticker("HD")
+    nxt = parse_iso(hd.next_review_at)
+    local = nxt.astimezone(EASTERN)
+    assert hd.status is WatchStatus.WAITING_FOR_OPEN
+    assert local.date() == date(2026, 9, 1)
+    assert local.time() == time(9, 30)
+    assert hd.research_thesis == "keep watching HD"
+    assert hd.invalidating_conditions == ["break of thesis"]
+    assert hd.sleeve == "OPPORTUNISTIC"
+    assert hd.source_candidate_score == 61.2
+    assert hd.expiration == "2026-09-15T00:00:00+00:00"
+    assert hd.last_ai_at == "2026-08-31T16:00:00+00:00"
+    assert hd.last_ai_cost == 0.12
+    assert hd.last_context_hash == "abc123"
+    assert hd.LIVE_ORDER_PLACEMENT is False
+    msft = store.by_ticker("MSFT")
+    assert msft.status is WatchStatus.WATCH
+    assert msft.next_review_at == "2026-09-08T08:00:00-04:00"
+    allow, _why = engine.should_spend_ai(
+        hd,
+        context={"ticker": "HD", "thesis": hd.research_thesis, "price": 180.0},
+        triggers=[],
+        ai_allowed=True,
+        budget_exhausted=False,
+    )
+    assert allow is False
+
+
+def test_waiting_for_open_migrates_on_runtime_startup(tmp_path):
+    from datetime import date, time
+
+    pre = datetime(2026, 9, 1, 8, 49, tzinfo=EASTERN)
+    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T12:49:00+00:00")
+    runtime = AgentRuntime(
+        tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        now_fn=lambda: pre,
+        sleep_fn=lambda _s: None,
+        max_cycles=0,
+    )
+    hd = runtime.services.watch_store.by_ticker("HD")
+    local = parse_iso(hd.next_review_at).astimezone(EASTERN)
+    assert local.date() == date(2026, 9, 1)
+    assert local.time() == time(9, 30)
+    assert hd.research_thesis == "keep watching HD"
+    assert hd.last_ai_at == "2026-08-31T16:00:00+00:00"
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_waiting_for_open_stale_past_review_becomes_next_regular_open(tmp_path):
+    from datetime import date, time
+
+    pre = datetime(2026, 9, 1, 8, 49, tzinfo=EASTERN)
+    store = _persist_waiting_for_open(tmp_path, next_review="2026-08-31T13:30:00+00:00")
+    WatchEngine(store, now_fn=lambda: pre)
+    local = parse_iso(store.by_ticker("HD").next_review_at).astimezone(EASTERN)
+    assert local.date() == date(2026, 9, 1)
+    assert local.time() == time(9, 30)
+
+
+def test_waiting_for_open_after_hours_migrates_to_next_trading_open(tmp_path):
+    from datetime import date, time
+
+    friday_after = datetime(2026, 9, 4, 17, 0, tzinfo=EASTERN)
+    store = _persist_waiting_for_open(tmp_path, next_review="2026-09-06T17:00:00-04:00")
+    WatchEngine(store, now_fn=lambda: friday_after)
+    local = parse_iso(store.by_ticker("HD").next_review_at).astimezone(EASTERN)
+    assert local.date() == date(2026, 9, 8)
+    assert local.time() == time(9, 30)
+
+
+def test_waiting_for_open_weekend_and_holiday_skip_to_next_session(tmp_path):
+    from datetime import date, time
+
+    saturday = datetime(2026, 9, 5, 12, 0, tzinfo=EASTERN)
+    store = _persist_waiting_for_open(tmp_path, next_review="2026-09-07T12:00:00-04:00")
+    WatchEngine(store, now_fn=lambda: saturday)
+    local = parse_iso(store.by_ticker("HD").next_review_at).astimezone(EASTERN)
+    assert local.date() == date(2026, 9, 8)
+    assert local.time() == time(9, 30)
+
+    holiday_root = tmp_path / "holiday"
+    labor = datetime(2026, 9, 7, 12, 0, tzinfo=EASTERN)
+    holiday_store = _persist_waiting_for_open(holiday_root, next_review="2026-09-09T12:00:00-04:00")
+    WatchEngine(holiday_store, now_fn=lambda: labor)
+    holiday_local = parse_iso(holiday_store.by_ticker("HD").next_review_at).astimezone(EASTERN)
+    assert holiday_local.date() == date(2026, 9, 8)
+    assert holiday_local.time() == time(9, 30)
+
+
+def test_waiting_for_open_migration_is_idempotent_and_skips_correct_rows(tmp_path):
+    pre = datetime(2026, 9, 1, 8, 49, tzinfo=EASTERN)
+    store = _persist_waiting_for_open(tmp_path, next_review="2026-09-03T12:49:00+00:00")
+    engine = WatchEngine(store, now_fn=lambda: pre)
+    hd = store.by_ticker("HD")
+    first_review = hd.next_review_at
+    first_updated = hd.last_updated
+    assert engine.reconcile_waiting_for_open_schedules() == []
+    again = store.by_ticker("HD")
+    assert again.next_review_at == first_review
+    assert again.last_updated == first_updated
+    WatchEngine(store, now_fn=lambda: pre)
+    third = store.by_ticker("HD")
+    assert third.next_review_at == first_review
+    assert third.last_updated == first_updated
+    assert third.last_ai_at == "2026-08-31T16:00:00+00:00"
 
 
 def test_market_open_trigger_does_not_spend_ai_without_material_evidence(tmp_path):

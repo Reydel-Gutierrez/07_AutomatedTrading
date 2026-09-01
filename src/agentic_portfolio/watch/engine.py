@@ -63,6 +63,7 @@ class WatchEngine:
         self.cond_cfg = dict(self.config.get("conditions") or {})
         self.journal = journal
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
+        self.reconcile_waiting_for_open_schedules()
 
     def now(self) -> datetime:
         stamp = self._now()
@@ -185,6 +186,32 @@ class WatchEngine:
         item.last_updated = self.now().isoformat()
         self.store.save(item)
         return item
+
+    def reconcile_waiting_for_open_schedules(self) -> list[WatchItem]:
+        """Rewrite persisted WAITING_FOR_OPEN next_review_at onto the next regular open.
+
+        Thesis, invalidation, sleeve, score, expiry, and evidence are left alone.
+        A timestamp correction is not a Terra event.
+        """
+        assert_execution_disabled()
+        target = next_regular_open_at(self.now())
+        migrated: list[WatchItem] = []
+        for item in self.store.active():
+            if item.status is not WatchStatus.WAITING_FOR_OPEN:
+                continue
+            current = parse_iso(item.next_review_at)
+            if _same_review_instant(current, target):
+                continue
+            item.next_review_at = target.isoformat()
+            item.last_updated = self.now().isoformat()
+            self.store.save(item)
+            self._log(
+                "WATCH_SCHEDULE_RECONCILED",
+                item,
+                extra={"reason": "waiting_for_open_next_regular_open", "ai_spent": False},
+            )
+            migrated.append(item)
+        return migrated
 
     def promote_waiting_for_open(self, *, regular_hours_open: bool) -> list[WatchItem]:
         """At the open, KEEP_WATCHING items become WATCH. Conditional buy plans stay until evaluated."""
@@ -355,6 +382,17 @@ class WatchEngine:
         if extra:
             payload.update(extra)
         append_jsonl(payload, self.journal)
+
+
+def _same_review_instant(left: datetime | None, right: datetime) -> bool:
+    if left is None:
+        return False
+    try:
+        a = left.astimezone(timezone.utc).replace(microsecond=0)
+        b = right.astimezone(timezone.utc).replace(microsecond=0)
+    except (ValueError, OverflowError, OSError):
+        return False
+    return a == b
 
 
 def _watch_retry_hours(sleeve: str | None) -> float:

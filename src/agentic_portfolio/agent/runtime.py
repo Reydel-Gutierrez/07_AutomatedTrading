@@ -193,6 +193,7 @@ class AgentRuntime:
             services.budget_exhausted = budget_exhausted or services.budget_exhausted
             services.ai_allowed = ai_allowed and services.ai_allowed
         self.services = services
+        self.services.watch.reconcile_waiting_for_open_schedules()
         self.orchestrator = JobOrchestrator(
             self.base,
             config=self.config,
