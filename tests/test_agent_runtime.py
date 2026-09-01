@@ -12,7 +12,7 @@ from agentic_portfolio.adapters.portfolio_facts import LiveDataUnavailable, Stat
 from agentic_portfolio.adapters.readonly_runtime import ReadonlyBrokerRuntime
 from agentic_portfolio.agent.activity import read_activity
 from agentic_portfolio.agent.connection import ConnectionManager
-from agentic_portfolio.agent.handlers import AgentServices, build_handlers
+from agentic_portfolio.agent.handlers import AgentServices, build_handlers, _validate_plans
 from agentic_portfolio.agent.heartbeat import load_health
 from agentic_portfolio.agent.jobs import catalog, specs_by_name
 from agentic_portfolio.agent.orchestrator import JobOrchestrator
@@ -26,6 +26,7 @@ from agentic_portfolio.live_approval import (
     LiveApprovalStatus,
     LiveApprovalStore,
 )
+from agentic_portfolio.live_approval.types import LiveApproval
 from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode
 from agentic_portfolio.watch import ConditionalPlan, ReassessTrigger, WatchEngine, WatchItem, WatchStatus, WatchStore
@@ -635,6 +636,160 @@ def test_normalized_liquid_quote_no_longer_fails_liquidity(tmp_path):
     assert hd.LIVE_ORDER_PLACEMENT is False
     assert LIVE_ORDER_PLACEMENT is False
     assert row.get("placement_attempted") is False
+
+
+def _liquid_hd_quotes(_tickers=None):
+    return watch_quotes_from_payload(_mcp_quote_payload(volume="100000"))
+
+
+def test_duplicate_validate_plans_creates_one_hd_pending_approval(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes)
+    ctx = {"session": classify_market_phase(rth), "job": "MARKET_OPEN_CONDITIONAL_VALIDATE"}
+
+    first = _validate_plans(services, ctx)
+    second = _validate_plans(services, ctx, job="WATCH_CONDITION_MONITOR")
+
+    pending = services.approval_store.pending()
+    assert first["approvals_created"] == 1
+    assert second["approvals_created"] == 0
+    assert second["approvals_reused"] == 1
+    assert len(pending) == 1
+    assert pending[0].ticker == "HD"
+    assert pending[0].status is LiveApprovalStatus.PENDING
+    assert pending[0].placed_order is False
+    assert pending[0].LIVE_ORDER_PLACEMENT is False
+    hd = services.watch_store.by_ticker("HD")
+    assert hd.status is WatchStatus.APPROVAL_REQUIRED
+    assert hd.approval_id == pending[0].approval_id
+    assert LIVE_ORDER_PLACEMENT is False
+    assert first.get("placement_attempted") is False
+    assert second.get("placement_attempted") is False
+
+
+def test_validate_plans_restart_reuses_same_hd_pending_approval(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes)
+    ctx = {"session": classify_market_phase(rth), "job": "MARKET_OPEN_CONDITIONAL_VALIDATE"}
+    first = _validate_plans(services, ctx)
+    original = services.approval_store.pending()[0]
+
+    restarted = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes)
+    retry = _validate_plans(restarted, ctx, job="WATCH_CONDITION_MONITOR")
+
+    pending = restarted.approval_store.pending()
+    assert first["approvals_created"] == 1
+    assert retry["approvals_created"] == 0
+    assert len(pending) == 1
+    assert pending[0].approval_id == original.approval_id
+    hd = restarted.watch_store.by_ticker("HD")
+    assert hd.approval_id == original.approval_id
+    assert hd.status is WatchStatus.APPROVAL_REQUIRED
+    assert pending[0].placed_order is False
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_create_is_idempotent_for_same_watch_action_generation(tmp_path):
+    store = LiveApprovalStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    engine = LiveApprovalEngine(store, journal=tmp_path / "logs" / "approval.jsonl")
+    first = engine.create(ticker="HD", proposed_action="BUY", watch_id="w-hd-pre-fix", current_quote=180.0)
+    second = engine.create(ticker="HD", proposed_action="BUY", watch_id="w-hd-pre-fix", current_quote=181.0)
+    assert first.approval_id == second.approval_id
+    assert len(store.pending()) == 1
+    assert store.pending()[0].current_quote == 180.0
+    assert first.idempotency_key == "w-hd-pre-fix:BUY:0"
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_concurrent_create_and_seeded_duplicates_collapse_to_one_pending(tmp_path):
+    import threading
+
+    store = LiveApprovalStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    engine = LiveApprovalEngine(store, journal=tmp_path / "logs" / "approval.jsonl")
+    results: list = []
+
+    def _worker():
+        results.append(engine.create(ticker="HD", proposed_action="BUY", watch_id="w-hd-pre-fix"))
+
+    threads = [threading.Thread(target=_worker) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert {item.approval_id for item in results} == {results[0].approval_id}
+    assert len(store.pending()) == 1
+
+    older = LiveApproval(
+        approval_id="c97e51c8-27bb-488c-bf03-077932550836",
+        ticker="HD",
+        proposed_action="BUY",
+        status=LiveApprovalStatus.PENDING,
+        watch_id="w-hd-pre-fix",
+        created_at="2026-09-01T14:00:00+00:00",
+        LIVE_ORDER_PLACEMENT=False,
+    )
+    newer = LiveApproval(
+        approval_id="0e9b0fb5-2cb4-45bc-9661-c6a95d41c82f",
+        ticker="HD",
+        proposed_action="BUY",
+        status=LiveApprovalStatus.PENDING,
+        watch_id="w-hd-pre-fix",
+        created_at="2026-09-01T14:00:01+00:00",
+        LIVE_ORDER_PLACEMENT=False,
+    )
+    dup_root = tmp_path / "dup"
+    dup_store = LiveApprovalStore(dup_root, runtime_mode=RuntimeMode.LIVE)
+    dup_engine = LiveApprovalEngine(dup_store, journal=dup_root / "logs" / "approval.jsonl")
+    dup_store.save(older)
+    dup_store.save(newer)
+    kept, created = dup_engine.get_or_create(
+        ticker="HD",
+        proposed_action="BUY",
+        watch_id="w-hd-pre-fix",
+        preferred_approval_id="c97e51c8-27bb-488c-bf03-077932550836",
+    )
+    assert created is False
+    assert kept.approval_id == older.approval_id
+    pending = dup_store.pending()
+    assert len(pending) == 1
+    extra = dup_store.get(newer.approval_id)
+    assert extra.status is LiveApprovalStatus.SUPERSEDED
+    assert extra.superseded_by == older.approval_id
+    assert extra.placed_order is False
+    with pytest.raises(Exception):
+        dup_engine.record_decision(extra.approval_id, LiveApprovalStatus.APPROVED)
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_rejected_watch_can_open_next_generation_pending(tmp_path):
+    store = LiveApprovalStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    engine = LiveApprovalEngine(store, journal=tmp_path / "logs" / "approval.jsonl")
+    first = engine.create(ticker="HD", proposed_action="BUY", watch_id="w-hd-pre-fix")
+    engine.record_decision(first.approval_id, LiveApprovalStatus.REJECTED, note="human")
+    second = engine.create(ticker="HD", proposed_action="BUY", watch_id="w-hd-pre-fix")
+    assert second.approval_id != first.approval_id
+    assert second.generation == 1
+    assert second.idempotency_key == "w-hd-pre-fix:BUY:1"
+    assert len(store.pending()) == 1
+    assert store.get(first.approval_id).status is LiveApprovalStatus.REJECTED
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_duplicate_validators_still_honor_risk_gate(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes)
+    services.risk_fn = lambda *_args, **_kwargs: False
+    ctx = {"session": classify_market_phase(rth)}
+    first = _validate_plans(services, ctx)
+    second = _validate_plans(services, ctx, job="WATCH_CONDITION_MONITOR")
+    assert first["approvals_created"] == 0
+    assert second["approvals_created"] == 0
+    assert services.approval_store.pending() == []
+    assert services.watch_store.by_ticker("HD").status is not WatchStatus.APPROVAL_REQUIRED
+    assert LIVE_ORDER_PLACEMENT is False
 
 
 def test_normalized_quote_without_volume_still_fails_closed(tmp_path):

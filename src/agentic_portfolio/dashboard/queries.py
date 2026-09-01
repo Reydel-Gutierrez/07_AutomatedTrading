@@ -521,7 +521,7 @@ def _live_approval_row(item: LiveApproval) -> dict[str, Any]:
         "expires_at": item.expires_at,
         "decided_at": item.decided_at,
         "expiry_reasons": ["expired"] if stale else [],
-        "superseded_by": None,
+        "superseded_by": item.superseded_by,
         "pending": pending,
         "stale": stale,
         "packet_kind": "live",

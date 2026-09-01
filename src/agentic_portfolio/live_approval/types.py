@@ -20,6 +20,7 @@ class LiveApprovalStatus(str, Enum):
     REJECTED = "REJECTED"
     EXPIRED = "EXPIRED"
     CANCELLED = "CANCELLED"
+    SUPERSEDED = "SUPERSEDED"
 
 
 OPEN_LIVE = {LiveApprovalStatus.PENDING}
@@ -35,6 +36,7 @@ TERMINAL_LIVE = {
     LiveApprovalStatus.REJECTED,
     LiveApprovalStatus.EXPIRED,
     LiveApprovalStatus.CANCELLED,
+    LiveApprovalStatus.SUPERSEDED,
     LiveApprovalStatus.EXECUTED,
 }
 
@@ -88,6 +90,9 @@ class LiveApproval:
     base_case: str | None = None
     bear_case: str | None = None
     expected_order_type: str | None = None
+    idempotency_key: str | None = None
+    generation: int = 0
+    superseded_by: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = to_dict(self)
@@ -103,4 +108,21 @@ def live_approval_from_dict(raw: dict[str, Any]) -> LiveApproval:
     proposed_action = str(data.pop("proposed_action"))
     allowed = LiveApproval.__dataclass_fields__.keys() - {"approval_id", "ticker", "proposed_action", "status"}
     kwargs = {key: data[key] for key in allowed if key in data}
+    if "generation" in kwargs:
+        try:
+            kwargs["generation"] = int(kwargs["generation"] or 0)
+        except (TypeError, ValueError):
+            kwargs["generation"] = 0
     return LiveApproval(approval_id=approval_id, ticker=ticker, proposed_action=proposed_action, status=status, **kwargs)
+
+
+def approval_idempotency_key(
+    *,
+    watch_id: str | None,
+    ticker: str,
+    proposed_action: str,
+    generation: int,
+) -> str:
+    """Stable identity for one actionable watch/proposal generation."""
+    identity = str(watch_id or "").strip() or f"ticker:{str(ticker).upper()}"
+    return f"{identity}:{str(proposed_action).upper()}:{int(generation)}"

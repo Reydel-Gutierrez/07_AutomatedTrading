@@ -407,6 +407,18 @@ Execution flags unchanged: `auto_execution=false`, `live_trade_actions_allowed=f
 
 ---
 
+## 2026-09-01 — One PENDING live approval per watch/proposal
+
+**Type:** `approval`
+
+`WATCH_CONDITION_MONITOR` and `MARKET_OPEN_CONDITIONAL_VALIDATE` both call `_validate_plans()` every 15 minutes. After HD liquidity cleared, both jobs created a new LIVE PENDING BUY packet because `LiveApprovalEngine.create()` always minted a UUID. Approval create/store now keys on watch/proposal/action generation, reuses the active PENDING packet, and supersedes extras in place. Does not approve, place, or weaken Risk Gate.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Execution flags unchanged: `auto_execution=false`, `live_trade_actions_allowed=false`, `LIVE_ORDER_PLACEMENT=false`.
+
+---
+
 ## Template
 
 ```

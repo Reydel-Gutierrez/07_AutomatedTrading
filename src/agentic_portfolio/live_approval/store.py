@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from agentic_portfolio.agent.persist import atomic_write_json, read_json
+from agentic_portfolio.ai.locks import FileLock
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.runtime import RuntimeMode, get_active_runtime
 from agentic_portfolio.live_approval.types import LiveApproval, live_approval_from_dict
@@ -28,7 +29,9 @@ class LiveApprovalStore:
             self.runtime_mode = RuntimeMode(self.runtime_mode)
         self.root = live_approval_dir(self.base, mode=self.runtime_mode)
         self.items_dir = self.root / "items"
+        self.lock_dir = self.root / "locks"
         self.items_dir.mkdir(parents=True, exist_ok=True)
+        self.lock_dir.mkdir(parents=True, exist_ok=True)
         self._index_path = self.root / "index.json"
         self._index = read_json(self._index_path, {"by_id": {}, "by_ticker": {}, "by_status": {}})
 
@@ -77,3 +80,26 @@ class LiveApprovalStore:
         from agentic_portfolio.live_approval.types import LiveApprovalStatus
 
         return [item for item in self.all() if item.status == LiveApprovalStatus.PENDING]
+
+    def lock_for(self, ticker: str, proposed_action: str) -> FileLock:
+        safe = f"{str(ticker).upper()}_{str(proposed_action).upper()}".replace(":", "_")
+        return FileLock(self.lock_dir / f"{safe}.lock")
+
+    def pending_for(
+        self,
+        *,
+        ticker: str,
+        proposed_action: str,
+        watch_id: str | None = None,
+    ) -> list[LiveApproval]:
+        ticker_u = str(ticker).upper()
+        action_u = str(proposed_action).upper()
+        rows = [
+            item
+            for item in self.pending()
+            if item.ticker == ticker_u and str(item.proposed_action).upper() == action_u
+        ]
+        if not watch_id:
+            return rows
+        watched = [item for item in rows if item.watch_id == watch_id]
+        return watched or rows

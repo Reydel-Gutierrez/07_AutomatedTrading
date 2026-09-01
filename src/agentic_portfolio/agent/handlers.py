@@ -532,14 +532,24 @@ def _watch_conditions(services: AgentServices, ctx: dict[str, Any]) -> dict[str,
 def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MARKET_OPEN_CONDITIONAL_VALIDATE") -> dict[str, Any]:
     session = _session(ctx)
     created = 0
+    reused = 0
     failed = 0
-    skipped = 0
     if not session.regular_hours_open:
         return _ok(job, skipped="off_hours_liquidity_not_executable", create_approval=False)
     tickers = [item.ticker for item in services.watch_store.active()]
     quotes = _quotes_for(services, tickers)
     for item in services.watch_store.active():
         if item.conditional_plan is None and item.status not in {WatchStatus.WAITING_FOR_OPEN, WatchStatus.READY_FOR_RISK_GATE, WatchStatus.WATCH}:
+            continue
+        existing = services.approvals.canonical_pending(
+            ticker=item.ticker,
+            proposed_action="BUY",
+            watch_id=item.watch_id,
+            preferred_approval_id=item.approval_id,
+        )
+        if existing is not None:
+            _bind_watch_approval(services, item, existing, created=False)
+            reused += 1
             continue
         quote = quotes.get(item.ticker) or {}
         price = quote.get("price") or quote.get("last")
@@ -562,7 +572,7 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
                 log_activity(services.root, "RISK_GATE_REJECTED", ticker=item.ticker, watch_id=item.watch_id)
             log_activity(services.root, "WATCH_CONDITION_TRIGGERED", ticker=item.ticker, ok=False, reason=result.get("reason"))
             continue
-        approval = services.approvals.create(
+        approval, is_new = services.approvals.get_or_create(
             ticker=item.ticker,
             proposed_action="BUY",
             proposed_dollar_amount=quote.get("proposed_dollar_amount"),
@@ -575,20 +585,34 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
             risk_gate_result={"verdict": "PASS"},
             portfolio_impact={"cash_check": True},
             watch_id=item.watch_id,
+            preferred_approval_id=item.approval_id,
         )
-        services.watch.set_status(item, WatchStatus.APPROVAL_REQUIRED, reason="approval_created")
-        item.approval_id = approval.approval_id
+        _bind_watch_approval(services, item, approval, created=is_new)
+        if is_new:
+            created += 1
+        else:
+            reused += 1
+    return _ok(job, approvals_created=created, approvals_reused=reused, failed=failed, executable_liquidity=True)
+
+
+def _bind_watch_approval(services: AgentServices, item, approval, *, created: bool) -> None:
+    changed = item.approval_id != approval.approval_id or item.status is not WatchStatus.APPROVAL_REQUIRED
+    item.approval_id = approval.approval_id
+    if item.status is not WatchStatus.APPROVAL_REQUIRED:
+        services.watch.set_status(item, WatchStatus.APPROVAL_REQUIRED, reason="approval_created" if created else "approval_reused")
+    elif changed:
         services.watch_store.save(item)
-        services.notify.emit(
-            NotificationKind.APPROVAL_REQUIRED,
-            title=f"TRADE APPROVAL REQUIRED — {item.ticker}",
-            body=f"{item.ticker} is ready for human approval. Approving does not place an order.",
-            payload={"approval_id": approval.approval_id, "ticker": item.ticker},
-        )
-        log_activity(services.root, "APPROVAL_CREATED", ticker=item.ticker, approval_id=approval.approval_id)
-        created += 1
-        skipped += 0
-    return _ok(job, approvals_created=created, failed=failed, executable_liquidity=True)
+    if not created:
+        if changed:
+            log_activity(services.root, "APPROVAL_REUSED", ticker=item.ticker, approval_id=approval.approval_id, watch_id=item.watch_id)
+        return
+    services.notify.emit(
+        NotificationKind.APPROVAL_REQUIRED,
+        title=f"TRADE APPROVAL REQUIRED — {item.ticker}",
+        body=f"{item.ticker} is ready for human approval. Approving does not place an order.",
+        payload={"approval_id": approval.approval_id, "ticker": item.ticker},
+    )
+    log_activity(services.root, "APPROVAL_CREATED", ticker=item.ticker, approval_id=approval.approval_id)
 
 
 def _risk_monitor(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
