@@ -849,11 +849,67 @@ def test_missing_watch_sizing_fails_closed_and_does_not_invent_amount(tmp_path):
     row = _validate_plans(services, {"session": classify_market_phase(rth)})
     assert row["approvals_created"] == 0
     assert services.approval_store.pending() == []
-    assert services.watch_store.by_ticker("HD").status is not WatchStatus.APPROVAL_REQUIRED
+    hd = services.watch_store.by_ticker("HD")
+    assert hd.status is WatchStatus.WATCH
+    assert hd.status is not WatchStatus.READY_FOR_RISK_GATE
+    assert hd.status is not WatchStatus.APPROVAL_REQUIRED
+    assert MISSING_ORDER_SIZING in (hd.reasons or [])
     reasons = [item.get("reason") for item in read_activity(tmp_path)]
     assert MISSING_ORDER_SIZING in reasons
     assert LIVE_ORDER_PLACEMENT is False
     assert row.get("placement_attempted") is False
+
+
+def test_missing_sizing_leaves_watch_not_ready_for_risk_gate_and_honors_next_review(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+    services = _services(tmp_path, now=lambda: rth, quotes=_liquid_hd_quotes, last_context=portfolio_ctx(500.0))
+    ctx = {"session": classify_market_phase(rth)}
+
+    first = _validate_plans(services, ctx)
+    hd = services.watch_store.by_ticker("HD")
+    assert first["approvals_created"] == 0
+    assert first["failed"] == 1
+    assert services.approval_store.pending() == []
+    assert hd.status is WatchStatus.WATCH
+    assert hd.status is not WatchStatus.READY_FOR_RISK_GATE
+    assert MISSING_ORDER_SIZING in (hd.reasons or [])
+    nxt = parse_iso(hd.next_review_at)
+    assert nxt is not None
+    assert nxt > rth
+    hours = (nxt - rth).total_seconds() / 3600.0
+    assert 40.0 <= hours <= 56.0
+    missing_events = [item for item in read_activity(tmp_path) if item.get("reason") == MISSING_ORDER_SIZING]
+    assert len(missing_events) == 1
+    first_review = hd.next_review_at
+
+    second = _validate_plans(services, ctx, job="WATCH_CONDITION_MONITOR")
+    again = services.watch_store.by_ticker("HD")
+    assert second["approvals_created"] == 0
+    assert second["failed"] == 0
+    assert services.approval_store.pending() == []
+    assert again.status is WatchStatus.WATCH
+    assert again.status is not WatchStatus.READY_FOR_RISK_GATE
+    assert again.next_review_at == first_review
+    assert [item for item in read_activity(tmp_path) if item.get("reason") == MISSING_ORDER_SIZING] == missing_events
+    assert LIVE_ORDER_PLACEMENT is False
+    assert first.get("placement_attempted") is False
+    assert second.get("placement_attempted") is False
+
+
+def test_condition_monitor_skips_future_watch_but_not_intrasession_waits(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    store = _persist_waiting_for_open(tmp_path, next_review="2026-09-03T04:11:00+00:00", plan=True)
+    engine = WatchEngine(store, now_fn=lambda: rth)
+    hd = store.by_ticker("HD")
+    engine.set_status(hd, WatchStatus.WATCH, reason="keep_watching")
+    assert engine.due_for_condition_monitor(store.by_ticker("HD")) is False
+    engine.set_status(hd, WatchStatus.WAITING_FOR_LIQUIDITY, reason="conditions_failed:liquidity")
+    assert engine.due_for_condition_monitor(store.by_ticker("HD")) is True
+    engine.set_status(hd, WatchStatus.READY_FOR_RISK_GATE, reason="conditions_passed")
+    assert engine.due_for_condition_monitor(store.by_ticker("HD")) is True
+    engine.set_status(hd, WatchStatus.WAITING_FOR_OPEN, reason="off_hours")
+    assert engine.due_for_condition_monitor(store.by_ticker("HD")) is True
 
 
 def test_placement_false_at_watch_true_at_approval_uses_current_execution_context(tmp_path, monkeypatch):

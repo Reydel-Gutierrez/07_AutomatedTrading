@@ -583,6 +583,8 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
     for item in services.watch_store.active():
         if item.conditional_plan is None and item.status not in {WatchStatus.WAITING_FOR_OPEN, WatchStatus.READY_FOR_RISK_GATE, WatchStatus.WATCH}:
             continue
+        if not services.watch.due_for_condition_monitor(item):
+            continue
         quote = quotes.get(item.ticker) or {}
         notional, alloc_pct = sizing_from_watch(item)
         dollars, pct, sizing_error = resolve_order_sizing(
@@ -596,20 +598,14 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
             watch_id=item.watch_id,
             preferred_approval_id=item.approval_id,
         )
-        if existing is not None and pending_is_reusable(existing, dollars=dollars, placement_enabled=placement):
+        if (
+            dollars is not None
+            and existing is not None
+            and pending_is_reusable(existing, dollars=dollars, placement_enabled=placement)
+        ):
             _bind_watch_approval(services, item, existing, created=False)
             reused += 1
             continue
-        if existing is not None:
-            services.approvals.retire_pending(existing, reason="malformed_or_stale_execution_context")
-            log_activity(
-                services.root,
-                "APPROVAL_SUPERSEDED",
-                ticker=item.ticker,
-                approval_id=existing.approval_id,
-                watch_id=item.watch_id,
-                reason="malformed_or_stale_execution_context",
-            )
         price = quote.get("price") or quote.get("last")
         spread = quote.get("spread_bps")
         volume = quote.get("dollar_volume")
@@ -641,7 +637,18 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
                 reason=MISSING_ORDER_SIZING,
                 create_approval=False,
             )
+            services.watch.set_status(item, WatchStatus.WATCH, reason=MISSING_ORDER_SIZING)
             continue
+        if existing is not None:
+            services.approvals.retire_pending(existing, reason="malformed_or_stale_execution_context")
+            log_activity(
+                services.root,
+                "APPROVAL_SUPERSEDED",
+                ticker=item.ticker,
+                approval_id=existing.approval_id,
+                watch_id=item.watch_id,
+                reason="malformed_or_stale_execution_context",
+            )
         flags = snapshot_execution_flags(placement_enabled=placement)
         ctx_obj = services.last_context
         impact = {

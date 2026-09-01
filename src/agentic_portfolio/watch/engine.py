@@ -227,6 +227,27 @@ class WatchEngine:
         self.store.save(item)
         return item
 
+    def due_for_condition_monitor(self, item: WatchItem) -> bool:
+        """WATCH honors next_review_at. Intra-session waits are monitored every tick.
+
+        WAITING_FOR_OPEN / WAITING_FOR_* / READY_FOR_RISK_GATE / APPROVAL_REQUIRED
+        are market-condition (or approval-binding) states. A future sleeve
+        WATCH stamp must not be skipped for those, and a WATCH item must not be
+        reprocessed by the 15-minute validator until next_review_at.
+        """
+        if item.status is not WatchStatus.WATCH:
+            return True
+        due = parse_iso(item.next_review_at)
+        if due is None:
+            return True
+        now = self.now()
+        if due.tzinfo is None:
+            due = due.replace(tzinfo=timezone.utc)
+        try:
+            return now >= due.astimezone(timezone.utc)
+        except (ValueError, OverflowError, OSError):
+            return True
+
     def _review_datetime(
         self,
         status: WatchStatus,
