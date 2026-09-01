@@ -25,7 +25,8 @@
     "entry_approach_pct": 0.015,
     "ai_cooldown_minutes": 180,
     "thesis_ttl_hours": 168,
-    "stale_after_hours": 336
+    "stale_after_hours": 336,
+    "intrasession_retry_minutes": 15
   },
   "conditions": {
     "max_spread_bps": 50.0,

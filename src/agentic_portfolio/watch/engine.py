@@ -12,13 +12,14 @@ from typing import Any, Mapping
 from uuid import uuid4
 
 from agentic_portfolio.agent.safety import assert_execution_disabled
-from agentic_portfolio.calendar import next_regular_open_at
+from agentic_portfolio.calendar import NyseEquityCalendar, is_regular_hours, next_regular_open_at
 from agentic_portfolio.journal import append_jsonl
 from agentic_portfolio.policy import load_agent_config, load_research_config
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode
 from agentic_portfolio.watch.store import WatchStore
 from agentic_portfolio.watch.types import (
     ACTIVE_WATCH,
+    TERMINAL_WATCH,
     ConditionalPlan,
     ReassessTrigger,
     WatchItem,
@@ -36,6 +37,19 @@ AI_REASSESS_TRIGGERS = {
     ReassessTrigger.ENTRY_APPROACHED,
     ReassessTrigger.RISK_STATE_CHANGE,
     ReassessTrigger.MANUAL,
+}
+
+# Conditional waits retry inside the session. They must not inherit a sleeve WATCH interval.
+INTRASESSION_WAIT = {
+    WatchStatus.WAITING_FOR_PRICE,
+    WatchStatus.WAITING_FOR_LIQUIDITY,
+    WatchStatus.WAITING_FOR_CATALYST,
+    WatchStatus.READY_FOR_RISK_GATE,
+}
+SCHEDULE_ON_STATUS = INTRASESSION_WAIT | {
+    WatchStatus.WAITING_FOR_OPEN,
+    WatchStatus.WATCH,
+    WatchStatus.APPROVAL_REQUIRED,
 }
 
 
@@ -173,19 +187,50 @@ class WatchEngine:
         self,
         item: WatchItem,
         *,
-        waiting_for_open: bool,
+        waiting_for_open: bool = False,
         sleeve: str | None = None,
     ) -> WatchItem:
-        """WAITING_FOR_OPEN → next regular open. WATCH → sleeve interval. Clock ticks do not spend Terra."""
-        if waiting_for_open or item.status is WatchStatus.WAITING_FOR_OPEN:
-            nxt = next_regular_open_at(self.now())
-            item.next_review_at = nxt.isoformat()
-        else:
-            hours = _watch_retry_hours(sleeve or item.sleeve)
-            item.next_review_at = (self.now() + timedelta(hours=hours)).isoformat()
+        """Bind next_review_at to the current status. Clock ticks do not spend Terra."""
+        target = self._review_datetime(item.status, sleeve or item.sleeve, waiting_for_open=waiting_for_open)
+        if target is not None:
+            item.next_review_at = target.isoformat()
         item.last_updated = self.now().isoformat()
         self.store.save(item)
         return item
+
+    def _review_datetime(
+        self,
+        status: WatchStatus,
+        sleeve: str | None,
+        *,
+        waiting_for_open: bool = False,
+    ) -> datetime | None:
+        if waiting_for_open or status is WatchStatus.WAITING_FOR_OPEN:
+            return next_regular_open_at(self.now())
+        if status in INTRASESSION_WAIT or status is WatchStatus.APPROVAL_REQUIRED:
+            return self._intrasession_retry_at()
+        if status is WatchStatus.WATCH:
+            return self.now() + timedelta(hours=_watch_retry_hours(sleeve))
+        if status in TERMINAL_WATCH:
+            return None
+        return None
+
+    def _intrasession_retry_at(self) -> datetime:
+        """Retry liquidity/price/catalyst inside RTH; otherwise the next regular open.
+
+        Cadence matches WATCH_CONDITION_MONITOR (15 minutes). Deterministic quote
+        checks only — not a Terra event.
+        """
+        minutes = float(self.watch_cfg.get("intrasession_retry_minutes") or 15)
+        proposed = self.now() + timedelta(minutes=minutes)
+        if is_regular_hours(proposed):
+            return proposed
+        cal = NyseEquityCalendar()
+        nxt = cal.next_session(self.now())
+        if nxt is None:
+            return next_regular_open_at(self.now())
+        open_local = datetime.combine(nxt.session_date, nxt.regular_open, tzinfo=cal.tz)
+        return open_local.astimezone(timezone.utc)
 
     def reconcile_waiting_for_open_schedules(self) -> list[WatchItem]:
         """Rewrite persisted WAITING_FOR_OPEN next_review_at onto the next regular open.
@@ -194,10 +239,14 @@ class WatchEngine:
         A timestamp correction is not a Terra event.
         """
         assert_execution_disabled()
-        target = next_regular_open_at(self.now())
         migrated: list[WatchItem] = []
         for item in self.store.active():
-            if item.status is not WatchStatus.WAITING_FOR_OPEN:
+            if item.status is WatchStatus.WATCH:
+                continue
+            if item.status not in SCHEDULE_ON_STATUS:
+                continue
+            target = self._review_datetime(item.status, item.sleeve)
+            if target is None:
                 continue
             current = parse_iso(item.next_review_at)
             if _same_review_instant(current, target):
@@ -208,7 +257,7 @@ class WatchEngine:
             self._log(
                 "WATCH_SCHEDULE_RECONCILED",
                 item,
-                extra={"reason": "waiting_for_open_next_regular_open", "ai_spent": False},
+                extra={"reason": "status_next_review", "ai_spent": False},
             )
             migrated.append(item)
         return migrated
@@ -224,7 +273,6 @@ class WatchEngine:
             if item.conditional_plan is not None:
                 continue
             self.set_status(item, WatchStatus.WATCH, reason="regular_session_open")
-            self.schedule_review(item, waiting_for_open=False, sleeve=item.sleeve)
             promoted.append(item)
         return promoted
 
@@ -313,7 +361,10 @@ class WatchEngine:
         item.last_updated = self.now().isoformat()
         if reason:
             item.reasons = list(dict.fromkeys(list(item.reasons) + [reason]))
-        self.store.save(item)
+        if status in SCHEDULE_ON_STATUS:
+            self.schedule_review(item, sleeve=item.sleeve)
+        else:
+            self.store.save(item)
         self._log("WATCH_STATUS", item, extra={"reason": reason})
         return item
 

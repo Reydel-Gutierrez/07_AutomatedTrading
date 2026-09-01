@@ -28,7 +28,7 @@ from agentic_portfolio.live_approval import (
 )
 from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode
-from agentic_portfolio.watch import ReassessTrigger, WatchEngine, WatchItem, WatchStatus, WatchStore
+from agentic_portfolio.watch import ConditionalPlan, ReassessTrigger, WatchEngine, WatchItem, WatchStatus, WatchStore
 from agentic_portfolio.watch.types import parse_iso
 
 FRIDAY_OPEN = datetime(2026, 8, 28, 10, 0, tzinfo=EASTERN)
@@ -234,6 +234,7 @@ def _persist_waiting_for_open(
     last_updated="2026-09-01T08:00:00-04:00",
     watch_id="w-hd-pre-fix",
     status=WatchStatus.WAITING_FOR_OPEN,
+    plan: bool = False,
 ) -> WatchStore:
     store = WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
     item = WatchItem(
@@ -254,6 +255,16 @@ def _persist_waiting_for_open(
         last_price=180.0,
         LIVE_ORDER_PLACEMENT=False,
     )
+    if plan:
+        item.conditional_plan = ConditionalPlan(
+            max_price=181.8,
+            max_spread_bps=50.0,
+            min_dollar_volume=1_000_000.0,
+            require_no_adverse_catalyst=True,
+            require_cash_available=True,
+            require_risk_gate_pass=True,
+            require_regular_hours_quotes=True,
+        )
     store.save(item)
     return store
 
@@ -384,6 +395,93 @@ def test_waiting_for_open_migration_is_idempotent_and_skips_correct_rows(tmp_pat
     assert third.next_review_at == first_review
     assert third.last_updated == first_updated
     assert third.last_ai_at == "2026-08-31T16:00:00+00:00"
+
+
+def test_rth_liquidity_fail_does_not_keep_stale_opportunistic_review(tmp_path):
+    """Production HD: WAITING_FOR_OPEN + Sep 3 stamp → WAITING_FOR_LIQUIDITY cannot keep Sep 3."""
+    from datetime import date
+
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    stale = "2026-09-03T04:11:00+00:00"
+    store = _persist_waiting_for_open(tmp_path, next_review=stale, plan=True)
+    engine = WatchEngine(store, now_fn=lambda: rth)
+    hd = store.by_ticker("HD")
+    hd.status = WatchStatus.WAITING_FOR_OPEN
+    hd.next_review_at = stale
+    store.save(hd)
+
+    result = engine.evaluate_conditions(
+        hd,
+        regular_hours_open=True,
+        price=180.0,
+        spread_bps=10.0,
+        dollar_volume=100_000,
+        adverse_catalyst=False,
+        cash_available=True,
+        risk_pass=True,
+    )
+    assert result["remain"] == WatchStatus.WAITING_FOR_LIQUIDITY.value
+    hd = store.by_ticker("HD")
+    assert hd.status is WatchStatus.WAITING_FOR_LIQUIDITY
+    nxt = parse_iso(hd.next_review_at)
+    assert nxt is not None
+    assert nxt.astimezone(EASTERN).date() != date(2026, 9, 3)
+    hours = (nxt - rth).total_seconds() / 3600.0
+    assert 0 < hours <= 0.5
+    assert hd.sleeve == "OPPORTUNISTIC"
+    assert hd.research_thesis == "keep watching HD"
+    assert hd.expiration == "2026-09-15T00:00:00+00:00"
+    assert hd.last_ai_at == "2026-08-31T16:00:00+00:00"
+    assert hd.LIVE_ORDER_PLACEMENT is False
+    allow, _why = engine.should_spend_ai(
+        hd,
+        context={"ticker": "HD", "thesis": hd.research_thesis, "price": 180.0},
+        triggers=[],
+        ai_allowed=True,
+        budget_exhausted=False,
+    )
+    assert allow is False
+
+
+def test_rth_startup_then_liquidity_fail_clears_stale_sep3(tmp_path):
+    from datetime import date
+
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    stale = "2026-09-03T04:11:00+00:00"
+    _persist_waiting_for_open(tmp_path, next_review=stale, plan=True)
+
+    def quotes(tickers):
+        return {"HD": {"price": 180.0, "spread_bps": 10.0, "dollar_volume": 100_000, "adverse_catalyst": False}}
+
+    services = _services(tmp_path, now=lambda: rth, quotes=quotes)
+    orch = JobOrchestrator(tmp_path, handlers=build_handlers(services), now_fn=lambda: rth)
+    row = orch.run_job("MARKET_OPEN_CONDITIONAL_VALIDATE", now=rth)
+    assert row["approvals_created"] == 0
+    hd = services.watch_store.by_ticker("HD")
+    assert hd.status is WatchStatus.WAITING_FOR_LIQUIDITY
+    nxt = parse_iso(hd.next_review_at)
+    assert nxt.astimezone(EASTERN).date() != date(2026, 9, 3)
+    hours = (nxt - rth).total_seconds() / 3600.0
+    assert 0 < hours <= 0.5
+
+
+def test_conditional_wait_states_schedule_intrasession_not_sleeve_interval(tmp_path):
+    rth = datetime(2026, 9, 1, 10, 0, tzinfo=EASTERN)
+    store = _persist_waiting_for_open(
+        tmp_path,
+        next_review="2026-09-03T04:11:00+00:00",
+        plan=True,
+    )
+    engine = WatchEngine(store, now_fn=lambda: rth)
+    hd = store.by_ticker("HD")
+    hd.next_review_at = "2026-09-03T04:11:00+00:00"
+    engine.set_status(hd, WatchStatus.WAITING_FOR_PRICE, reason="conditions_failed:price")
+    price_hours = (parse_iso(store.by_ticker("HD").next_review_at) - rth).total_seconds() / 3600.0
+    assert 0 < price_hours <= 0.5
+    engine.set_status(hd, WatchStatus.WAITING_FOR_CATALYST, reason="conditions_failed:catalyst")
+    cat_hours = (parse_iso(store.by_ticker("HD").next_review_at) - rth).total_seconds() / 3600.0
+    assert 0 < cat_hours <= 0.5
+    assert store.by_ticker("HD").last_ai_at == "2026-08-31T16:00:00+00:00"
 
 
 def test_market_open_trigger_does_not_spend_ai_without_material_evidence(tmp_path):

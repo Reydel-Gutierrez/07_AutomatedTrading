@@ -395,6 +395,18 @@ Execution flags unchanged: `auto_execution=false`, `live_trade_actions_allowed=f
 
 ---
 
+## 2026-09-01 — Conditional watch transitions must reschedule next_review
+
+**Type:** `watch`
+
+`evaluate_conditions` moved HD `WAITING_FOR_OPEN` → `WAITING_FOR_LIQUIDITY` via `set_status` without writing `next_review_at`, so the pre-fix Opportunistic 48h stamp (`2026-09-03`) survived after the market-open liquidity check. Status changes now schedule atomically: `WAITING_FOR_OPEN` → next regular open; `WAITING_FOR_LIQUIDITY` / `WAITING_FOR_PRICE` / `WAITING_FOR_CATALYST` / `READY_FOR_RISK_GATE` → 15-minute intra-session retry (existing condition-monitor cadence), or the next regular open if that retry would fall outside RTH. Not a Terra event. Sleeve WATCH intervals unchanged. No strategy-threshold, research, approval, or execution changes.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Execution flags unchanged: `auto_execution=false`, `live_trade_actions_allowed=false`, `LIVE_ORDER_PLACEMENT=false`.
+
+---
+
 ## Template
 
 ```
