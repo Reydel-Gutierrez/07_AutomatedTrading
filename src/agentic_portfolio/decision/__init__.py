@@ -1,6 +1,7 @@
 """Investment Thesis + Portfolio Decision. Advisory only; theses stay DRAFT."""
 
 from agentic_portfolio.decision.engine import run_portfolio_decision, run_thesis_and_decision
+from agentic_portfolio.decision.committee import reevaluate_live_core_committee, run_core_committee
 from agentic_portfolio.decision.reasoner import CallableDecisionReasoner, ScriptedDecisionReasoner
 from agentic_portfolio.decision.safety import (
     DECISION_FORBIDDEN_TOOLS,
@@ -30,4 +31,6 @@ __all__ = [
     "assert_no_forbidden_tools",
     "run_portfolio_decision",
     "run_thesis_and_decision",
+    "run_core_committee",
+    "reevaluate_live_core_committee",
 ]

@@ -27,6 +27,7 @@ from agentic_portfolio.ai.store import AIArtifactStore
 from agentic_portfolio.ai.types import BudgetMode, ModelRole
 from agentic_portfolio.context import portfolio_context_from_dict
 from agentic_portfolio.decision.engine import run_portfolio_decision
+from agentic_portfolio.decision.committee import run_core_committee
 from agentic_portfolio.decision.reasoner import DecisionReasoner
 from agentic_portfolio.decision.store import DecisionStore
 from agentic_portfolio.decision.types import GatedAction
@@ -67,6 +68,7 @@ from agentic_portfolio.schemas import (
     PortfolioContext,
     ResearchQueueEntry,
     ResearchQueueStatus,
+    Sleeve,
     ThesisRecord,
 )
 from agentic_portfolio.sleeve_registry import SleeveRegistry
@@ -546,6 +548,9 @@ class ResearchQueueWorker:
             result.rejections += int(row.get("rejected") or 0)
             if row.get("status") in {"FAILED", "DEGRADED"}:
                 result.status = "DEGRADED"
+        committee_row = self._finish_core_committee(context, result)
+        if committee_row is not None:
+            result.details.append(committee_row)
         append_jsonl(
             {
                 "type": "RESEARCH_QUEUE_CYCLE",
@@ -591,7 +596,7 @@ class ResearchQueueWorker:
             stale = not report_is_still_fresh(report, now=self.now()) and report.research_status is ResearchStatus.RESEARCH_COMPLETE
             if same_evidence and not retry_due and not stale:
                 applied = self._apply_report(report, candidate, context, entry, ai_calls=0, duplicate=True)
-                return self._finalize_queue(entry, report, applied, fingerprint, duplicate=True)
+                return self._maybe_finalize(entry, report, applied, fingerprint, duplicate=True)
 
         stamp = self.now()
         try:
@@ -710,7 +715,7 @@ class ResearchQueueWorker:
         if not looks_like_schema_failure_report(report):
             self._persist_ai_research(report, candidate)
         applied = self._apply_report(report, candidate, context, entry, ai_calls=luna_calls + terra_calls, duplicate=False)
-        applied = self._finalize_queue(entry, report, applied, report.evidence_fingerprint or fingerprint, duplicate=False)
+        applied = self._maybe_finalize(entry, report, applied, report.evidence_fingerprint or fingerprint, duplicate=False)
         if report.research_source != "deterministic" and not applied.get("retry_queue"):
             self._notify(
                 NotificationKind.RESEARCH_COMPLETED,
@@ -789,6 +794,13 @@ class ResearchQueueWorker:
                 row["decision"] = "EXISTING_PENDING_APPROVAL"
                 self.candidates.set_status(candidate.candidate_id, CandidateStatus.RESEARCH_COMPLETE)
                 return row
+        if self._core_committee_subject(report, candidate):
+            row["pending_committee"] = True
+            row["decision"] = "PENDING_COMMITTEE"
+            row["queue_id"] = entry.queue_id
+            row["research_id"] = report.research_id
+            row["candidate_id"] = candidate.candidate_id
+            return row
         return self._decide(report, candidate, context, row)
 
     def _decide(
@@ -809,6 +821,7 @@ class ResearchQueueWorker:
                 persist=True,
                 now=self.now(),
                 journal=self.root / "logs" / "thesis_decision.jsonl",
+                committee=False,
             )
         except DecisionValidationError as exc:
             return self._decision_operational_failure(report, row, _named_decision_reason(str(exc)))
@@ -818,12 +831,163 @@ class ResearchQueueWorker:
                 row,
                 _named_decision_reason("; ".join(str(item) for item in decided.validation_errors)),
             )
+        return self._apply_named_decision(report, candidate, context, row, decided)
+
+    def _core_committee_subject(self, report: ResearchReport, candidate: Candidate | None) -> bool:
+        sleeve = report.provisional_sleeve or (candidate.provisional_sleeve if candidate is not None else None)
+        return sleeve is Sleeve.CORE_GROWTH
+
+    def _maybe_finalize(
+        self,
+        entry: ResearchQueueEntry,
+        report: ResearchReport,
+        applied: dict[str, Any],
+        fingerprint: str,
+        *,
+        duplicate: bool,
+    ) -> dict[str, Any]:
+        if applied.get("pending_committee"):
+            self.queue.set_status(
+                entry.queue_id,
+                ResearchQueueStatus.RESEARCHING,
+                claimed_at=self.now().isoformat(),
+                skipped_reason="pending_core_committee",
+                evidence_fingerprint=fingerprint,
+                research_id=report.research_id,
+            )
+            applied["evidence_fingerprint"] = fingerprint
+            applied["duplicate"] = duplicate
+            return applied
+        return self._finalize_queue(entry, report, applied, fingerprint, duplicate=duplicate)
+
+    def run_core_committee(self, context: PortfolioContext, *, trigger: str, force: bool = False, reevaluation: bool = False) -> dict[str, Any]:
+        out = run_core_committee(
+            worker=self,
+            context=context,
+            trigger=trigger,
+            force=force,
+            persist=True,
+            reevaluation=reevaluation,
+        )
+        return out.as_dict()
+
+    def _finish_core_committee(self, context: PortfolioContext, result: PipelineCycleResult) -> dict[str, Any] | None:
+        deferred = [row for row in result.details if row.get("pending_committee")]
+        if not deferred:
+            return None
+        extra = []
+        for row in deferred:
+            report = self.research_store.get(str(row.get("research_id") or ""))
+            if report is not None:
+                extra.append(report)
+        committee = run_core_committee(
+            worker=self,
+            context=context,
+            trigger="new_advance_to_thesis",
+            persist=True,
+            extra_reports=extra,
+        )
+        result.ai_calls += int(committee.ai_calls or 0)
+        result.watches_created += int(committee.watches_created or 0)
+        result.theses_created += int(committee.theses_created or 0)
+        result.proposals_created += int(committee.proposals_created or 0)
+        if committee.status in {"DEGRADED", "BLOCKED", "FAILED"}:
+            result.status = "DEGRADED"
+        by_sym = {str(row.get("symbol") or "").upper(): row for row in committee.symbol_rows}
+        for row in deferred:
+            extra_row = by_sym.get(str(row.get("symbol") or "").upper())
+            if extra_row:
+                for key, value in extra_row.items():
+                    if key == "ai_calls":
+                        row["ai_calls"] = int(row.get("ai_calls") or 0) + int(value or 0)
+                    elif key not in {"status"}:
+                        row[key] = value
+                if extra_row.get("retry_queue"):
+                    row["retry_queue"] = True
+                    row["reason"] = extra_row.get("reason") or committee.reason
+                    row["status"] = extra_row.get("status") or "DEGRADED"
+            elif committee.status in {"DEGRADED", "BLOCKED", "FAILED"}:
+                row["retry_queue"] = True
+                row["reason"] = _named_decision_reason(committee.reason or "no_named_decision")
+                row["status"] = "DEGRADED"
+                row["operational_failure"] = True
+                row["skipped_reason"] = "decision_validation_failure"
+            entry = self.queue.get(str(row.get("queue_id") or "")) or self.queue.latest_for_symbol(row["symbol"])
+            report = self.research_store.get(str(row.get("research_id") or ""))
+            if entry is not None and report is not None:
+                self._finalize_queue(
+                    entry,
+                    report,
+                    row,
+                    str(row.get("evidence_fingerprint") or report.evidence_fingerprint or ""),
+                    duplicate=bool(row.get("duplicate")),
+                )
+        payload = committee.as_dict()
+        payload["status"] = "CORE_COMMITTEE"
+        payload["committee_status"] = committee.status
+        return payload
+
+    def apply_committee_decisions(self, decided, by_symbol: dict[str, Any], context: PortfolioContext) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        failed = bool(decided.validation_errors)
+        if failed:
+            reason = _named_decision_reason("; ".join(str(item) for item in decided.validation_errors))
+            for item in by_symbol.values():
+                report = item.report
+                row = {
+                    "symbol": report.symbol,
+                    "status": "DEGRADED",
+                    "retry_queue": True,
+                    "reason": reason,
+                    "operational_failure": True,
+                    "skipped_reason": "decision_validation_failure",
+                    "watches_created": 0,
+                    "theses_created": 0,
+                    "proposals_created": 0,
+                    "rejected": 0,
+                }
+                rows.append(row)
+            return rows
+        for item in by_symbol.values():
+            report = item.report
+            candidate = item.candidate
+            if candidate is None:
+                candidate = self.candidates.active_for_symbol(report.symbol) or self.candidates.current_for_symbol(report.symbol)
+            row = {
+                "symbol": report.symbol,
+                "status": "OK",
+                "ai_calls": 0,
+                "reports_created": 0,
+                "watches_created": 0,
+                "theses_created": 0,
+                "proposals_created": 0,
+                "rejected": 0,
+            }
+            if candidate is None:
+                row["status"] = "DEGRADED"
+                row["reason"] = "missing_candidate"
+                rows.append(row)
+                continue
+            rows.append(self._apply_named_decision(report, candidate, context, row, decided, committee=True))
+        return rows
+
+    def _apply_named_decision(
+        self,
+        report: ResearchReport,
+        candidate: Candidate,
+        context: PortfolioContext,
+        row: dict[str, Any],
+        decided,
+        *,
+        committee: bool = False,
+    ) -> dict[str, Any]:
         name = next((d for d in decided.decisions if d.symbol.upper() == report.symbol.upper()), None)
         thesis = next((t for t in decided.theses if t.symbol.upper() == report.symbol.upper()), None)
         if name is None:
             return self._decision_operational_failure(report, row, "no_named_decision")
-        row["theses_created"] = len(decided.theses)
-        row["ai_calls"] = int(row.get("ai_calls") or 0) + 1
+        row["theses_created"] = 1 if thesis is not None else 0
+        if not committee:
+            row["ai_calls"] = int(row.get("ai_calls") or 0) + 1
         if name.decision in {Decision.REJECT}:
             row["rejected"] = 1
             self._watch_from_research(candidate, report, thesis=thesis, status=WatchStatus.REJECTED, reason="portfolio_reject")
@@ -838,6 +1002,7 @@ class ResearchQueueWorker:
                 reason=f"decision_{name.decision.value.lower()}",
                 proposed_notional=None,
                 desired_allocation_pct=name.desired_allocation_pct,
+                reconsideration=name.reconsideration,
             )
             row["watches_created"] = 1 if created else 0
             row["decision"] = name.decision.value
@@ -858,6 +1023,7 @@ class ResearchQueueWorker:
                 reason="no_proposed_action",
                 proposed_notional=notional,
                 desired_allocation_pct=alloc_pct,
+                reconsideration=name.reconsideration,
             )
             row["watches_created"] = 1
             row["decision"] = name.decision.value
@@ -874,6 +1040,7 @@ class ResearchQueueWorker:
                 reason="risk_gate_blocked",
                 proposed_notional=notional,
                 desired_allocation_pct=alloc_pct,
+                reconsideration=name.reconsideration,
             )
             row["watches_created"] = 1
             self._notify(
@@ -902,6 +1069,7 @@ class ResearchQueueWorker:
         row["proposals_created"] = 1
         row["decision"] = name.decision.value
         row["approval_id"] = approval.approval_id
+        row["desired_allocation_pct"] = alloc_pct
         row["risk_verdict"] = verdict.value if hasattr(verdict, "value") else str(verdict)
         self.candidates.set_status(candidate.candidate_id, CandidateStatus.RESEARCH_COMPLETE)
         self._notify(
@@ -1049,6 +1217,7 @@ class ResearchQueueWorker:
         approval_id: str | None = None,
         proposed_notional: float | None = None,
         desired_allocation_pct: float | None = None,
+        reconsideration: dict[str, Any] | None = None,
     ) -> WatchItem | None:
         if self.watch is None:
             return None
@@ -1066,6 +1235,11 @@ class ResearchQueueWorker:
                     existing.proposed_notional = proposed_notional
                 if desired_allocation_pct is not None:
                     existing.desired_allocation_pct = desired_allocation_pct
+                if reconsideration:
+                    existing.reconsideration = dict(reconsideration)
+                    existing.reconsideration["not_an_auto_execution_condition"] = True
+                    if reconsideration.get("next_review_at"):
+                        existing.next_review_at = str(reconsideration["next_review_at"])
                 if existing.conditional_plan is not None:
                     self.watch._copy_sizing_onto_plan(existing)
                 self.watch.store.save(existing)
@@ -1127,6 +1301,13 @@ class ResearchQueueWorker:
             item.approval_id = approval_id
         if status is WatchStatus.WATCH:
             self.watch.schedule_review(item, waiting_for_open=False, sleeve=sleeve)
+        if reconsideration:
+            item.reconsideration = dict(reconsideration)
+            item.reconsideration["not_an_auto_execution_condition"] = True
+            if reconsideration.get("next_review_at"):
+                item.next_review_at = str(reconsideration["next_review_at"])
+            if reconsideration.get("next_review_reason"):
+                item.reasons = list(dict.fromkeys(list(item.reasons) + [f"reconsider:{reconsideration.get('next_review_reason')}"]))
         self.watch.store.save(item)
         if existing is None and status is WatchStatus.WATCH:
             self._notify(

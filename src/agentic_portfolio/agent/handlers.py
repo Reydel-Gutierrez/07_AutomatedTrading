@@ -183,6 +183,24 @@ def _research_queue(services: AgentServices, ctx: dict[str, Any]) -> dict[str, A
     return row
 
 
+def _core_committee_review(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
+    job = str(ctx.get("job") or "CORE_COMMITTEE_REVIEW")
+    blocked, reason = _ai_blocked(services)
+    if blocked:
+        log_activity(services.root, "AI_SKIPPED", job=job, reason=reason)
+        return _blocked(job, reason, runtime_continues=True)
+    worker = _pipeline_worker(services)
+    context = services.last_context or worker._context()
+    if context is None:
+        return _blocked(job, "missing_live_context", runtime_continues=True)
+    result = worker.run_core_committee(context, trigger="scheduled_review")
+    result["job"] = job
+    result["placement_attempted"] = False
+    result["auto_execution"] = False
+    result["LIVE_ORDER_PLACEMENT"] = live_placement_enabled()
+    return result
+
+
 def _overnight_thesis(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
     return _pipeline_worker(services).revalidate_watches(job="OVERNIGHT_THESIS", allow_ai=False)
 
@@ -240,6 +258,7 @@ def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any
         "OVERNIGHT_WATCH_MAINTAIN": wrap(lambda ctx: _offhours_maintain(services, ctx, "OVERNIGHT_WATCH_MAINTAIN")),
         "WEEKEND_SESSION_ANALYSIS": wrap(lambda ctx: _session_analysis(services, ctx, "WEEKEND_SESSION_ANALYSIS")),
         "WEEKEND_DEEP_RESEARCH": wrap(lambda ctx: _research_queue(services, ctx)),
+        "CORE_COMMITTEE_REVIEW": wrap(lambda ctx: _core_committee_review(services, ctx)),
         "WEEKEND_PORTFOLIO_REVIEW": wrap(lambda ctx: _portfolio_review(services, ctx, "WEEKEND_PORTFOLIO_REVIEW")),
         "WEEKEND_WATCH_CONSTRUCT": wrap(lambda ctx: _session_analysis(services, ctx, "WEEKEND_WATCH_CONSTRUCT")),
         "WEEKEND_STALE_CLEANUP": wrap(lambda ctx: _watch_cleanup(services, ctx)),

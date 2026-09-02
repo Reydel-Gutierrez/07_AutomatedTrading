@@ -114,6 +114,13 @@ def catalog() -> list[JobSpec]:
         JobSpec("OVERNIGHT_WATCH_MAINTAIN", NIGHT, "interval", every_minutes=120, description="Watchlist maintenance"),
         JobSpec("WEEKEND_SESSION_ANALYSIS", CLOSED_DAYS, "once_per_day", description="Latest completed-session analysis"),
         JobSpec("WEEKEND_DEEP_RESEARCH", CLOSED_DAYS, "once_per_day", allow_ai=True, description="Deeper candidate research"),
+        JobSpec(
+            "CORE_COMMITTEE_REVIEW",
+            POST | CLOSED_DAYS,
+            "once_per_day",
+            allow_ai=True,
+            description="CORE portfolio investment committee: residual allocation among cash, broad-market, and qualified CORE research",
+        ),
         JobSpec("WEEKEND_PORTFOLIO_REVIEW", CLOSED_DAYS, "once_per_day", requires_broker=True, description="Read-only portfolio review"),
         JobSpec("WEEKEND_WATCH_CONSTRUCT", CLOSED_DAYS, "once_per_day", description="Watchlist construction"),
         JobSpec("WEEKEND_STALE_CLEANUP", CLOSED_DAYS, "once_per_day", description="Stale thesis cleanup"),

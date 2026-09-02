@@ -33,6 +33,8 @@ class NameDecision:
     why_preferable_to_alternatives: str | None = None
     thesis_id: str | None = None
     research_id: str | None = None
+    reconsideration: dict[str, Any] | None = None
+    starter_position: bool = False
 
 
 @dataclass
@@ -41,6 +43,7 @@ class PortfolioComparison:
     vs_cash: str | None = None
     vs_spy: str | None = None
     notes: str | None = None
+    ranking_dimensions: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -57,6 +60,7 @@ class DecisionPacket:
     alternatives: list[str] = field(default_factory=lambda: [CASH_SYMBOL, SPY_SYMBOL])
     policy_context: dict[str, Any] = field(default_factory=dict)
     sleeve_exit_requirements: dict[str, Any] = field(default_factory=dict)
+    committee: bool = False
 
 
 @dataclass

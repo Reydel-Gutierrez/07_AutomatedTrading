@@ -125,6 +125,7 @@ class WatchItem:
     reason_for_watch: str | None = None
     proposed_notional: float | None = None
     desired_allocation_pct: float | None = None
+    reconsideration: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         data = to_dict(self)
@@ -220,6 +221,7 @@ def _watch_kwargs(data: dict[str, Any]) -> dict[str, Any]:
         "reason_for_watch",
         "proposed_notional",
         "desired_allocation_pct",
+        "reconsideration",
     }
     out: dict[str, Any] = {}
     for key, value in data.items():

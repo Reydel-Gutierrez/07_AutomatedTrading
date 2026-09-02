@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from agentic_portfolio.decision.reasoner import REASONER_INSTRUCTIONS, DecisionReasoner
+from agentic_portfolio.decision.reasoner import COMMITTEE_REASONER_INSTRUCTIONS, REASONER_INSTRUCTIONS, DecisionReasoner
 from agentic_portfolio.decision.safety import assert_draft, assert_no_forbidden_tools
 from agentic_portfolio.decision.store import DecisionStore
 from agentic_portfolio.decision.types import (
@@ -75,6 +75,7 @@ def run_portfolio_decision(
     now: datetime | None = None,
     config: dict | None = None,
     journal: Path | None = None,
+    committee: bool = False,
 ) -> DecisionResult:
     """Form DRAFT theses, decide, convert to ProposedAction, send to Risk Gate."""
     if not reports:
@@ -86,7 +87,7 @@ def run_portfolio_decision(
     theses = theses or (ThesisRegistry() if persist else None)
     sleeves = sleeves or (SleeveRegistry() if persist else None)
 
-    packet = build_packet(reports, context, theses, cfg, now=now)
+    packet = build_packet(reports, context, theses, cfg, now=now, committee=committee)
     request = DecisionReasoningRequest(
         packet=to_dict(packet),
         reports=list(packet.reports),
@@ -94,7 +95,7 @@ def run_portfolio_decision(
         existing_theses=list(packet.existing_theses),
         policy_context=dict(packet.policy_context),
         alternatives=list(packet.alternatives),
-        instructions=REASONER_INSTRUCTIONS,
+        instructions=COMMITTEE_REASONER_INSTRUCTIONS if committee else REASONER_INSTRUCTIONS,
     )
 
     try:
@@ -191,6 +192,7 @@ def build_packet(
     config: dict,
     *,
     now: datetime | None = None,
+    committee: bool = False,
 ) -> DecisionPacket:
     now = now or datetime.now(timezone.utc)
     policy = load_policy()
@@ -203,6 +205,11 @@ def build_packet(
     if SPY_SYMBOL not in alternatives:
         alternatives.insert(1, SPY_SYMBOL)
     existing = [to_dict(t) for t in theses.all_records()] if theses is not None else []
+    cash_pol = dict(policy.get("cash") or {})
+    cash_yield = getattr(context, "cash_yield", None)
+    if cash_yield is None:
+        cash_yield = cash_pol.get("current_yield")
+    core_alloc = (context.sleeve_allocation_pct or {}).get("CORE_GROWTH")
     return DecisionPacket(
         packet_id=str(uuid4()),
         assembled_at=now.isoformat(),
@@ -212,16 +219,46 @@ def build_packet(
         existing_theses=existing,
         existing_holdings=[to_dict(p) for p in context.positions],
         alternatives=alternatives,
+        committee=committee,
         policy_context={
             "cash_is_valid_alternative": True,
             "spy_is_valid_alternative": True,
             "no_action_always_valid": True,
             "unused_sleeve_capacity_is_not_a_mandate": True,
+            "never_force_deployment": bool(cash_pol.get("never_force_deployment", True)),
             "thesis_remains_draft_until_real_execution": True,
+            "consider_cash_yield_and_opportunity_cost": bool(
+                cash_pol.get("consider_cash_yield_and_opportunity_cost", True)
+            ),
+            "cash_alternative": {
+                "valid_position": True,
+                "never_force_deployment": True,
+                "not_a_free_no_risk_default": True,
+                "may_win": True,
+                "current_yield": cash_yield,
+                "yield_known": cash_yield is not None,
+                "optionality": True,
+                "inflation_and_opportunity_cost": True,
+                "evaluate_expected_return_foregone": True,
+            },
+            "starter_position": {
+                "allowed": True,
+                "not_mandatory": True,
+                "empty_book_does_not_require_deployment": True,
+                "unused_sleeve_capacity_is_not_a_reason_to_buy": True,
+                "size_from_conviction_valuation_construction_and_risk_gate": True,
+            },
+            "committee": committee,
+            "residual_allocation_question": committee,
             "concentration": policy.get("concentration"),
             "sleeves": {k: {"target_percent_of_nav": v.get("target_percent_of_nav")} for k, v in (policy.get("sleeves") or {}).items()},
+            "core_allocation_pct": core_alloc,
+            "sector_exposure": dict(context.sector_allocation_pct or {}),
             "risk_state": context.risk_state.value if context.risk_state else None,
             "daily_risk_halt": context.daily_risk_halt,
+            "buying_power": context.buying_power,
+            "cash": context.cash,
+            "holdings_count": context.holdings_count,
         },
         sleeve_exit_requirements=dict(config.get("exit_policy") or {}),
     )
@@ -380,6 +417,8 @@ def _name_decision(item: dict[str, Any], thesis_by: dict[str, ThesisRecord]) -> 
         why_preferable_to_alternatives=item.get("why_preferable_to_alternatives"),
         thesis_id=thesis.thesis_id if thesis else None,
         research_id=thesis.research_id if thesis else item.get("research_id"),
+        reconsideration=item.get("reconsideration") if isinstance(item.get("reconsideration"), dict) else None,
+        starter_position=bool(item.get("starter_position")),
     )
 
 
@@ -413,11 +452,15 @@ def _assign_proposed_sleeve(
 
 
 def _comparison(raw: dict[str, Any]) -> PortfolioComparison:
+    dims = raw.get("ranking_dimensions") or {}
+    if not isinstance(dims, dict):
+        dims = {}
     return PortfolioComparison(
         ranking=[str(s).upper() for s in (raw.get("ranking") or [])],
         vs_cash=raw.get("vs_cash"),
         vs_spy=raw.get("vs_spy"),
         notes=raw.get("notes"),
+        ranking_dimensions=dims,
     )
 
 
@@ -444,6 +487,10 @@ def _report_brief(report: ResearchReport) -> dict[str, Any]:
         "existing_thesis_id": report.thesis_id,
         "average_volume": fact_value(report, "average_volume"),
         "spread_pct": fact_value(report, "spread_pct"),
+        "is_etf": bool(report.security_class and "ETF" in report.security_class.value),
+        "is_broad_market_etf": bool(
+            report.security_class and report.security_class.value == "BROAD_MARKET_INDEX_ETF"
+        ),
     }
 
 

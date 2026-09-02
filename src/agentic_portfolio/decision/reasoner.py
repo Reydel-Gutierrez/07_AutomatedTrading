@@ -29,6 +29,9 @@ Hard rules:
 - BUY/ADD only if research_conclusion is ADVANCE_TO_THESIS and research_status is RESEARCH_COMPLETE.
 - KEEP_WATCHING research may be WATCH, REJECT, or NO_ACTION — not BUY/ADD.
 - Every researched ADVANCE_TO_THESIS symbol MUST appear exactly once in decisions[]. CASH and SPY rows may coexist. Preferring cash is a named NO_ACTION or WATCH on that symbol. A CASH-only, SPY-only, or CASH+SPY payload that omits the researched ticker is malformed.
+- CORE_GROWTH ownership reasons (quality, durability, valuation, compounding) are thesis drivers, not a requirement for a dramatic near-term event catalyst.
+- Broad-market ETFs/index funds are vehicles for diversified market exposure. Do not invent company-style catalysts or 10-K/earnings theses for them. Valid ETF thesis drivers include diversified market exposure, long-term earnings participation, underlying-market valuation, diversification/liquidity/concentration-reduction benefit, expected return versus excess cash, and suitability as residual CORE exposure.
+- Do not require SPY (or the same broad-market residual) to explain why it is preferable to SPY. That comparison is circular. Compare SPY to cash and to individual names.
 
 Exit policy (no broker stop orders):
 - CORE_GROWTH: thesis-based; mandatory_fixed_stop_loss must be false.
@@ -92,6 +95,31 @@ Return JSON only:
 }
 """
 
+COMMITTEE_REASONER_INSTRUCTIONS = REASONER_INSTRUCTIONS + """
+
+You are the CORE Portfolio Investment Committee. This packet contains the LIVE book and several qualified CORE alternatives together.
+
+The question is residual allocation, not an isolated absolute hurdle:
+Given current LIVE holdings, cash, the long-term CORE mandate, and these qualified alternatives, does deploying some CORE capital improve the portfolio versus retaining cash?
+
+You may choose BUY, ADD, WATCH, HOLD, or NO_ACTION/CASH.
+Cash is always a valid position. Unused CORE sleeve capacity is never a reason to buy. Do not manufacture a trade. Do not buy merely because capital is available. An empty CORE book does not require a starter position.
+
+You may, when evidence supports it, recommend a starter position: a small initial allocation (sized from conviction, valuation, portfolio construction, and Risk Gate) while retaining residual cash. That is allowed, not mandatory, and must not fill the sleeve.
+
+Prefer one coherent committee allocation. Do not independently mint several correlated starter BUYs that would only look acceptable in isolation.
+
+Rank eligible alternatives on dimensions appropriate to CORE when you can:
+expected long-term return, quality/durability, valuation, downside/permanent-capital risk, diversification contribution, concentration/correlation impact, thesis confidence, opportunity cost versus cash, and the broad-market alternative.
+
+Cash is an alternative with yield (if known), optionality, inflation/opportunity cost, and expected return foregone. It is not a free/no-risk default winner. Cash may still win.
+
+For WATCH/NO_ACTION names, include structured reconsideration (reasons to reconsider later, never auto-execution conditions):
+why_lost, lost_to, valuation_condition, thesis_condition, required_evidence_improvement, next_review_reason, next_review_at.
+
+Every ADVANCE_TO_THESIS researched symbol in this packet still needs exactly one decisions[] row.
+"""
+
 
 class DecisionReasoner(Protocol):
     def reason(self, request: DecisionReasoningRequest) -> dict[str, Any]: ...
@@ -122,7 +150,7 @@ class ScriptedDecisionReasoner:
 
 def build_reasoning_prompt(request: DecisionReasoningRequest) -> str:
     return (
-        REASONER_INSTRUCTIONS
+        (request.instructions or REASONER_INSTRUCTIONS)
         + "\n\nPACKET:\n"
         + _dump(request.packet)
         + "\n\nRESEARCH BRIEFS:\n"

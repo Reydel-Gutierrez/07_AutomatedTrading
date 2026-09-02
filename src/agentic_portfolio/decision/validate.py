@@ -5,8 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from agentic_portfolio.decision.types import CASH_SYMBOL, RISK_UP, SPY_SYMBOL
+from agentic_portfolio.research.sufficiency import is_etf_class
 from agentic_portfolio.research.types import ResearchConclusion, ResearchReport, ResearchStatus
-from agentic_portfolio.schemas import Decision, ExitPolicy, Sleeve
+from agentic_portfolio.schemas import Decision, ExitPolicy, SecurityClass, Sleeve
 
 VALID_DECISIONS = {d.value for d in Decision}
 VALID_DECISIONS.add("EXIT")
@@ -185,7 +186,7 @@ def validate_payload(
                 errors.append(f"buy_add_requires_allocation:{sym}")
             if not item.get("why_preferable_to_cash") and not comparison.get("vs_cash"):
                 errors.append(f"missing_vs_cash:{sym}")
-            if not item.get("why_preferable_to_spy") and not comparison.get("vs_spy"):
+            if not _spy_comparison_is_circular(sym, report) and not item.get("why_preferable_to_spy") and not comparison.get("vs_spy"):
                 errors.append(f"missing_vs_spy:{sym}")
             if report is None:
                 errors.append(f"buy_add_requires_research:{sym}")
@@ -197,7 +198,7 @@ def validate_payload(
             if thesis is None:
                 errors.append(f"buy_add_requires_thesis:{sym}")
             else:
-                errors.extend(_thesis_field_errors(sym, thesis))
+                errors.extend(_thesis_field_errors(sym, thesis, report=report))
                 errors.extend(_exit_policy_errors(sym, thesis, decision))
             if alloc:
                 risk_up_pct += alloc
@@ -209,6 +210,12 @@ def validate_payload(
                 errors.append(f"thesis_summary_required:{sym}")
             if thesis.get("exit_policy"):
                 errors.extend(_exit_policy_errors(sym, thesis, decision))
+
+        recon = item.get("reconsideration")
+        if recon is not None and not isinstance(recon, dict):
+            errors.append(f"malformed_reconsideration:{sym}")
+        elif isinstance(recon, dict):
+            item["reconsideration"] = _normalize_reconsideration(recon)
 
         normalized_decisions.append(item)
 
@@ -250,7 +257,53 @@ def parse_exit_policy(raw: Any) -> ExitPolicy:
     return policy
 
 
-def _thesis_field_errors(symbol: str, thesis: dict[str, Any]) -> list[str]:
+def _spy_comparison_is_circular(symbol: str, report: ResearchReport | None) -> bool:
+    """SPY (or the same broad-market residual) must not be required to beat SPY."""
+    if symbol == SPY_SYMBOL:
+        return True
+    if report is None:
+        return False
+    return report.security_class is SecurityClass.BROAD_MARKET_INDEX_ETF and str(report.symbol or "").upper() == SPY_SYMBOL
+
+
+def _is_core_or_etf_thesis(thesis: dict[str, Any], report: ResearchReport | None) -> bool:
+    sleeve_raw = thesis.get("sleeve")
+    if str(sleeve_raw or "") == Sleeve.CORE_GROWTH.value:
+        return True
+    if report is None:
+        return False
+    if report.provisional_sleeve is Sleeve.CORE_GROWTH:
+        return True
+    return is_etf_class(report.security_class)
+
+
+def _has_nonempty_list(thesis: dict[str, Any], *keys: str) -> bool:
+    for key in keys:
+        val = thesis.get(key)
+        if isinstance(val, list) and any(str(item).strip() for item in val):
+            return True
+    return False
+
+
+def _normalize_reconsideration(raw: dict[str, Any]) -> dict[str, Any]:
+    lost_to = raw.get("lost_to") or raw.get("alternative_that_beat_it") or []
+    if isinstance(lost_to, str):
+        lost_to = [lost_to]
+    if not isinstance(lost_to, list):
+        lost_to = []
+    return {
+        "why_lost": raw.get("why_lost") or raw.get("why_it_lost_today"),
+        "lost_to": [str(item).upper() for item in lost_to if str(item).strip()],
+        "valuation_condition": raw.get("valuation_condition"),
+        "thesis_condition": raw.get("thesis_condition"),
+        "required_evidence_improvement": raw.get("required_evidence_improvement"),
+        "next_review_reason": raw.get("next_review_reason"),
+        "next_review_at": raw.get("next_review_at"),
+        "not_an_auto_execution_condition": True,
+    }
+
+
+def _thesis_field_errors(symbol: str, thesis: dict[str, Any], *, report: ResearchReport | None = None) -> list[str]:
     errors = []
     for key in (
         "thesis_summary",
@@ -262,10 +315,21 @@ def _thesis_field_errors(symbol: str, thesis: dict[str, Any]) -> list[str]:
     ):
         if not thesis.get(key):
             errors.append(f"missing_{key}:{symbol}")
-    for key in ("catalysts", "risks", "invalidation_conditions", "review_triggers"):
+    for key in ("risks", "invalidation_conditions", "review_triggers"):
         val = thesis.get(key)
         if not isinstance(val, list) or not val:
             errors.append(f"missing_{key}:{symbol}")
+    catalysts = thesis.get("catalysts")
+    has_catalysts = isinstance(catalysts, list) and any(str(item).strip() for item in catalysts)
+    if _is_core_or_etf_thesis(thesis, report):
+        # CORE ownership reasons / ETF vehicle theses are not near-term event catalysts.
+        if not has_catalysts and not _has_nonempty_list(thesis, "thesis_drivers"):
+            if is_etf_class(getattr(report, "security_class", None)):
+                pass
+            elif not thesis.get("why_position_should_exist"):
+                errors.append(f"missing_catalysts:{symbol}")
+    elif not has_catalysts:
+        errors.append(f"missing_catalysts:{symbol}")
     if not thesis.get("exit_policy"):
         errors.append(f"missing_exit_policy:{symbol}")
     return errors

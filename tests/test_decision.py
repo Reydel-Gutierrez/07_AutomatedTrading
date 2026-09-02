@@ -473,3 +473,121 @@ def test_paper_existing_research_reports(tmp_path):
     assert "review_equity_order" not in journal
     assert "place_equity_order" not in journal
     assert "cancel_equity_order" not in journal
+
+
+def test_cash_opportunity_cost_is_in_packet():
+    packet = _run().packet
+    assert packet.policy_context.get("consider_cash_yield_and_opportunity_cost") is True
+    cash_alt = packet.policy_context.get("cash_alternative") or {}
+    assert cash_alt.get("may_win") is True
+    assert cash_alt.get("not_a_free_no_risk_default") is True
+    assert packet.policy_context.get("never_force_deployment") is True
+    starter = packet.policy_context.get("starter_position") or {}
+    assert starter.get("allowed") is True
+    assert starter.get("not_mandatory") is True
+    assert starter.get("empty_book_does_not_require_deployment") is True
+
+
+def test_etf_buy_does_not_require_company_catalysts():
+    report = _report("SPY", sc=SecurityClass.BROAD_MARKET_INDEX_ETF, sector="UNKNOWN")
+    thesis = _thesis("SPY")
+    thesis["catalysts"] = []
+    thesis["thesis_drivers"] = [
+        "diversified market exposure",
+        "long-term earnings participation",
+        "liquidity and residual CORE vehicle",
+    ]
+    payload = _payload("SPY", decision="BUY", alloc=8.0, theses=[thesis])
+    payload["comparison"]["ranking"] = ["SPY", "CASH"]
+    payload["comparison"]["vs_spy"] = "SPY is the residual benchmark; comparison is versus cash, not versus itself."
+    payload["decisions"][0]["why_preferable_to_spy"] = ""
+    payload["decisions"][0]["starter_position"] = True
+    out = _run(reports=[report], payload=payload)
+    assert out.validation_errors == []
+    assert out.decisions[0].decision == Decision.BUY
+    assert out.decisions[0].starter_position is True
+
+
+def test_spy_buy_does_not_require_spy_vs_spy():
+    report = _report("SPY", sc=SecurityClass.BROAD_MARKET_INDEX_ETF, sector="UNKNOWN")
+    payload = _payload("SPY", decision="BUY", alloc=5.0)
+    payload["comparison"]["vs_spy"] = "Not applicable; SPY is the benchmark residual versus cash."
+    payload["decisions"][0]["why_preferable_to_spy"] = ""
+    out = _run(reports=[report], payload=payload)
+    assert out.validation_errors == []
+    assert out.decisions[0].decision == Decision.BUY
+
+
+def test_core_company_buy_still_requires_real_thesis():
+    payload = _payload()
+    payload["theses"][0]["thesis_summary"] = ""
+    payload["theses"][0]["why_position_should_exist"] = ""
+    payload["theses"][0]["bull_case"] = ""
+    out = _run(payload=payload)
+    assert out.gated_actions == []
+    blob = " ".join(out.validation_errors)
+    assert "missing_thesis_summary" in blob or "missing_why_position_should_exist" in blob or "missing_bull_case" in blob
+
+
+def test_committee_flag_compares_multiple_core_names():
+    reports = [_report("MSFT"), _report("MA"), _report("SPGI")]
+    payload = {
+        "theses": [_thesis("MSFT")],
+        "comparison": {
+            "ranking": ["MSFT", "CASH", "SPY", "MA", "SPGI"],
+            "vs_cash": "A starter MSFT allocation improves expected long-term return versus 100% cash.",
+            "vs_spy": "MSFT is a high-quality compounder versus generic beta at this residual size.",
+            "ranking_dimensions": {"quality_durability": ["MSFT", "MA", "SPGI", "SPY", "CASH"]},
+        },
+        "decisions": [
+            {
+                "symbol": "MSFT",
+                "decision": "BUY",
+                "desired_allocation_pct": 5.0,
+                "starter_position": True,
+                "rationale": "Starter CORE position; residual cash remains.",
+                "why_preferable_to_cash": "Compounding exceeds cash opportunity cost at a starter size.",
+                "why_preferable_to_spy": "Business quality versus broad beta for a 5% sleeve.",
+                "why_preferable_to_alternatives": "Best residual among MSFT/MA/SPGI versus cash.",
+            },
+            {
+                "symbol": "MA",
+                "decision": "WATCH",
+                "desired_allocation_pct": 0,
+                "rationale": "Valid but not the best residual today.",
+                "reconsideration": {
+                    "why_lost": "MSFT was the better residual allocation.",
+                    "lost_to": ["MSFT", "CASH"],
+                    "valuation_condition": "Reconsider if relative valuation compresses versus MSFT.",
+                    "thesis_condition": "Reconsider if network-growth evidence strengthens.",
+                    "required_evidence_improvement": "Fresher unit-economics update.",
+                    "next_review_reason": "committee_residual",
+                    "next_review_at": "2026-09-09T16:00:00+00:00",
+                },
+            },
+            {"symbol": "SPGI", "decision": "WATCH", "desired_allocation_pct": 0, "rationale": "Watch."},
+            {"symbol": "CASH", "decision": "HOLD", "desired_allocation_pct": 95.0, "rationale": "Residual cash remains valid."},
+        ],
+    }
+    out = run_portfolio_decision(
+        reports,
+        ctx(10_000),
+        ScriptedDecisionReasoner(payload),
+        persist=False,
+        now=NOW,
+        journal=None,
+        committee=True,
+    )
+    assert out.validation_errors == []
+    assert out.packet.committee is True
+    assert {r["symbol"] for r in out.packet.reports} == {"MSFT", "MA", "SPGI"}
+    by = {d.symbol: d.decision for d in out.decisions}
+    assert by["MSFT"] == Decision.BUY
+    assert by["MA"] == Decision.WATCH
+    assert by["SPGI"] == Decision.WATCH
+    assert by["CASH"] == Decision.HOLD
+    ma = next(d for d in out.decisions if d.symbol == "MA")
+    assert ma.reconsideration is not None
+    assert ma.reconsideration["not_an_auto_execution_condition"] is True
+    assert "MSFT" in ma.reconsideration["lost_to"]
+
