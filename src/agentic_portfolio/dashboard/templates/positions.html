@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Positions · Agentic Portfolio{% endblock %}
+{% block content %}
+<div class="page">
+  <header class="page-head">
+    <div>
+      <h1>Positions</h1>
+      <p class="lede">{% if view.book_kind == 'live' %}{{ view.live_account_label }} · Agentic Robinhood source of truth{% else %}{{ view.paper_book_label }} · not {{ view.live_account_label }}{% endif %}</p>
+    </div>
+  </header>
+  <section class="card table-card">
+    <div class="table-wrap">
+      <table class="positions" data-page-size="12">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Company</th>
+            <th>Sleeve</th>
+            <th>Qty</th>
+            <th>Price</th>
+            <th>Market Value</th>
+            <th>Portfolio %</th>
+            <th>Unrealized P/L</th>
+            <th>Thesis</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in view.positions %}
+          <tr>
+            <td class="symbol" title="{{ p.symbol }}">{{ p.symbol }}</td>
+            <td>{{ p.company or '—' }}</td>
+            <td title="{{ p.sleeve }}"><span class="pill sleeve-{{ p.sleeve }}">{{ p.sleeve_label }}</span></td>
+            <td>{{ p.quantity_display }}</td>
+            <td>{{ p.price_display }}</td>
+            <td>{{ p.market_value_display }}</td>
+            <td>{{ p.allocation_display }}</td>
+            <td class="gain {{ 'pos' if p.unrealized_pnl and p.unrealized_pnl > 0 else 'neg' if p.unrealized_pnl and p.unrealized_pnl < 0 else '' }}">{{ p.unrealized_display }}</td>
+            <td>{% if p.thesis_status %}<span class="pill">{{ p.thesis_status_label }}</span>{% else %}—{% endif %}</td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="9">{{ view.empty_positions_label or 'No paper positions.' }}</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}

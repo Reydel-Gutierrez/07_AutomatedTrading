@@ -1,49 +1,64 @@
 {% extends "base.html" %}
 {% block title %}Discovery · Agentic Portfolio{% endblock %}
 {% block content %}
-<section class="card">
-  <div class="card-head">
-    <h2>Candidate discovery</h2>
-    <span class="count">{{ view.count }}</span>
-  </div>
-  <p class="meta">{{ view.book_label }} · {{ view.note }}</p>
-  <div class="table-wrap">
-    <table class="discovery">
-      <thead>
-        <tr>
-          <th>Symbol</th>
-          <th>Score</th>
-          <th>Priority</th>
-          <th>Sources</th>
-          <th>Sleeve</th>
-          <th>Sector</th>
-          <th>Class</th>
-          <th>Status</th>
-          <th>Signals / reasons</th>
-          <th>Risks / events</th>
-          <th>Research</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for c in view.candidates %}
-        <tr>
-          <td class="symbol" title="{{ c.symbol }}">{{ c.symbol }}</td>
-          <td>{{ c.score_display }}</td>
-          <td title="{{ c.priority }}">{{ c.priority_label }}</td>
-          <td class="wrap">{{ c.sources_display[:3]|join(', ') }}</td>
-          <td title="{{ c.provisional_sleeve }}">{{ c.sleeve_label }}</td>
-          <td title="{{ c.sector or '' }}">{{ c.sector_label }}</td>
-          <td title="{{ c.security_class or '' }}">{{ c.class_label }}</td>
-          <td title="{{ c.status }}">{{ c.status_label }}</td>
-          <td class="wrap">{{ (c.signal_labels or c.reason_labels)[:3]|join('; ') }}</td>
-          <td class="wrap">{{ ((c.risk_labels or []) + (c.event_labels or []))[:3]|join('; ') or '—' }}</td>
-          <td title="{{ c.research_status or '' }}">{{ c.research_status_label }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="11" class="empty">No stored discovery candidates.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+<div class="page">
+  <header class="page-head">
+    <div>
+      <h1>Discovery pipeline</h1>
+      <p class="lede">Universe evaluation results and next actions. {{ view.note }}</p>
+    </div>
+    <label class="refresh-toggle"><input type="checkbox" id="auto-refresh" checked> Auto-refresh: On</label>
+  </header>
+
+  <nav class="page-tabs" data-filter-for="#discovery-table" aria-label="Discovery filters">
+    <button type="button" class="on" data-filter="all">All {{ view.count }}</button>
+    <button type="button" data-filter="evaluated">Evaluated {{ view.evaluated_count }}</button>
+    <button type="button" data-filter="promoted">Promoted {{ view.promoted_count }}</button>
+    <button type="button" data-filter="rejected">Rejected {{ view.rejected_count }}</button>
+  </nav>
+
+  <section class="kpis dash-kpis" aria-label="Discovery summary">
+    <article class="kpi"><h2>Universes evaluated</h2><p class="figure">{{ view.evaluated_count }}</p><p class="meta">This session</p></article>
+    <article class="kpi"><h2>Promoted to research</h2><p class="figure">{{ view.promoted_count }}</p><p class="meta">{% if view.count %}{{ '%.1f'|format((view.promoted_count / view.count) * 100) }}%{% else %}—{% endif %}</p></article>
+    <article class="kpi"><h2>Rejected</h2><p class="figure">{{ view.rejected_count }}</p><p class="meta">{% if view.count %}{{ '%.1f'|format((view.rejected_count / view.count) * 100) }}%{% else %}—{% endif %}</p></article>
+    <article class="kpi"><h2>Top score</h2><p class="figure">{% if view.top_score is not none %}{{ '%.2f'|format(view.top_score) }}{% else %}—{% endif %}</p><p class="meta">{{ view.top_symbol or '—' }}</p></article>
+    <article class="kpi"><h2>Avg score</h2><p class="figure">{% if view.avg_score is not none %}{{ '%.2f'|format(view.avg_score) }}{% else %}—{% endif %}</p><p class="meta">{{ view.book_label }}</p></article>
+    <article class="kpi"><h2>Last run</h2><p class="figure-sm">{{ view.last_run | et(time_only=True, seconds=True) }}</p><p class="meta">{{ view.last_run | et(date_only=True) }}</p></article>
+  </section>
+
+  <section class="card table-card">
+    <div class="table-wrap">
+      <table id="discovery-table" class="discovery" data-page-size="10">
+        <thead>
+          <tr>
+            <th>Symbol</th>
+            <th>Score</th>
+            <th>Sleeve</th>
+            <th>Priority</th>
+            <th>Status</th>
+            <th>Reason</th>
+            <th>Evaluated</th>
+            <th>Research</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for c in view.candidates %}
+          <tr data-bucket="{{ c.filter_bucket }}">
+            <td class="symbol" title="{{ c.symbol }}">{{ c.symbol }}</td>
+            <td>{{ c.score_display }}</td>
+            <td title="{{ c.provisional_sleeve }}"><span class="pill sleeve-{{ c.provisional_sleeve }}">{{ c.sleeve_label }}</span></td>
+            <td title="{{ c.priority }}"><span class="pill pri-{{ c.priority }}">{{ c.priority_label }}</span></td>
+            <td title="{{ c.status }}"><span class="pill">{{ c.status_label }}</span></td>
+            <td class="wrap">{{ (c.signal_labels or c.reason_labels)[:3]|join(', ') }}</td>
+            <td class="meta">{{ (c.discovered_at or c.created_at) | et(time_only=True, seconds=True) }}</td>
+            <td title="{{ c.research_status or '' }}">{{ c.research_status_label }}</td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="8">No stored discovery candidates.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
 {% endblock %}

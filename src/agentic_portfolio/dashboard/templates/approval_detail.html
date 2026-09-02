@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ packet.symbol }} {{ packet.action }} · Approval{% endblock %}
 {% block content %}
+<div class="page detail">
 <p class="crumb"><a href="{{ url_for('approvals_page') }}">Approvals</a> / {{ packet.symbol }}</p>
 <p class="lede"><span class="book-tag {{ 'live' if packet.queue_kind == 'live' else 'paper' }}">{{ packet.book_label or paper_book_label }}</span> {% if packet.queue_kind == 'live' %}LIVE approval queue.{% else %}not {{ live_account_label }}.{% endif %}</p>
 
@@ -59,7 +60,7 @@
     <dt>AI provenance</dt><dd>{{ packet.ai_provenance or '—' }}</dd>
     <dt>Suggested investment</dt><dd>{{ packet.order_notional_display }} · {{ packet.desired_allocation_display }} NAV · ~{{ packet.approx_shares or '—' }} shares</dd>
     <dt>Current account</dt><dd>NAV {{ packet.nav_display or '—' }} · cash {{ packet.cash_display or '—' }} · BP {{ packet.buying_power_display or '—' }}</dd>
-    <dt>Approval expires</dt><dd>{{ packet.expires_at or '—' }}</dd>
+    <dt>Approval expires</dt><dd>{{ packet.expires_at | et }}</dd>
     <dt>Evidence freshness</dt><dd>{{ packet.evidence_freshness or '—' }}</dd>
     <dt>Research summary</dt><dd>{{ packet.research_summary or '—' }}</dd>
     <dt>Portfolio effect</dt><dd>{{ packet.portfolio_effect or '—' }}</dd>
@@ -90,7 +91,7 @@
     <dt>Current quote</dt><dd>{{ packet.current_price if packet.current_price is not none else '—' }}</dd>
     <dt>Spread bps</dt><dd>{{ packet.current_spread_bps if packet.current_spread_bps is not none else '—' }}</dd>
     <dt>Risk Gate</dt><dd>{{ packet.risk_gate_verdict or '—' }}</dd>
-    <dt>Expires</dt><dd>{{ packet.expires_at or '—' }}</dd>
+    <dt>Expires</dt><dd>{{ packet.expires_at | et }}</dd>
     <dt>AI rationale</dt><dd>{{ packet.ai_rationale or packet.base_case or '—' }}</dd>
   </dl>
 </section>
@@ -105,4 +106,5 @@
   <summary>Full packet text</summary>
   <pre>{{ packet.explanation }}</pre>
 </details>
+</div>
 {% endblock %}

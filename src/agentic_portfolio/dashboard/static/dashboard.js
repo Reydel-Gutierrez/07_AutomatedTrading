@@ -141,7 +141,22 @@
           },
           scales: {
             x: {
-              ticks: { color: "#6f6b63", maxRotation: 0, autoSkip: true, maxTicksLimit: 6 },
+              ticks: {
+                color: "#6f6b63",
+                maxRotation: 0,
+                autoSkip: true,
+                maxTicksLimit: 6,
+                callback(value) {
+                  const label = this.getLabelForValue(value);
+                  const stamp = Date.parse(label);
+                  if (Number.isNaN(stamp)) return label;
+                  return new Intl.DateTimeFormat("en-US", {
+                    timeZone: "America/New_York",
+                    month: "short",
+                    day: "numeric",
+                  }).format(new Date(stamp));
+                },
+              },
               grid: { color: "rgba(221, 216, 206, 0.8)" },
             },
             y: {

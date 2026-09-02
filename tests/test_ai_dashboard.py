@@ -28,7 +28,7 @@ def test_ai_pages_and_api():
 def test_dashboard_includes_ai_summary():
     client = _client()
     html = client.get("/").get_data(as_text=True)
-    assert "AI runtime" in html
+    assert "AI activity" in html
     payload = client.get("/api/dashboard").get_json()
     assert payload["ai"]["LIVE_ORDER_PLACEMENT"] is False
 

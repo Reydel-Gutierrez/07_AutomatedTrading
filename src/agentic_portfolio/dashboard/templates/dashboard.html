@@ -1,58 +1,26 @@
 {% extends "base.html" %}
 {% block title %}Dashboard · Agentic Portfolio{% endblock %}
 {% block content %}
+<div class="page">
 {% if view.live_data_unavailable %}
 <div class="halt-banner">LIVE DATA UNAVAILABLE{% if view.live_error_code %} · {{ view.live_error_code }}{% endif %}</div>
 {% endif %}
 {% if view.approval_banner %}
 <div class="halt-banner approval-banner">{{ view.approval_banner }}</div>
 {% endif %}
-{% if view.agent %}
-<section class="kpis" aria-label="System">
-  <article class="kpi">
-    <h2>Agent</h2>
-    <p class="figure {{ 'agent-online' if view.agent.alive else 'agent-offline' }}">{{ view.agent.agent }}</p>
-    <p class="meta">uptime {{ view.agent.uptime_seconds }}s · cycles {{ view.agent.cycles }}</p>
-  </article>
-  <article class="kpi">
-    <h2>Runtime</h2>
-    <p class="figure">{{ view.agent.runtime_mode }}</p>
-    <p class="meta">LIVE_ORDER_PLACEMENT={{ 'ON' if view.live_order_placement_enabled else 'OFF' }}</p>
-  </article>
-  <article class="kpi">
-    <h2>Market</h2>
-    <p class="figure">{{ view.agent.market.phase or '—' }}</p>
-    <p class="meta">{{ view.agent.market.reason or '' }}{% if view.agent.market.regular_hours_open %} · regular hours{% endif %}</p>
-  </article>
-  <article class="kpi">
-    <h2>Robinhood</h2>
-    <p class="figure">{{ 'CONNECTED' if view.agent.robinhood.connected else 'FAIL CLOSED' }}</p>
-    <p class="meta">{% if view.agent.robinhood.LIVE_ORDER_PLACEMENT %}observation read-only · execution {{ view.agent.robinhood.execution_mode or 'LIVE_WRITE' }}{% else %}observation read-only{% if view.agent.robinhood.execution_mode %} · execution {{ view.agent.robinhood.execution_mode }}{% endif %} · {{ view.agent.robinhood.error or 'oauth persisted' }}{% endif %}</p>
-  </article>
-  <article class="kpi">
-    <h2>OpenAI</h2>
-    <p class="figure">{{ view.agent.openai.state or '—' }}</p>
-    <p class="meta">budget {{ view.agent.ai_budget.mode or '—' }} · ${{ '%.2f'|format(view.agent.ai_budget.spent or 0) }} / $10</p>
-  </article>
-</section>
-{% endif %}
 {% if view.kpis %}
-<section class="kpis kpis-hero" aria-label="Portfolio snapshot">
+<div class="dash">
+<section class="kpis dash-kpis" aria-label="Portfolio snapshot">
   <article class="kpi">
     <h2>Portfolio Value</h2>
     <p class="figure {{ '' if view.kpis.portfolio_value.available else 'unavailable' }}">{{ view.kpis.portfolio_value.display }}</p>
-    <p class="meta">{{ view.active_book_label or view.paper_book_label }}{% if view.updated_at %} · {{ view.updated_at[:16].replace('T', ' ') }}{% endif %}</p>
+    <p class="meta">{{ view.updated_at | et }}</p>
   </article>
   <article class="kpi">
     <h2>Cash</h2>
     <p class="figure {{ '' if view.cash_display != '—' and not view.live_data_unavailable else 'unavailable' }}">{{ view.cash_display }}</p>
     <p class="meta">{{ view.cash_pct_display }} of portfolio</p>
     <div class="bar" aria-hidden="true"><span style="width: {{ ((view.cash_pct or 0) * 100)|round(1) }}%"></span></div>
-  </article>
-  <article class="kpi">
-    <h2>Buying Power</h2>
-    <p class="figure {{ '' if view.kpis.buying_power and view.kpis.buying_power.available else 'unavailable' }}">{{ view.kpis.buying_power.display if view.kpis.buying_power else view.buying_power_display }}</p>
-    <p class="meta">{{ view.active_book_label or view.paper_book_label }}</p>
   </article>
   <article class="kpi">
     <h2>Today's P/L</h2>
@@ -65,15 +33,10 @@
     <p class="meta">{% if view.kpis.total_return.available %}Observed snapshot history{% else %}Not enough data{% endif %}</p>
   </article>
   <article class="kpi">
-    <h2>SPY Return</h2>
-    <p class="figure {{ '' if view.kpis.spy_return.available else 'unavailable' }}">{{ view.kpis.spy_return.display }}</p>
-    <p class="meta">{% if view.kpis.spy_return.available %}Same period · not fabricated{% else %}Not enough data{% endif %}</p>
-  </article>
-  <article class="kpi">
     <h2>Risk State</h2>
     <p class="figure {{ '' if view.kpis.risk_state.available else 'unavailable' }}">
       {% if view.kpis.risk_state.available %}
-        <span class="pill {{ view.risk_state }}">{{ view.kpis.risk_state.display }}</span>
+        <span class="pill {{ view.risk_state }}">{{ view.risk_state }}</span>
       {% else %}
         {{ view.kpis.risk_state.display }}
       {% endif %}
@@ -81,28 +44,23 @@
     <p class="meta">{{ view.risk_state_label or ('Daily halt: ' ~ ('No' if not view.daily_risk_halt else 'Yes')) }}</p>
   </article>
   <article class="kpi">
-    <h2>Excess vs SPY</h2>
-    <p class="figure {{ '' if view.kpis.excess_return.available else 'unavailable' }}">{{ view.kpis.excess_return.display }}</p>
-    <p class="meta">Portfolio minus SPY</p>
-  </article>
-  <article class="kpi">
-    <h2>Drawdown</h2>
-    <p class="figure {{ '' if view.kpis.drawdown.available else 'unavailable' }}">{{ view.kpis.drawdown.display }}</p>
-    <p class="meta">HWM {{ view.hwm_display }}</p>
+    <h2>Buying Power</h2>
+    <p class="figure {{ '' if view.kpis.buying_power and view.kpis.buying_power.available else 'unavailable' }}">{{ view.kpis.buying_power.display if view.kpis.buying_power else view.buying_power_display }}</p>
+    <p class="meta">{{ view.active_book_label or view.paper_book_label }}</p>
   </article>
 </section>
 
 {% if view.pipeline %}
-<section class="kpis" aria-label="Autonomous pipeline">
+<section class="kpis funnel" aria-label="Autonomous pipeline">
   <article class="kpi">
     <h2>Discovery</h2>
     <p class="figure">{{ view.pipeline.discovery.promoted or 0 }}</p>
-    <p class="meta">evaluated {{ view.pipeline.discovery.symbols_evaluated or 0 }} · universe {{ view.pipeline.discovery.universe_size or 0 }} · created {{ view.pipeline.discovery.candidates_created or 0 }} · rejected {{ view.pipeline.discovery.rejected or 0 }}</p>
+    <p class="meta">created {{ view.pipeline.discovery.candidates_created or 0 }} · rejected {{ view.pipeline.discovery.rejected or 0 }}</p>
   </article>
   <article class="kpi">
     <h2>Research</h2>
     <p class="figure">{{ view.pipeline.research.queued or 0 }}</p>
-    <p class="meta">researching {{ view.pipeline.research.researching or 0 }} · done {{ view.pipeline.research.completed or 0 }} · rejected {{ view.pipeline.research.rejected or 0 }}{% if view.pipeline.research.current_symbol %} · now {{ view.pipeline.research.current_symbol }}{% endif %}</p>
+    <p class="meta">researching {{ view.pipeline.research.researching or 0 }} · done {{ view.pipeline.research.completed or 0 }}</p>
   </article>
   <article class="kpi">
     <h2>Thesis / Decision</h2>
@@ -110,78 +68,22 @@
     <p class="meta">watch {{ view.pipeline.watchlist.active or 0 }} · reports {{ view.pipeline.research.reports or 0 }}</p>
   </article>
   <article class="kpi">
-    <h2>Approval</h2>
+    <h2>Approvals</h2>
     <p class="figure">{{ view.pipeline.approvals.pending or 0 }}</p>
-    <p class="meta">{% if view.live_order_placement_enabled %}LIVE ORDER PLACEMENT: ON · human required{% else %}LIVE ORDER PLACEMENT: OFF · human required{% endif %}</p>
+    <p class="meta">{% if view.live_order_placement_enabled %}human required{% else %}placement off · human required{% endif %}</p>
   </article>
   <article class="kpi">
-    <h2>Order</h2>
+    <h2>Orders</h2>
     <p class="figure">{{ (view.pipeline.orders.submitted or 0) + (view.pipeline.orders.filled or 0) }}</p>
-    <p class="meta">pending {{ view.pipeline.orders.pending or 0 }} · submitted {{ view.pipeline.orders.submitted or 0 }} · filled {{ view.pipeline.orders.filled or 0 }} · rejected {{ view.pipeline.orders.rejected or 0 }}</p>
+    <p class="meta">pending {{ view.pipeline.orders.pending or 0 }} · filled {{ view.pipeline.orders.filled or 0 }}</p>
   </article>
   <article class="kpi">
-    <h2>Position</h2>
+    <h2>Positions</h2>
     <p class="figure">{{ view.pipeline.positions.count if view.pipeline.positions else 0 }}</p>
-    <p class="meta">{{ (view.pipeline.lifecycle or ['Discovery','Research','Thesis/Decision','Approval','Order','Position'])|join(' → ') }}</p>
+    <p class="meta"><a class="text-link" href="{{ url_for('positions_page') }}">Open positions</a></p>
   </article>
 </section>
 {% endif %}
-
-<section class="decision-band" id="decisions" aria-label="Human decision">
-  <article class="card decision-card">
-    <div class="card-head">
-      <h2>TRADE APPROVAL REQUIRED{% if view.approvals.pending_count %} — {{ view.approvals.pending_count }}{% endif %}</h2>
-      <a class="text-link" href="{{ url_for('approvals_page') }}">View all approvals</a>
-    </div>
-    <p class="meta">{{ view.active_book_label or view.paper_book_label }} packets.{% if view.live_order_placement_enabled %} Approving will send a revalidated live order.{% else %} Approving does not place an order while LIVE ORDER PLACEMENT is OFF.{% endif %}</p>
-    <div class="table-wrap">
-      <table class="decision-table">
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Action</th>
-            <th>Qty</th>
-            <th>Price</th>
-            <th>Est. Value</th>
-            <th>Allocation</th>
-            <th>Created</th>
-            <th>Decide</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for p in view.approvals.pending %}
-          <tr>
-            <td class="symbol"><a href="{{ url_for('approval_detail_page', approval_id=p.approval_id) }}">{{ p.symbol }}</a></td>
-            <td><span class="pill act-{{ p.action }}">{{ p.action }}</span></td>
-            <td>{{ p.approx_shares if p.approx_shares is not none else (p.order_quantity if p.order_quantity is not none else '—') }}</td>
-            <td>{{ p.current_price if p.current_price is not none else '—' }}</td>
-            <td>{{ p.order_notional_display }}</td>
-            <td>{{ p.current_allocation_display }} → {{ p.desired_allocation_display }}</td>
-            <td class="meta">{{ (p.created_at or '')[:16].replace('T', ' ') }}</td>
-            <td class="decide-cell">
-              {% if p.can_decide %}
-              <form class="decide compact" method="post" action="{{ url_for('approve_packet', approval_id=p.approval_id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="btn approve" type="submit">APPROVE</button>
-              </form>
-              <form class="decide compact" method="post" action="{{ url_for('reject_packet', approval_id=p.approval_id) }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="btn reject" type="submit">REJECT</button>
-              </form>
-              {% else %}
-              <span class="meta">{{ p.decision_block_reason or 'Not decidable' }}</span>
-              {% endif %}
-              <a class="text-link" href="{{ url_for('approval_detail_page', approval_id=p.approval_id) }}">Open</a>
-            </td>
-          </tr>
-          {% else %}
-          <tr><td colspan="8" class="empty">No pending packets.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </article>
-</section>
 
 <section class="mid-grid">
   <article class="card chart-card">
@@ -202,7 +104,7 @@
     <div class="card-head">
       <div>
         <h2>Portfolio performance</h2>
-        <p class="meta">Portfolio ({{ view.active_book_label or view.paper_book_label }}) vs SPY</p>
+        <p class="meta">{{ view.active_book_label or view.paper_book_label }} vs SPY</p>
       </div>
       <div class="ranges" role="group" aria-label="Time range">
         <button type="button" data-range="1M">1M</button>
@@ -224,174 +126,96 @@
   <article class="card">
     <div class="card-head">
       <h2>AI activity</h2>
-      <a class="text-link" href="{{ url_for('journal_page') }}">View all activity</a>
+      <a class="text-link" href="{{ url_for('ai_activity_page') }}">View all</a>
     </div>
-    {% for item in view.activity[:6] %}
+    <div class="stack-list">
+    {% for item in view.activity[:8] %}
       <div class="activity-row">
         <span class="kind k-{{ item.kind }}">{{ item.label }}</span>
         <a href="{{ item.href }}">{{ item.title }}</a>
-        <span class="meta">{{ (item.meta or '')[:16].replace('T', ' ') }}</span>
+        <span class="meta">{{ item.meta | et(time_only=True) }}</span>
       </div>
     {% else %}
       <p class="empty">No recent activity stored.</p>
     {% endfor %}
-  </article>
-</section>
-
-<section class="bottom-grid">
-  <article class="card wide" id="positions">
-    <div class="card-head">
-      <h2>Top positions</h2>
-      <p class="meta">{% if view.book_kind == 'live' %}{{ view.live_account_label }} · Agentic Robinhood source of truth{% else %}{{ view.paper_book_label }} · not {{ view.live_account_label }}{% endif %}</p>
-    </div>
-    <div class="table-wrap">
-      <table class="positions">
-        <thead>
-          <tr>
-            <th>Symbol</th>
-            <th>Company</th>
-            <th>Sleeve</th>
-            <th>Qty</th>
-            <th>Price</th>
-            <th>Market Value</th>
-            <th>Portfolio %</th>
-            <th>Unrealized P/L</th>
-            <th>Thesis</th>
-          </tr>
-        </thead>
-        <tbody>
-          {% for p in view.positions %}
-          <tr>
-            <td class="symbol" title="{{ p.symbol }}">{{ p.symbol }}</td>
-            <td>{{ p.company or '—' }}</td>
-            <td title="{{ p.sleeve }}"><span class="pill sleeve-{{ p.sleeve }}">{{ p.sleeve_label }}</span></td>
-            <td>{{ p.quantity_display }}</td>
-            <td>{{ p.price_display }}</td>
-            <td>{{ p.market_value_display }}</td>
-            <td>{{ p.allocation_display }}</td>
-            <td class="gain {{ 'pos' if p.unrealized_pnl and p.unrealized_pnl > 0 else 'neg' if p.unrealized_pnl and p.unrealized_pnl < 0 else '' }}">{{ p.unrealized_display }}</td>
-            <td>{% if p.thesis_status %}<span class="pill">{{ p.thesis_status_label }}</span>{% else %}—{% endif %}</td>
-          </tr>
-          {% else %}
-          <tr><td colspan="9" class="empty">{{ view.empty_positions_label or 'No paper positions.' }}</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
-    </div>
-  </article>
-  <article class="card">
-    <div class="card-head">
-      <h2>AI runtime</h2>
-      <a class="text-link" href="{{ url_for('ai_page') }}">Open AI</a>
-    </div>
-    {% if view.ai %}
-    <p><span class="pill {{ view.ai.budget_mode }}">{{ view.ai.budget_mode }}</span> {{ view.ai.spent_display }} / {{ view.ai.cap_display }} · {{ view.ai.pct_used }}% used</p>
-    <p class="meta">{{ view.ai.calls_month }} calls this month · {{ view.ai.proposals }} {{ view.ai.runtime_mode }} proposals · LIVE_ORDER_PLACEMENT={{ view.ai.LIVE_ORDER_PLACEMENT }}</p>
-    <p class="meta">{{ view.ai.isolation_note }}</p>
-    {% else %}
-    <p class="empty">AI status unavailable.</p>
-    {% endif %}
-  </article>
-  <article class="card">
-    <div class="card-head">
-      <h2>Candidate discovery</h2>
-      <a class="text-link" href="{{ url_for('discovery_page') }}">View all candidates</a>
-    </div>
-    <p class="meta">Stored discovery results · this dashboard does not run discovery</p>
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Symbol</th><th>Score</th><th>Priority</th><th>Sleeve</th><th>Status</th></tr></thead>
-        <tbody>
-          {% for c in view.top_candidates %}
-          <tr>
-            <td class="symbol" title="{{ c.symbol }}">{{ c.symbol }}</td>
-            <td>{{ c.score_display }}</td>
-            <td title="{{ c.priority }}"><span class="pill pri-{{ c.priority }}">{{ c.priority_label }}</span></td>
-            <td title="{{ c.provisional_sleeve }}">{{ c.sleeve_label }}</td>
-            <td title="{{ c.research_status or c.status }}">{{ c.research_status_label if c.research_status else c.status_label }}</td>
-          </tr>
-          {% else %}
-          <tr><td colspan="5" class="empty">No stored candidates.</td></tr>
-          {% endfor %}
-        </tbody>
-      </table>
     </div>
   </article>
 </section>
 
 <section class="bottom-grid">
-  <article class="card wide" id="watchlist">
+  <article class="card table-card" id="watchlist">
     <div class="card-head">
       <h2>Watchlist</h2>
       <a class="text-link" href="{{ url_for('watchlist_page') }}">View watchlist</a>
     </div>
-    <p class="meta">Persistent LIVE watch state. Grouped by sleeve on the watchlist page. Candidates do not disappear at the close.</p>
-    <p class="meta">
-      {% for key, count in (view.watchlist.by_sleeve or {}).items() %}
-        {{ key.replace('_', ' ').title() }} {{ count }}{% if not loop.last %} · {% endif %}
-      {% endfor %}
-    </p>
     <div class="table-wrap">
-      <table>
-        <thead><tr><th>Ticker</th><th>Status</th><th>Thesis</th><th>Entry</th><th>Last reassessed</th><th>Next</th></tr></thead>
+      <table data-page-size="5">
+        <thead><tr><th>Ticker</th><th>Sleeve</th><th>Score</th><th>Thesis</th><th>Decision</th><th>Last change</th><th>Next review</th></tr></thead>
         <tbody>
-          {% for w in (view.watchlist.rows if view.watchlist else [])[:8] %}
+          {% for w in (view.watchlist.rows if view.watchlist else []) %}
           <tr>
             <td class="symbol">{{ w.ticker }}</td>
+            <td><span class="pill sleeve-{{ w.sleeve }}">{{ w.sleeve_label or '—' }}</span></td>
+            <td>{{ w.score if w.score is not none else '—' }}</td>
+            <td class="wrap">{{ (w.thesis or w.reason_for_watch or '—')[:72] }}</td>
             <td><span class="pill">{{ w.status }}</span></td>
-            <td>{{ (w.thesis or '—')[:80] }}</td>
-            <td>{% if w.max_price %}≤ {{ w.max_price }}{% else %}{{ (w.entry_conditions or [])|join('; ') or '—' }}{% endif %}</td>
-            <td class="meta">{{ (w.last_reassessed or '')[:16].replace('T', ' ') or '—' }}</td>
-            <td class="meta">{{ (w.next_review_at or '')[:16].replace('T', ' ') or '—' }}</td>
+            <td class="meta">{{ (w.last_state_at or w.last_updated or w.last_reassessed) | et }}</td>
+            <td class="meta">{{ w.next_review_at | et }}</td>
           </tr>
           {% else %}
-          <tr><td colspan="6" class="empty">No persistent watch items yet.</td></tr>
+          <tr class="empty"><td colspan="7">No persistent watch items yet.</td></tr>
           {% endfor %}
         </tbody>
       </table>
     </div>
   </article>
-</section>
-
-<section class="bottom-grid single">
-  <article class="card">
-    <div class="card-head">
-      <h2>Autonomous activity</h2>
-      <a class="text-link" href="{{ url_for('journal_page') }}">View all activity</a>
-    </div>
-    {% for item in view.autonomous_activity or [] %}
-      <div class="activity-row">
-        <span class="kind">{{ item.type or item.kind }}</span>
-        <span>{{ item.ticker or item.symbol or item.job or item.title or '—' }}</span>
-        <span class="meta">{{ (item.logged_at or item.meta or '')[:16].replace('T', ' ') }}</span>
-      </div>
-    {% else %}
-      <p class="empty">No autonomous activity recorded yet.</p>
-    {% endfor %}
-  </article>
-</section>
-<section class="bottom-grid single">
   <article class="card">
     <div class="card-head">
       <h2>Alerts</h2>
-      <a class="text-link" href="{{ url_for('notifications_page') }}">View notifications</a>
+      <a class="text-link" href="{{ url_for('notifications_page') }}">View all</a>
     </div>
-    {% for a in view.alerts[:6] %}
-      <div class="activity-row">
-        <span class="kind warn">{{ a.symbol }}</span>
-        <span>{{ a.state }} → {{ a.recommended_action }}</span>
-        <span class="meta">{{ (a.created_at or '')[:16].replace('T', ' ') }}</span>
+    <div class="stack-list">
+    {% for a in view.alerts[:8] %}
+      <div class="alert-row {{ 'high' if a.state in ['CRITICAL','HALTED'] else 'warn' }}">
+        <span class="ico">●</span>
+        <span><strong>{{ a.symbol }}</strong> {{ a.state }} → {{ a.recommended_action }}</span>
+        <span class="meta">{{ a.created_at | et_rel }}</span>
       </div>
     {% else %}
+      {% for n in (view.notifications.unread if view.notifications else [])[:6] %}
+      <div class="alert-row {{ 'high' if 'high' in (n.title or '')|lower else 'info' }}">
+        <span class="ico">●</span>
+        <span>{{ n.title }}</span>
+        <span class="meta">{{ n.created_at | et_rel }}</span>
+      </div>
+      {% else %}
       <p class="empty">No non-healthy monitoring states on the latest run.</p>
+      {% endfor %}
     {% endfor %}
+    </div>
+  </article>
+  <article class="card">
+    <h2>Upcoming events</h2>
+    <div class="stack-list">
+    {% for e in view.upcoming or [] %}
+      <div class="event-row">
+        <span class="ico">▣</span>
+        <span>{{ e.title }}</span>
+        <span class="meta">{{ e.at | et(date_only=True) }}</span>
+      </div>
+    {% else %}
+      <p class="empty">No upcoming reviews.</p>
+    {% endfor %}
+    </div>
   </article>
 </section>
+</div>
 <script id="allocation-data" type="application/json">{{ view.allocation_chart | tojson }}</script>
 <script id="performance-data" type="application/json">{{ view.performance | tojson }}</script>
 {% else %}
 <p class="empty">Dashboard snapshot is not available yet.</p>
 {% endif %}
+</div>
 {% endblock %}
 {% block extra_js %}
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>

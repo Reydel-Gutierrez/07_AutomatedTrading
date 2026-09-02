@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Confirm {{ intent }} · {{ packet.symbol }}{% endblock %}
 {% block content %}
+<div class="page detail">
 <p class="crumb"><a href="{{ url_for('approval_detail_page', approval_id=packet.approval_id) }}">{{ packet.symbol }}</a> / confirm</p>
 
 <div class="halt-banner placement-banner">{{ no_live_placement_banner }}{% if live_order_placement_enabled %} · human approval still required · send-time revalidation still runs{% else %} · this still does not place an order{% endif %}</div>
@@ -25,4 +26,5 @@
     <a class="btn reject" href="{{ url_for('approval_detail_page', approval_id=packet.approval_id) }}">Cancel</a>
   </form>
 </section>
+</div>
 {% endblock %}

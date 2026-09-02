@@ -1,101 +1,112 @@
 {% extends "base.html" %}
 {% block title %}Orders · Agentic Portfolio{% endblock %}
 {% block content %}
-<p class="lede"><span class="book-tag {{ 'live' if environment == 'LIVE' else 'paper' }}">{{ view.book_label }}</span> OrderPlans and fills for the active runtime. Paper fills never appear as LIVE orders.</p>
-<section class="card">
-  <h2>Paper OrderPlans</h2>
-  <p class="meta">{{ view.book_label }}</p>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Symbol</th><th>Action</th><th>Status</th><th>Side</th><th>Qty</th><th>Notional</th><th>Blocked</th></tr></thead>
-      <tbody>
-        {% for p in view.plans %}
-        <tr>
-          <td>{{ p.symbol }}</td>
-          <td>{{ p.action }}</td>
-          <td><span class="pill">{{ p.execution_status }}</span></td>
-          <td>{{ p.order_side }}</td>
-          <td>{{ p.quantity }}</td>
-          <td>{{ p.notional_display }}</td>
-          <td>{{ (p.blocked_reasons or [])|join(', ') or '—' }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="7" class="empty">No paper plans.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+<div class="page">
+  <header class="page-head">
+    <div>
+      <h1>Orders</h1>
+      <p class="lede"><span class="book-tag {{ 'live' if environment == 'LIVE' else 'paper' }}">{{ view.book_label }}</span> OrderPlans and fills. LIVE ORDER PLACEMENT: {{ 'ON' if view.live_order_placement_enabled else 'OFF' }}.</p>
+    </div>
+  </header>
+  <nav class="page-tabs" role="tablist">
+    <button type="button" class="on" data-tab="plans" role="tab" aria-selected="true">Plans ({{ view.plans|length }})</button>
+    <button type="button" data-tab="fills" role="tab" aria-selected="false">Fills ({{ view.fills|length }})</button>
+    <button type="button" data-tab="reviews" role="tab" aria-selected="false">Reviews ({{ view.reviews|length }})</button>
+    <button type="button" data-tab="broker" role="tab" aria-selected="false">Broker ({{ (view.broker_orders or [])|length }})</button>
+  </nav>
 
-<section class="card">
-  <h2>Paper fills</h2>
-  <p class="meta">{{ view.book_label }}</p>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Symbol</th><th>Status</th><th>Side</th><th>Qty</th><th>Price</th><th>Notional</th><th>Reject</th></tr></thead>
-      <tbody>
-        {% for f in view.fills %}
-        <tr>
-          <td>{{ f.symbol }}</td>
-          <td><span class="pill">{{ f.status }}</span></td>
-          <td>{{ f.side or '—' }}</td>
-          <td>{{ f.quantity if f.quantity is defined else '—' }}</td>
-          <td>{{ f.fill_price if f.fill_price is defined else '—' }}</td>
-          <td>{{ f.filled_notional_display or '—' }}</td>
-          <td>{{ (f.reject_reasons or [])|join(', ') or '—' }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="7" class="empty">No paper fills.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+  <section class="tab-panel card table-card" data-panel="plans">
+    <h2>Paper OrderPlans</h2>
+    <div class="table-wrap">
+      <table data-page-size="8">
+        <thead><tr><th>Symbol</th><th>Action</th><th>Status</th><th>Side</th><th>Qty</th><th>Notional</th><th>Created</th></tr></thead>
+        <tbody>
+          {% for p in view.plans %}
+          <tr>
+            <td class="symbol">{{ p.symbol }}</td>
+            <td>{{ p.action }}</td>
+            <td><span class="pill">{{ p.execution_status }}</span></td>
+            <td>{{ p.order_side }}</td>
+            <td>{{ p.quantity }}</td>
+            <td>{{ p.notional_display }}</td>
+            <td class="meta">{{ (p.run_created_at or p.created_at) | et }}</td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="7">No paper plans.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-<section class="card">
-  <h2>Robinhood ReviewResults</h2>
-  <p class="meta"><span class="book-tag live">{{ view.live_account_label }}</span> Informational preflight only. REVIEW_ACCEPTED does not execute. order_placed is always false here.</p>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Symbol</th><th>Status</th><th>Fail reasons</th><th>Placed</th><th>Reviewed</th></tr></thead>
-      <tbody>
-        {% for r in view.reviews %}
-        <tr>
-          <td>{{ r.symbol }}</td>
-          <td><span class="pill {{ r.status }}">{{ r.status }}</span></td>
-          <td>{{ (r.fail_reasons or [])|join(', ') or '—' }}</td>
-          <td>{{ r.order_placed }}</td>
-          <td>{{ r.reviewed_at }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5" class="empty">No review results.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+  <section class="tab-panel card table-card" data-panel="fills" hidden>
+    <h2>Paper fills</h2>
+    <div class="table-wrap">
+      <table data-page-size="8">
+        <thead><tr><th>Symbol</th><th>Status</th><th>Side</th><th>Qty</th><th>Price</th><th>Notional</th><th>Reject</th></tr></thead>
+        <tbody>
+          {% for f in view.fills %}
+          <tr>
+            <td class="symbol">{{ f.symbol }}</td>
+            <td><span class="pill">{{ f.status }}</span></td>
+            <td>{{ f.side or '—' }}</td>
+            <td>{{ f.quantity if f.quantity is defined else '—' }}</td>
+            <td>{{ f.fill_price if f.fill_price is defined else '—' }}</td>
+            <td>{{ f.filled_notional_display or '—' }}</td>
+            <td>{{ (f.reject_reasons or [])|join(', ') or '—' }}</td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="7">No paper fills.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-<section class="card">
-  <h2>Broker orders</h2>
-  <p class="meta">LIVE ORDER PLACEMENT: {{ 'ON' if view.live_order_placement_enabled else 'OFF' }}</p>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Symbol</th><th>Status</th><th>Side</th><th>Qty / notional</th><th>Broker ID</th><th>Updated</th></tr></thead>
-      <tbody>
-        {% for o in view.broker_orders or [] %}
-        <tr>
-          <td>{{ o.symbol }}</td>
-          <td><span class="pill">{{ o.status }}</span></td>
-          <td>{{ o.side }}</td>
-          <td>{{ o.quantity or o.notional }}</td>
-          <td>{{ o.broker_order_id or '—' }}</td>
-          <td>{{ o.updated_at }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="6" class="empty">No broker orders.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+  <section class="tab-panel card table-card" data-panel="reviews" hidden>
+    <h2>Robinhood ReviewResults</h2>
+    <p class="meta">Informational preflight only. REVIEW_ACCEPTED does not execute.</p>
+    <div class="table-wrap">
+      <table data-page-size="8">
+        <thead><tr><th>Symbol</th><th>Status</th><th>Fail reasons</th><th>Placed</th><th>Reviewed</th></tr></thead>
+        <tbody>
+          {% for r in view.reviews %}
+          <tr>
+            <td class="symbol">{{ r.symbol }}</td>
+            <td><span class="pill {{ r.status }}">{{ r.status }}</span></td>
+            <td>{{ (r.fail_reasons or [])|join(', ') or '—' }}</td>
+            <td>{{ r.order_placed }}</td>
+            <td class="meta">{{ r.reviewed_at | et }}</td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="5">No review results.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tab-panel card table-card" data-panel="broker" hidden>
+    <h2>Broker orders</h2>
+    <div class="table-wrap">
+      <table data-page-size="8">
+        <thead><tr><th>Symbol</th><th>Status</th><th>Side</th><th>Qty / notional</th><th>Broker ID</th><th>Updated</th></tr></thead>
+        <tbody>
+          {% for o in view.broker_orders or [] %}
+          <tr>
+            <td class="symbol">{{ o.symbol }}</td>
+            <td><span class="pill">{{ o.status }}</span></td>
+            <td>{{ o.side }}</td>
+            <td>{{ o.quantity or o.notional }}</td>
+            <td>{{ o.broker_order_id or '—' }}</td>
+            <td class="meta">{{ (o.updated_at or o.created_at) | et }}</td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="6">No broker orders.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
 {% endblock %}

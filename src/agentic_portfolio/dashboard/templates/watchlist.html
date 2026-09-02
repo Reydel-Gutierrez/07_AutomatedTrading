@@ -1,44 +1,52 @@
 {% extends "base.html" %}
 {% block title %}Watchlist · Agentic Portfolio{% endblock %}
 {% block content %}
-<p class="lede">Persistent LIVE watch / thesis state. Items survive market close and process restart. Off-hours plans are conditional. Ordinary research watches stay in WATCH; WAITING_FOR_OPEN is next-session confirmation only.</p>
-{% for group in view.groups %}
-<section class="card sleeve-group" id="watch-{{ group.id }}">
-  <h2>{{ group.label }} <span class="meta">({{ group.active }} active{% if group.id == 'ALL' %} / {{ group.count }} total{% endif %})</span></h2>
-  <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Ticker</th>
-          <th>Status</th>
-          <th>Sleeve</th>
-          <th>Score</th>
-          <th>Thesis</th>
-          <th>Last change</th>
-          <th>Invalidation</th>
-          <th>Next review</th>
-          <th>Expires</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for w in group.rows %}
-        <tr class="{% if w.operational_error %}stale-row{% endif %}">
-          <td class="symbol">{{ w.ticker }}</td>
-          <td><span class="pill">{{ w.status }}</span></td>
-          <td><span class="pill sleeve-{{ w.sleeve }}">{{ w.sleeve_label or w.sleeve or '—' }}</span></td>
-          <td>{{ w.score if w.score is not none else '—' }}</td>
-          <td>{{ w.thesis or w.reason_for_watch or '—' }}</td>
-          <td class="meta">{% if w.last_state_change %}{{ w.last_state_from or '' }} → {{ w.last_state_to or w.status }} ({{ w.last_state_change }}){% else %}—{% endif %}</td>
-          <td>{{ (w.invalidation or w.invalidating_conditions or [])|join('; ') or '—' }}</td>
-          <td class="meta">{{ (w.next_review_at or '')[:16].replace('T', ' ') or '—' }}</td>
-          <td class="meta">{{ (w.expiration or '')[:16].replace('T', ' ') or '—' }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="9" class="empty">No watch items in this group.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
-{% endfor %}
+<div class="page">
+  <header class="page-head">
+    <div>
+      <h1>Watchlist</h1>
+      <p class="lede">Persistent LIVE watch / thesis state. Items survive market close. {{ view.active }} active of {{ view.count }}.</p>
+    </div>
+  </header>
+  <nav class="page-tabs" data-filter-for="#watch-table" aria-label="Sleeve filters">
+    <button type="button" class="on" data-filter="all">All {{ view.count }}</button>
+    {% for group in view.groups if group.id != 'ALL' %}
+    <button type="button" data-filter="{{ group.id }}">{{ group.label }} {{ group.count }}</button>
+    {% endfor %}
+  </nav>
+  <section class="card table-card">
+    <div class="table-wrap">
+      <table id="watch-table" data-page-size="10">
+        <thead>
+          <tr>
+            <th>Ticker</th>
+            <th>Status</th>
+            <th>Sleeve</th>
+            <th>Score</th>
+            <th>Thesis</th>
+            <th>Last change</th>
+            <th>Next review</th>
+            <th>Expires</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for w in view.rows %}
+          <tr class="{% if w.operational_error %}stale-row{% endif %}" data-bucket="{{ w.sleeve or 'UNASSIGNED' }}">
+            <td class="symbol">{{ w.ticker }}</td>
+            <td><span class="pill">{{ w.status }}</span></td>
+            <td><span class="pill sleeve-{{ w.sleeve }}">{{ w.sleeve_label or w.sleeve or '—' }}</span></td>
+            <td>{{ w.score if w.score is not none else '—' }}</td>
+            <td class="wrap">{{ w.thesis or w.reason_for_watch or '—' }}</td>
+            <td class="meta">{{ (w.last_state_at or w.last_updated or w.last_reassessed) | et }}</td>
+            <td class="meta">{{ w.next_review_at | et }}</td>
+            <td class="meta">{{ w.expiration | et }}</td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="8">No watch items.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
 {% endblock %}

@@ -20,14 +20,14 @@
     <nav class="side-nav">
       {% if is_admin %}
       <a href="{{ url_for('dashboard_page') }}" class="{{ 'on' if page == 'dashboard' else '' }}" data-short="Da">Dashboard</a>
-      <a href="{{ url_for('discovery_page') }}" class="{{ 'on' if page == 'discovery' else '' }}" data-short="Di">Discovery <span class="badge new">NEW</span></a>
+      <a href="{{ url_for('discovery_page') }}" class="{{ 'on' if page == 'discovery' else '' }}" data-short="Di">Discovery</a>
       <a href="{{ url_for('watchlist_page') }}" class="{{ 'on' if page == 'watchlist' else '' }}" data-short="Wa">Watchlist</a>
-      <a href="{{ url_for('ai_page') }}" class="{{ 'on' if page == 'ai' else '' }}" data-short="AI">AI</a>
+      <a href="{{ url_for('ai_activity_page') }}" class="{{ 'on' if page == 'ai' else '' }}" data-short="AI">AI Activity</a>
       <a href="{{ url_for('approvals_page') }}" class="{{ 'on' if page == 'approvals' else '' }}" data-short="Ap">Approvals{% if pending_count %}<span class="badge count">{{ pending_count }}</span>{% endif %}</a>
       <a href="{{ url_for('notifications_page') }}" class="{{ 'on' if page == 'notifications' else '' }}" data-short="No">Alerts{% if unread_count %}<span class="badge count">{{ unread_count }}</span>{% endif %}</a>
       <a href="{{ url_for('research_page') }}" class="{{ 'on' if page == 'research' else '' }}" data-short="Re">Research</a>
       <a href="{{ url_for('orders_page') }}" class="{{ 'on' if page == 'orders' else '' }}" data-short="Or">Orders</a>
-      <a href="{{ url_for('dashboard_page') }}#positions" data-short="Po">Positions</a>
+      <a href="{{ url_for('positions_page') }}" class="{{ 'on' if page == 'positions' else '' }}" data-short="Po">Positions</a>
       <a href="{{ url_for('journal_page') }}" class="{{ 'on' if page == 'journal' else '' }}" data-short="Jo">Journal</a>
       <a href="{{ url_for('family_page') }}" class="{{ 'on' if page == 'users' else '' }}" data-short="Us">Users</a>
       <a href="{{ url_for('system_page') }}" class="{{ 'on' if page == 'system' else '' }}" data-short="Sy">System</a>
@@ -46,7 +46,10 @@
   <div class="workspace">
     <header class="top">
       <div class="brand-block">
-        <a class="brand" href="{{ url_for('dashboard_page') }}">Agentic Portfolio</a>
+        <a class="brand brand-mark" href="{{ url_for('dashboard_page') }}">
+          <svg class="logo-dot" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 16.5 9.2 10l3.4 4.1L20 7v3.2L12.7 18 9.2 13.8 4 19.2z"/></svg>
+          Agentic Portfolio
+        </a>
         <span class="env-chip {{ environment }}">{{ environment }}</span>
       </div>
       <div class="status-copy env-banner {{ environment }}{% if live_order_placement_enabled %} placement-on{% endif %}" role="status">{{ environment_banner }} · {{ no_live_placement_banner }}{% if live_order_placement_enabled %} · HUMAN APPROVAL STILL REQUIRED{% endif %}{% if autonomous_disabled and not live_order_placement_enabled %} · AUTONOMOUS TRADING DISABLED · approve does not place an order{% endif %}</div>
@@ -68,6 +71,11 @@
       <span class="book-tag paper">{{ paper_book_label }}: ACTIVE</span>
       <span class="book-tag live">{{ live_account_label }}</span>
       {% endif %}
+      {% if chrome.runtime %}
+      <span class="health-chip"><span class="status-dot {{ '' if chrome.market_open else 'off' }}"></span>Market <strong>{{ chrome.market_phase }}</strong></span>
+      <span class="health-chip"><span class="status-dot {{ '' if chrome.robinhood_connected else 'warn' }}"></span>Robinhood <strong>{{ chrome.robinhood_label }}</strong></span>
+      <span class="health-chip budget-chip"><span>AI Budget <strong>{{ chrome.ai_spent_display }} / {{ chrome.ai_cap_display }}</strong></span><span class="bar" aria-hidden="true"><span style="width: {{ chrome.ai_pct }}%"></span></span></span>
+      {% endif %}
     </div>
 
     {% with messages = get_flashed_messages() %}
@@ -87,8 +95,20 @@
     <main>
       {% block content %}{% endblock %}
     </main>
+    {% if current_user %}
+    <footer class="app-foot">
+      <span>Last data: {{ ((view.updated_at if view is defined else none) or chrome.last_data_at) | et(seconds=True) }}</span>
+      <span>All times {{ tz_name }}</span>
+      <div class="foot-status">
+        <span>Market data: {{ chrome.market_phase or '—' }}</span>
+        <span>Robinhood: {{ chrome.robinhood_label or '—' }}</span>
+        <span>AI: {{ chrome.ai_state or '—' }}</span>
+      </div>
+    </footer>
+    {% endif %}
   </div>
   <script src="{{ url_for('static', filename='shell.js') }}"></script>
+  <script src="{{ url_for('static', filename='tables.js') }}"></script>
   {% block extra_js %}{% endblock %}
 </body>
 </html>

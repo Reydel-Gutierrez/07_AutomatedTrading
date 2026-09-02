@@ -71,10 +71,10 @@ def test_admin_dashboard_identity_kpis_and_discovery_nav():
     assert ">PAPER<" in html or "PAPER</span>" in html
     assert "Portfolio Value" in html
     assert "Today's P/L" in html
-    assert "Excess vs SPY" in html
-    assert "View all candidates" in html
+    assert "Watchlist" in html
+    assert "Eastern Time (ET)" in html
+    assert "View watchlist" in html
     assert 'id="allocation-chart"' in html
-    assert "Candidate discovery" in html
     assert 'href="/discovery"' in html
     payload = client.get("/api/dashboard").get_json()
     assert payload["nav"] == 10000.0
@@ -107,6 +107,8 @@ def test_discovery_page_reads_store_and_allows_users(tmp_path):
     text = page.get_data(as_text=True)
     assert "NVDA" in text
     assert "Discovery" in text
+    assert "data-page-size" in text
+    assert "Eastern Time (ET)" in text
     user_app = _app(tmp_path, nav=10000.0)
     admin = _admin(user_app)
     token = _csrf(admin)
@@ -124,4 +126,4 @@ def test_discovery_page_reads_store_and_allows_users(tmp_path):
     assert "Dad (USER)" in home
     assert "Sign Out" in home
     assert 'href="/discovery"' in home
-    assert "Candidate discovery" in home
+    assert "Candidate discovery" in home or "Discovery" in home

@@ -1,124 +1,125 @@
 {% extends "base.html" %}
 {% block title %}System · Agentic Portfolio{% endblock %}
 {% block content %}
-<div class="halt-banner">{% if view.live_order_placement_enabled %}HUMAN APPROVAL REQUIRED · LIVE ORDER PLACEMENT ON{% else %}AUTONOMOUS TRADING DISABLED{% endif %}</div>
-{% if view.live_data_unavailable %}
-<div class="halt-banner">LIVE DATA UNAVAILABLE{% if view.live_error_code %} · {{ view.live_error_code }}{% endif %}</div>
-{% endif %}
-<section class="card">
-  <h2>24/7 agent runtime</h2>
-  <dl class="facts">
-    <dt>Agent</dt><dd class="{{ 'agent-online' if view.agent.alive else 'agent-offline' }}">{{ view.agent.agent if view.agent else 'OFFLINE' }}</dd>
-    <dt>Uptime</dt><dd>{{ view.agent.uptime_seconds if view.agent else 0 }}s</dd>
-    <dt>Runtime mode</dt><dd>{{ view.agent.runtime_mode if view.agent else view.active_runtime }}</dd>
-    <dt>Market / session</dt><dd>{{ (view.agent.market.phase if view.agent else None) or '—' }} · {{ (view.agent.market.reason if view.agent else '') }}</dd>
-    <dt>Last successful cycle</dt><dd>{{ (view.agent.last_cycle.at if view.agent and view.agent.last_cycle else None) or '—' }}</dd>
-    <dt>Robinhood</dt><dd>{{ 'CONNECTED' if view.agent and view.agent.robinhood.connected else 'FAIL CLOSED / OFFLINE' }}{% if view.agent and view.agent.robinhood.execution_mode %} · observation {{ view.agent.robinhood.observation_mode or 'READ_ONLY' }} · execution {{ view.agent.robinhood.execution_mode }}{% endif %}</dd>
-    <dt>OpenAI</dt><dd>{{ view.agent.openai.state if view.agent else '—' }}</dd>
-    <dt>AI monthly budget</dt><dd>{{ view.agent.ai_budget.mode if view.agent else '—' }} · ${{ '%.2f'|format((view.agent.ai_budget.spent if view.agent else 0) or 0) }} / $10</dd>
-  </dl>
-  {% if view.agent and view.agent.next_jobs %}
-  <h3>Next scheduled jobs</h3>
-  <ul class="plain">
-    {% for job in view.agent.next_jobs if job.due %}
-    <li>{{ job.job }} · {{ job.cadence }}{% if job.every_minutes %} / {{ job.every_minutes }}m{% endif %} · due</li>
-    {% else %}
-    <li class="empty">No jobs currently due. Runtime remains alive.</li>
-    {% endfor %}
-  </ul>
+<div class="page">
+  <div class="halt-banner">{% if view.live_order_placement_enabled %}HUMAN APPROVAL REQUIRED · LIVE ORDER PLACEMENT ON{% else %}AUTONOMOUS TRADING DISABLED{% endif %}</div>
+  {% if view.live_data_unavailable %}
+  <div class="halt-banner">LIVE DATA UNAVAILABLE{% if view.live_error_code %} · {{ view.live_error_code }}{% endif %}</div>
   {% endif %}
-</section>
-<section class="card">
-  <h2>Active runtime</h2>
-  <dl class="facts">
-    <dt>ACTIVE RUNTIME</dt><dd>{{ view.active_runtime or view.environment }}</dd>
-    <dt>LIVE account</dt><dd>{{ view.live_account_status }}</dd>
-    <dt>PAPER book</dt><dd>{{ view.paper_book_status }}</dd>
-    <dt>Portfolio source</dt><dd>{{ view.active_context.source_of_truth if view.active_context else '—' }}</dd>
-  </dl>
-</section>
-<p class="lede"><span class="book-tag {{ 'live' if view.book_kind == 'live' else 'paper' }}">{{ view.active_book_label or view.paper_book_label }}</span> {{ view.execution.state }} · auto_execution={{ view.execution.auto_execution }} · live_trade_actions_allowed={{ view.execution.live_trade_actions_allowed }} · require_human_approval={{ view.execution.require_human_approval }} · terminal {{ view.execution.current_terminal_stage }} · live_order_placement_enabled={{ view.live_order_placement_enabled }}</p>
+  <header class="page-head">
+    <div>
+      <h1>System</h1>
+      <p class="lede"><span class="book-tag {{ 'live' if view.book_kind == 'live' else 'paper' }}">{{ view.active_book_label or view.paper_book_label }}</span> {{ view.execution.state }} · live_order_placement_enabled={{ view.live_order_placement_enabled }}</p>
+    </div>
+  </header>
+  <nav class="page-tabs" role="tablist">
+    <button type="button" class="on" data-tab="runtime" role="tab" aria-selected="true">Runtime</button>
+    <button type="button" data-tab="health" role="tab" aria-selected="false">Health</button>
+    <button type="button" data-tab="data" role="tab" aria-selected="false">Data</button>
+    <button type="button" data-tab="bind" role="tab" aria-selected="false">Bind</button>
+  </nav>
 
-<section class="health-grid" aria-label="Dashboard health">
-  {% for h in view.health %}
-  <article class="health-item {{ h.status }}">
-    <h2>{{ h.name }}</h2>
-    <p class="figure-sm">{{ h.status }}</p>
-    <p class="meta">{{ h.detail }}</p>
-  </article>
-  {% endfor %}
-</section>
+  <section class="tab-panel" data-panel="runtime">
+    <div class="grid-2" style="flex:1; min-height:0;">
+      <article class="card">
+        <h2>24/7 agent runtime</h2>
+        <dl class="facts">
+          <dt>Agent</dt><dd class="{{ 'agent-online' if view.agent.alive else 'agent-offline' }}">{{ view.agent.agent if view.agent else 'OFFLINE' }}</dd>
+          <dt>Uptime</dt><dd>{{ view.agent.uptime_seconds if view.agent else 0 }}s</dd>
+          <dt>Runtime mode</dt><dd>{{ view.agent.runtime_mode if view.agent else view.active_runtime }}</dd>
+          <dt>Market / session</dt><dd>{{ (view.agent.market.phase if view.agent else None) or '—' }} · {{ (view.agent.market.reason if view.agent else '') }}</dd>
+          <dt>Last successful cycle</dt><dd>{{ (view.agent.last_cycle.at if view.agent and view.agent.last_cycle else None) | et(seconds=True) }}</dd>
+          <dt>Robinhood</dt><dd>{{ 'CONNECTED' if view.agent and view.agent.robinhood.connected else 'FAIL CLOSED / OFFLINE' }}{% if view.agent and view.agent.robinhood.execution_mode %} · observation {{ view.agent.robinhood.observation_mode or 'READ_ONLY' }} · execution {{ view.agent.robinhood.execution_mode }}{% endif %}</dd>
+          <dt>OpenAI</dt><dd>{{ view.agent.openai.state if view.agent else '—' }}</dd>
+          <dt>AI monthly budget</dt><dd>{{ view.agent.ai_budget.mode if view.agent else '—' }} · ${{ '%.2f'|format((view.agent.ai_budget.spent if view.agent else 0) or 0) }} / $10</dd>
+        </dl>
+      </article>
+      <article class="card">
+        <h2>Active runtime</h2>
+        <dl class="facts">
+          <dt>ACTIVE RUNTIME</dt><dd>{{ view.active_runtime or view.environment }}</dd>
+          <dt>LIVE account</dt><dd>{{ view.live_account_status }}</dd>
+          <dt>PAPER book</dt><dd>{{ view.paper_book_status }}</dd>
+          <dt>Portfolio source</dt><dd>{{ view.active_context.source_of_truth if view.active_context else '—' }}</dd>
+        </dl>
+        <h2>Execution flags</h2>
+        <dl class="facts">
+          <dt>State</dt><dd>{{ view.execution.state }}</dd>
+          <dt>auto_execution</dt><dd>{{ view.execution.auto_execution }}</dd>
+          <dt>live_trade_actions_allowed</dt><dd>{{ view.execution.live_trade_actions_allowed }}</dd>
+          <dt>require_human_approval</dt><dd>{{ view.execution.require_human_approval }}</dd>
+          <dt>Approved places order?</dt><dd>{{ 'yes, after Risk Gate and human APPROVE' if view.live_order_placement_enabled else 'no' }}</dd>
+        </dl>
+      </article>
+    </div>
+  </section>
 
-<section class="grid-2">
-  <article class="card">
-    <h2>Execution flags</h2>
-    <dl class="facts">
-      <dt>State</dt><dd>{{ view.execution.state }}</dd>
-      <dt>auto_execution</dt><dd>{{ view.execution.auto_execution }}</dd>
-      <dt>live_trade_actions_allowed</dt><dd>{{ view.execution.live_trade_actions_allowed }}</dd>
-      <dt>require_human_approval</dt><dd>{{ view.execution.require_human_approval }}</dd>
-      <dt>Approved places order?</dt><dd>{{ 'yes, after Risk Gate and human APPROVE' if view.live_order_placement_enabled else 'no' }}</dd>
-    </dl>
-  </article>
-  <article class="card">
-    <h2>Risk state</h2>
-    <p><span class="pill {{ (view.active_context.risk_state if view.active_context else None) }}">{{ view.risk_state_label or ((view.active_context.risk_state if view.active_context else view.paper_context.risk_state) or '—') }}</span></p>
-    <p class="meta">{{ view.live_account_label }} HWM {{ view.hwm.risk_state if view.hwm else '—' }} · drawdown {{ view.hwm.drawdown if view.hwm else '—' }} · NAV {{ view.hwm.nav if view.hwm else '—' }}</p>
-    <p class="meta">Hard risk limits are read-only from this dashboard. Policy version {{ view.policy_version }}.</p>
-  </article>
-</section>
-
-<section class="card">
-  <h2>Data freshness</h2>
-  <table>
-    <thead><tr><th>Source</th><th>Present</th><th>Updated</th><th>Detail</th></tr></thead>
-    <tbody>
-      {% for f in view.freshness %}
-      <tr>
-        <td>{{ f.label }}</td>
-        <td>{{ 'yes' if f.present else 'no' }}</td>
-        <td>{{ f.updated_at or '—' }}</td>
-        <td>{{ f.detail or '—' }}</td>
-      </tr>
+  <section class="tab-panel" data-panel="health" hidden>
+    <section class="health-grid" aria-label="Dashboard health">
+      {% for h in view.health %}
+      <article class="health-item {{ h.status }}">
+        <h2>{{ h.name }}</h2>
+        <p class="figure-sm">{{ h.status }}</p>
+        <p class="meta">{{ h.detail }}</p>
+      </article>
       {% endfor %}
-    </tbody>
-  </table>
-</section>
+    </section>
+    <article class="card">
+      <h2>Risk state</h2>
+      <p><span class="pill {{ (view.active_context.risk_state if view.active_context else None) }}">{{ view.risk_state_label or ((view.active_context.risk_state if view.active_context else view.paper_context.risk_state) or '—') }}</span></p>
+      <p class="meta">{{ view.live_account_label }} HWM {{ view.hwm.risk_state if view.hwm else '—' }} · drawdown {{ view.hwm.drawdown if view.hwm else '—' }} · NAV {{ view.hwm.nav if view.hwm else '—' }}</p>
+      <p class="meta">Hard risk limits are read-only from this dashboard. Policy version {{ view.policy_version }}.</p>
+    </article>
+  </section>
 
-<section class="card">
-  <h2>Service status</h2>
-  <p class="meta">Operational {{ view.active_runtime or view.environment }} counts only.</p>
-  <table>
-    <thead><tr><th>Service</th><th>OK</th><th>Count</th></tr></thead>
-    <tbody>
-      {% for s in view.services %}
-      <tr><td>{{ s.name }}</td><td>{{ 'yes' if s.ok else 'no' }}</td><td>{{ s.count }}</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
+  <section class="tab-panel card table-card" data-panel="data" hidden>
+    <h2>Data freshness</h2>
+    <div class="table-wrap">
+      <table data-page-size="8">
+        <thead><tr><th>Source</th><th>Present</th><th>Updated</th><th>Detail</th></tr></thead>
+        <tbody>
+          {% for f in view.freshness %}
+          <tr>
+            <td>{{ f.label }}</td>
+            <td>{{ 'yes' if f.present else 'no' }}</td>
+            <td class="meta">{{ f.updated_at | et }}</td>
+            <td>{{ f.detail or '—' }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-{% if view.paper_diagnostics %}
-<section class="card">
-  <h2>{{ view.paper_diagnostics.label }}</h2>
-  <p class="meta"><span class="book-tag paper inactive">PAPER BOOK: {{ view.paper_book_status }}</span> {{ view.paper_diagnostics.note }}</p>
-  <p class="meta">Paper NAV {{ view.paper_diagnostics.nav or '—' }} · cash {{ view.paper_diagnostics.cash or '—' }} · monitoring {{ view.paper_diagnostics.monitoring_symbols or '—' }}</p>
-  <table>
-    <thead><tr><th>Stored paper artifact</th><th>Count</th></tr></thead>
-    <tbody>
-      {% for s in view.paper_diagnostics.counts %}
-      <tr><td>{{ s.name }}</td><td>{{ s.count }}</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</section>
-{% endif %}
-
-<section class="card">
-  <h2>Bind / Cloudflare later</h2>
-  <p>Listening target {{ bind.host }}:{{ bind.port }}. Public exposure {{ bind.public_exposure }}.</p>
-  <p class="meta">{{ bind.cloudflare.notes }}</p>
-  <p class="meta">Tunnel enabled={{ bind.cloudflare.tunnel_enabled }} · Access enabled={{ bind.cloudflare.access_enabled }} · origin {{ bind.cloudflare.origin }}</p>
-  <p class="meta">Writes allowed: {{ view.writes_allowed|join(', ') }}. Place/cancel/transfers/limit changes are refused.</p>
-</section>
+  <section class="tab-panel" data-panel="bind" hidden>
+    <article class="card">
+      <h2>Service status</h2>
+      <p class="meta">Operational {{ view.active_runtime or view.environment }} counts only.</p>
+      <div class="table-wrap">
+        <table data-page-size="8">
+          <thead><tr><th>Service</th><th>OK</th><th>Count</th></tr></thead>
+          <tbody>
+            {% for s in view.services %}
+            <tr><td>{{ s.name }}</td><td>{{ 'yes' if s.ok else 'no' }}</td><td>{{ s.count }}</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </article>
+    {% if view.paper_diagnostics %}
+    <article class="card">
+      <h2>{{ view.paper_diagnostics.label }}</h2>
+      <p class="meta"><span class="book-tag paper inactive">PAPER BOOK: {{ view.paper_book_status }}</span> {{ view.paper_diagnostics.note }}</p>
+      <p class="meta">Paper NAV {{ view.paper_diagnostics.nav or '—' }} · cash {{ view.paper_diagnostics.cash or '—' }} · monitoring {{ view.paper_diagnostics.monitoring_symbols or '—' }}</p>
+    </article>
+    {% endif %}
+    <article class="card">
+      <h2>Bind / Cloudflare later</h2>
+      <p>Listening target {{ bind.host }}:{{ bind.port }}. Public exposure {{ bind.public_exposure }}.</p>
+      <p class="meta">{{ bind.cloudflare.notes }}</p>
+      <p class="meta">Tunnel enabled={{ bind.cloudflare.tunnel_enabled }} · Access enabled={{ bind.cloudflare.access_enabled }} · origin {{ bind.cloudflare.origin }}</p>
+      <p class="meta">Writes allowed: {{ view.writes_allowed|join(', ') }}. Place/cancel/transfers/limit changes are refused.</p>
+    </article>
+  </section>
+</div>
 {% endblock %}

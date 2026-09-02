@@ -18,6 +18,7 @@ from agentic_portfolio.approval.validate import ApprovalValidationError
 from agentic_portfolio.live_approval import LiveApproval, LiveApprovalEngine, LiveApprovalStatus, LiveApprovalStore
 from agentic_portfolio.notify import NotificationStore
 from agentic_portfolio.watch import WatchStore
+from agentic_portfolio.dashboard.display import newest_first, ts_sort_key
 from agentic_portfolio.dashboard.history import (
     chart_ready,
     record_nav_snapshot,
@@ -642,6 +643,7 @@ def watchlist_view(state: DashboardState) -> dict[str, Any]:
             }
         )
     terminal = {"REJECTED", "EXPIRED", "INVALIDATED"}
+    items = newest_first(items, "last_state_at", "last_updated", "last_reassessed", "next_review_at")
     active_rows = [row for row in items if row["status"] not in terminal]
     sleeve_order = [key for key in ALLOCATION_ORDER if key != "CASH"]
     groups = []
@@ -680,7 +682,7 @@ def watchlist_view(state: DashboardState) -> dict[str, Any]:
 
 def notifications_view(state: DashboardState) -> dict[str, Any]:
     store = NotificationStore(state.root)
-    items = [n.to_dict() for n in store.all()]
+    items = newest_first([n.to_dict() for n in store.all()], "created_at")
     unread = [n for n in items if not n.get("read")]
     return {"rows": items, "unread": unread, "unread_count": len(unread)}
 
@@ -737,9 +739,56 @@ def agent_runtime_view(state: DashboardState) -> dict[str, Any]:
     }
 
 
+def chrome_status(state: DashboardState) -> dict[str, Any]:
+    agent = agent_runtime_view(state)
+    market = dict(agent.get("market") or {})
+    robinhood = dict(agent.get("robinhood") or {})
+    budget = dict(agent.get("ai_budget") or {})
+    openai = dict(agent.get("openai") or {})
+    spent = float(budget.get("spent") or openai.get("spent") or 0)
+    cap = float(budget.get("cap") or 10)
+    phase = str(market.get("phase") or "—")
+    connected = bool(robinhood.get("connected"))
+    last_cycle = dict(agent.get("last_cycle") or {})
+    pct = round(min(100.0, (spent / cap) * 100.0), 0) if cap else 0
+    return {
+        "runtime": agent.get("runtime_mode") or get_active_artifact_environment(),
+        "agent_alive": bool(agent.get("alive")),
+        "market_phase": phase,
+        "market_open": bool(market.get("regular_hours_open")) or phase.upper() in {"OPEN", "REGULAR"},
+        "robinhood_connected": connected,
+        "robinhood_label": "CONNECTED" if connected else "OFFLINE",
+        "ai_spent": spent,
+        "ai_cap": cap,
+        "ai_spent_display": f"${spent:.2f}",
+        "ai_cap_display": f"${cap:.0f}",
+        "ai_pct": int(pct),
+        "ai_state": openai.get("state") or "—",
+        "last_data_at": last_cycle.get("at") or last_cycle.get("completed_at"),
+    }
+
+
+def upcoming_events(state: DashboardState) -> list[dict[str, Any]]:
+    rows = []
+    for item in watchlist_view(state).get("rows") or []:
+        when = item.get("next_review_at")
+        if not when:
+            continue
+        rows.append(
+            {
+                "ticker": item.get("ticker"),
+                "title": f"{item.get('ticker')} review",
+                "at": when,
+                "status": item.get("status"),
+            }
+        )
+    rows.sort(key=lambda row: ts_sort_key(row.get("at")) or "9999")
+    return rows[:8]
+
+
 def activity_log_view(state: DashboardState, *, limit: int = 200) -> dict[str, Any]:
     rows = read_activity(state.root, limit=limit)
-    rows.sort(key=lambda row: str(row.get("logged_at") or ""), reverse=True)
+    rows = newest_first(rows, "logged_at", "created_at")
     return {"entries": rows, "count": len(rows)}
 
 
@@ -749,9 +798,21 @@ def list_approvals(state: DashboardState) -> dict[str, Any]:
     env = get_active_artifact_environment()
     packets = [_packet_row(p, flags=flags) for p in _operational_packets(state, flags)]
     live_rows = [_live_approval_row(item) for item in _live_approval_store(state).all()]
-    pending = [p for p in live_rows if p["pending"]] + [p for p in packets if p["pending"]]
-    stale = [p for p in live_rows if p["stale"]] + [p for p in packets if p["stale"]]
-    other = [p for p in live_rows if not p["pending"] and not p["stale"]] + [p for p in packets if not p["pending"] and not p["stale"]]
+    pending = newest_first(
+        [p for p in live_rows if p["pending"]] + [p for p in packets if p["pending"]],
+        "created_at",
+    )
+    stale = newest_first(
+        [p for p in live_rows if p["stale"]] + [p for p in packets if p["stale"]],
+        "decided_at",
+        "created_at",
+    )
+    other = newest_first(
+        [p for p in live_rows if not p["pending"] and not p["stale"]]
+        + [p for p in packets if not p["pending"] and not p["stale"]],
+        "decided_at",
+        "created_at",
+    )
     return {
         "pending": pending,
         "stale": stale,
@@ -951,16 +1012,19 @@ def _live_research_rows(state: DashboardState) -> list[dict[str, Any]]:
 def research_view(state: DashboardState) -> dict[str, Any]:
     flags = resolve_ui_flags()
     env = get_active_artifact_environment()
-    candidates = [to_dict(c) for c in state.candidates.all()]
+    candidates = newest_first([to_dict(c) for c in state.candidates.all()], "discovered_at", "created_at")
     for row in candidates:
         row["runtime_mode"] = env
-    candidates.sort(key=lambda c: float(c.get("discovery_score") or 0), reverse=True)
     if env == RuntimeMode.LIVE.value:
-        reports = _live_research_rows(state)
+        reports = newest_first(_live_research_rows(state), "completed_at", "started_at", "created_at")
     else:
-        reports = [to_dict(r) for r in state.research.all_reports()]
-        reports.sort(key=lambda r: str(r.get("completed_at") or r.get("started_at") or ""), reverse=True)
-    theses = _merge_theses(state, flags)
+        reports = newest_first(
+            [to_dict(r) for r in state.research.all_reports()],
+            "completed_at",
+            "started_at",
+            "created_at",
+        )
+    theses = newest_first(_merge_theses(state, flags), "updated_at", "created_at")
     raw_queue = [to_dict(q) for q in state.queue.all()]
     by_symbol: dict[str, dict[str, Any]] = {}
     for row in raw_queue:
@@ -968,7 +1032,7 @@ def research_view(state: DashboardState) -> dict[str, Any]:
         prior = by_symbol.get(key)
         if prior is None or str(row.get("enqueued_at") or "") >= str(prior.get("enqueued_at") or ""):
             by_symbol[key] = row
-    queue = list(by_symbol.values())
+    queue = newest_first(list(by_symbol.values()), "enqueued_at", "claimed_at")
     counts = {
         "queued": sum(1 for q in queue if q.get("status") == "QUEUED"),
         "researching": sum(1 for q in queue if q.get("status") in {"RESEARCHING", "IN_PROGRESS"}),
@@ -1081,10 +1145,11 @@ def orders_view(state: DashboardState) -> dict[str, Any]:
             broker_orders.append(order.to_dict())
     except Exception:  # noqa: BLE001
         broker_orders = []
+    broker_orders = newest_first(broker_orders, "updated_at", "created_at")
     return {
-        "plans": plans,
-        "fills": fills,
-        "reviews": reviews,
+        "plans": newest_first(plans, "run_created_at", "created_at"),
+        "fills": newest_first(fills, "created_at", "filled_at"),
+        "reviews": newest_first(reviews, "reviewed_at", "created_at"),
         "broker_orders": broker_orders,
         "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
@@ -1152,7 +1217,7 @@ def journal_view(state: DashboardState, *, limit: int = 250) -> dict[str, Any]:
                     row["type"] = row.get("status") or "REVIEW"
             row["runtime_mode"] = row_env
             rows.append(row)
-    rows.sort(key=lambda r: str(r.get("_at") or ""), reverse=True)
+    rows = newest_first(rows, "_at")
     return {
         "entries": rows[:limit],
         "count": len(rows),
@@ -1207,7 +1272,7 @@ def monitoring_alerts(state: DashboardState, flags: dict[str, Any] | None = None
                 "rationale": (pos.get("reassessment") or {}).get("rationale"),
             }
         )
-    return alerts
+    return newest_first(alerts, "created_at")
 
 
 def recent_decisions(state: DashboardState, *, limit: int = 12) -> list[dict[str, Any]]:
@@ -1228,7 +1293,7 @@ def recent_decisions(state: DashboardState, *, limit: int = 12) -> list[dict[str
                     "comparison": None,
                 }
             )
-        return out
+        return newest_first(out, "created_at")[:limit]
     for run in state.decisions.all_runs()[:limit]:
         if artifact_environment(run) == RuntimeMode.LIVE.value:
             continue
@@ -1247,7 +1312,7 @@ def recent_decisions(state: DashboardState, *, limit: int = 12) -> list[dict[str
                 "comparison": run.get("comparison"),
             }
         )
-    return out
+    return newest_first(out, "created_at")[:limit]
 
 
 def health_status(state: DashboardState) -> list[dict[str, Any]]:
@@ -1569,7 +1634,7 @@ def compact_activity(state: DashboardState) -> list[dict[str, Any]]:
                     "kind": "ai",
                     "label": "AI",
                     "title": f"{ticker} {friendly_enum(str(row.get('decision_action') or row.get('classification') or ''))}",
-                    "meta": None,
+                    "meta": row.get("created_at"),
                     "href": "/ai/activity",
                     "runtime_mode": RuntimeMode.LIVE.value,
                 }
@@ -1712,19 +1777,46 @@ def candidate_rows(state: DashboardState) -> list[dict[str, Any]]:
                 "event_labels": [friendly_enum(r) for r in (raw.get("event_flags") or [])[:6]],
                 "research_status": research_status,
                 "research_status_label": friendly_enum(research_status) if research_status else "—",
+                "filter_bucket": _candidate_bucket(raw.get("status")),
             }
         )
-    rows.sort(key=lambda r: float(r.get("discovery_score") or 0), reverse=True)
+    rows = newest_first(rows, "discovered_at", "created_at")
     return rows
+
+
+def _candidate_bucket(status: Any) -> str:
+    value = str(status or "").upper()
+    if value in {"PROMOTED_TO_RESEARCH", "WATCHING", "RESEARCH_COMPLETE"}:
+        return "promoted"
+    if value in {"REJECTED", "EXPIRED"}:
+        return "rejected"
+    return "evaluated"
 
 
 def discovery_view(state: DashboardState) -> dict[str, Any]:
     ui = resolve_ui_flags()
     env = get_active_artifact_environment()
     rows = candidate_rows(state)
+    promoted = [row for row in rows if row.get("filter_bucket") == "promoted"]
+    rejected = [row for row in rows if row.get("filter_bucket") == "rejected"]
+    scored = sorted(rows, key=lambda r: float(r.get("discovery_score") or 0), reverse=True)
+    top = scored[0] if scored else None
+    avg = (
+        round(sum(float(r.get("discovery_score") or 0) for r in rows) / len(rows), 2)
+        if rows
+        else None
+    )
+    latest = max(state.discovery.all(), key=lambda r: r.started_at) if state.discovery.all() else None
     return {
         "candidates": rows,
         "count": len(rows),
+        "promoted_count": len(promoted),
+        "rejected_count": len(rejected),
+        "evaluated_count": len(rows),
+        "top_score": top.get("discovery_score") if top else None,
+        "top_symbol": top.get("symbol") if top else None,
+        "avg_score": avg,
+        "last_run": latest.completed_at if latest else (latest.started_at if latest else None),
         "book_label": ui["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
@@ -1887,6 +1979,8 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
         "agent": agent_runtime_view(state),
         "watchlist": watchlist_view(state),
         "notifications": notifications_view(state),
+        "upcoming": upcoming_events(state),
+        "chrome": chrome_status(state),
         "approval_banner": (
             f"TRADE APPROVAL REQUIRED — {list_approvals(state)['pending_count']}"
             if list_approvals(state)["pending_count"]
@@ -2073,9 +2167,10 @@ def ai_activity_view(state: DashboardState) -> dict[str, Any]:
                 "rejection_reason": proposal.get("rejection_reason") or screen.get("rejection_reason") or report.get("rejection_reason"),
                 "provider": proposal.get("provider") or screen.get("provider"),
                 "model": proposal.get("model") or screen.get("model"),
+                "created_at": screen.get("created_at") or decision.get("created_at") or proposal.get("created_at"),
             }
         )
-    rows.sort(key=lambda r: str(r.get("ticker") or ""))
+    rows = newest_first(rows, "created_at")
     return {
         "environment": mode,
         "book_kind": ui["book_kind"],
@@ -2083,7 +2178,7 @@ def ai_activity_view(state: DashboardState) -> dict[str, Any]:
         "paper_book_label": PAPER_BOOK_LABEL,
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
-        "scans": scans[-10:],
+        "scans": newest_first(scans, "created_at")[:10],
         "rows": rows,
         "proposals": proposals,
         "other_book_count": len(other_ids),

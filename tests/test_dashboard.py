@@ -21,7 +21,7 @@ from agentic_portfolio.dashboard.settings import resolve_bind, resolve_ui_flags
 from agentic_portfolio.paths import project_root
 
 PENDING_ID = "55123138-6dbe-4554-a92b-de57b21f1873"
-PAGES = ["/", "/approvals", "/research", "/orders", "/journal", "/system", "/ai", "/watchlist", "/notifications"]
+PAGES = ["/", "/approvals", "/research", "/orders", "/journal", "/system", "/ai", "/watchlist", "/notifications", "/positions", "/discovery"]
 API = ["/api/dashboard", "/api/approvals", "/api/research", "/api/orders", "/api/journal", "/api/system", "/api/ai", "/api/watchlist", "/api/notifications", "/api/agent"]
 
 

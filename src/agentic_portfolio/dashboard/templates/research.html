@@ -1,96 +1,112 @@
 {% extends "base.html" %}
 {% block title %}Research · Agentic Portfolio{% endblock %}
 {% block content %}
-<p class="lede"><span class="book-tag {{ 'live' if view.runtime_mode == 'LIVE' or environment == 'LIVE' else 'paper' }}">{{ view.book_label }}</span> research and theses for the active runtime. Paper artifacts stay on System diagnostics.</p>
-<section class="card">
-  <h2>Candidates</h2>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Symbol</th><th>Sleeve</th><th>Score</th><th>Priority</th><th>Status</th><th>Reasons</th></tr></thead>
-      <tbody>
-        {% for c in view.candidates %}
-        <tr>
-          <td>{{ c.symbol }}</td>
-          <td>{{ c.provisional_sleeve }}</td>
-          <td>{{ '%.2f'|format(c.discovery_score or 0) }}</td>
-          <td>{{ c.priority }}</td>
-          <td>{{ c.status }}</td>
-          <td>{{ (c.reasons or [])[:2]|join('; ') }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="6" class="empty">No candidates.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+<div class="page">
+  <header class="page-head">
+    <div>
+      <h1>Research</h1>
+      <p class="lede"><span class="book-tag {{ 'live' if view.runtime_mode == 'LIVE' or environment == 'LIVE' else 'paper' }}">{{ view.book_label }}</span> research and theses for the active runtime.</p>
+    </div>
+  </header>
+  <nav class="page-tabs" role="tablist">
+    <button type="button" class="on" data-tab="queue" role="tab" aria-selected="true">Queue ({{ view.queue|length }})</button>
+    <button type="button" data-tab="reports" role="tab" aria-selected="false">Reports ({{ view.reports|length }})</button>
+    <button type="button" data-tab="theses" role="tab" aria-selected="false">Theses ({{ view.theses|length }})</button>
+    <button type="button" data-tab="candidates" role="tab" aria-selected="false">Candidates ({{ view.candidates|length }})</button>
+  </nav>
 
-<section class="card">
-  <h2>Research queue</h2>
-  <p class="meta">queued {{ view.queue_counts.queued if view.queue_counts else 0 }} · researching {{ view.queue_counts.researching if view.queue_counts else 0 }} · completed {{ view.queue_counts.completed if view.queue_counts else 0 }} · rejected {{ view.queue_counts.rejected if view.queue_counts else 0 }}</p>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Symbol</th><th>Status</th><th>Priority</th><th>Score</th><th>Enqueued</th><th>Deadline</th></tr></thead>
-      <tbody>
-        {% for q in view.queue %}
-        <tr>
-          <td>{{ q.symbol }}</td>
-          <td>{{ q.status }}</td>
-          <td>{{ q.priority }}</td>
-          <td>{{ '%.1f'|format(q.discovery_score or 0) }}</td>
-          <td>{{ (q.enqueued_at or '')[:16].replace('T', ' ') }}</td>
-          <td>{{ (q.freshness_deadline or '')[:16].replace('T', ' ') }}</td>
-        </tr>
-        {% else %}
-        <tr><td colspan="6" class="empty">Queue is empty.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+  <section class="tab-panel card table-card" data-panel="queue">
+    <h2>Research queue</h2>
+    <p class="meta">queued {{ view.queue_counts.queued if view.queue_counts else 0 }} · researching {{ view.queue_counts.researching if view.queue_counts else 0 }} · done {{ view.queue_counts.completed if view.queue_counts else 0 }} · rejected {{ view.queue_counts.rejected if view.queue_counts else 0 }}</p>
+    <div class="table-wrap">
+      <table data-page-size="8">
+        <thead><tr><th>Symbol</th><th>Status</th><th>Priority</th><th>Score</th><th>Enqueued</th><th>Deadline</th></tr></thead>
+        <tbody>
+          {% for q in view.queue %}
+          <tr>
+            <td class="symbol">{{ q.symbol }}</td>
+            <td>{{ q.status }}</td>
+            <td>{{ q.priority }}</td>
+            <td>{{ '%.1f'|format(q.discovery_score or 0) }}</td>
+            <td class="meta">{{ q.enqueued_at | et }}</td>
+            <td class="meta">{{ q.freshness_deadline | et }}</td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="6">Queue is empty.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-<section class="card">
-  <h2>Research reports</h2>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Symbol</th><th>Conclusion</th><th>Freshness</th><th>Confidence</th><th></th></tr></thead>
-      <tbody>
-        {% for r in view.reports %}
-        <tr>
-          <td>{{ r.symbol }}</td>
-          <td>{{ r.research_conclusion or r.research_status }}</td>
-          <td>{{ r.freshness }}</td>
-          <td>{{ r.confidence }}</td>
-          <td><a href="{{ url_for('report_detail_page', research_id=r.research_id) }}">Open</a></td>
-        </tr>
-        {% else %}
-        <tr><td colspan="5" class="empty">No reports.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+  <section class="tab-panel card table-card" data-panel="reports" hidden>
+    <h2>Research reports</h2>
+    <div class="table-wrap">
+      <table data-page-size="8">
+        <thead><tr><th>Symbol</th><th>Conclusion</th><th>Freshness</th><th>Confidence</th><th>Completed</th><th></th></tr></thead>
+        <tbody>
+          {% for r in view.reports %}
+          <tr>
+            <td class="symbol">{{ r.symbol }}</td>
+            <td>{{ r.research_conclusion or r.research_status }}</td>
+            <td>{{ r.freshness }}</td>
+            <td>{{ r.confidence }}</td>
+            <td class="meta">{{ (r.completed_at or r.started_at) | et }}</td>
+            <td><a class="text-link" href="{{ url_for('report_detail_page', research_id=r.research_id) }}">Open</a></td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="6">No reports.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
 
-<section class="card">
-  <h2>Active / draft theses</h2>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Symbol</th><th>Status</th><th>Sleeve</th><th>Book</th><th>Decision</th><th></th></tr></thead>
-      <tbody>
-        {% for t in view.theses %}
-        <tr>
-          <td>{{ t.symbol }}</td>
-          <td><span class="pill">{{ t.status }}</span></td>
-          <td>{{ t.sleeve }}</td>
-          <td>{{ t.book_label or t.book }}</td>
-          <td>{{ t.decision or '—' }}</td>
-          <td><a href="{{ url_for('thesis_detail_page', thesis_id=t.thesis_id) }}">Open</a></td>
-        </tr>
-        {% else %}
-        <tr><td colspan="6" class="empty">No theses.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+  <section class="tab-panel card table-card" data-panel="theses" hidden>
+    <h2>Active / draft theses</h2>
+    <div class="table-wrap">
+      <table data-page-size="8">
+        <thead><tr><th>Symbol</th><th>Status</th><th>Sleeve</th><th>Book</th><th>Decision</th><th>Updated</th><th></th></tr></thead>
+        <tbody>
+          {% for t in view.theses %}
+          <tr>
+            <td class="symbol">{{ t.symbol }}</td>
+            <td><span class="pill">{{ t.status }}</span></td>
+            <td>{{ t.sleeve }}</td>
+            <td>{{ t.book_label or t.book }}</td>
+            <td>{{ t.decision or '—' }}</td>
+            <td class="meta">{{ (t.updated_at or t.created_at) | et }}</td>
+            <td><a class="text-link" href="{{ url_for('thesis_detail_page', thesis_id=t.thesis_id) }}">Open</a></td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="7">No theses.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="tab-panel card table-card" data-panel="candidates" hidden>
+    <h2>Candidates</h2>
+    <div class="table-wrap">
+      <table data-page-size="8">
+        <thead><tr><th>Symbol</th><th>Sleeve</th><th>Score</th><th>Priority</th><th>Status</th><th>Reasons</th></tr></thead>
+        <tbody>
+          {% for c in view.candidates %}
+          <tr>
+            <td class="symbol">{{ c.symbol }}</td>
+            <td>{{ c.provisional_sleeve }}</td>
+            <td>{{ '%.2f'|format(c.discovery_score or 0) }}</td>
+            <td>{{ c.priority }}</td>
+            <td>{{ c.status }}</td>
+            <td class="wrap">{{ (c.reasons or [])[:2]|join('; ') }}</td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="6">No candidates.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
 {% endblock %}

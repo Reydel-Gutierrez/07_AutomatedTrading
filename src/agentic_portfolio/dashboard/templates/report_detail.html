@@ -1,6 +1,7 @@
 {% extends "base.html" %}
 {% block title %}{{ report.symbol }} research{% endblock %}
 {% block content %}
+<div class="page detail">
 <p class="crumb"><a href="{{ url_for('research_page') }}">Research</a> / {{ report.symbol }} report</p>
 <section class="card">
   <h2>{{ report.symbol }} · {{ report.research_conclusion or report.research_status }}</h2>
@@ -20,4 +21,5 @@
   <h2>Invalidation candidates</h2>
   <ul>{% for r in report.invalidation_candidates %}<li>{{ r }}</li>{% else %}<li class="empty">None recorded.</li>{% endfor %}</ul>
 </section>
+</div>
 {% endblock %}

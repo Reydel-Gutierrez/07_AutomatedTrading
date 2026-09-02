@@ -22,6 +22,9 @@
       panel.hidden = panel.getAttribute("data-panel") !== id;
     });
     window.dispatchEvent(new Event("resize"));
+    document.querySelectorAll(".tab-panel:not([hidden]) table").forEach((table) => {
+      if (typeof table._renderPage === "function") table._renderPage();
+    });
   }
 
   tabs.forEach((tab) => {
@@ -87,13 +90,7 @@
       event.stopPropagation();
       const card = expandBtn.closest("article.card, article.kpi");
       if (card) openExpanded(card);
-      return;
     }
-    const card = event.target.closest("article.card, article.kpi");
-    if (!card || card.closest(".login-box")) return;
-    if (card.classList.contains("is-expanded")) return;
-    if (event.target.closest("a, button, input, select, textarea, label, form, .ranges, .page-tabs")) return;
-    openExpanded(card);
   });
 
   document.addEventListener("keydown", (event) => {

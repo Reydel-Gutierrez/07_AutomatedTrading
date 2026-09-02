@@ -23,11 +23,13 @@ from agentic_portfolio.dashboard.family import (
     family_member_view,
     parse_amount,
 )
+from agentic_portfolio.dashboard.display import TZ_NAME, format_et, format_relative
 from agentic_portfolio.dashboard.queries import (
     activity_log_view,
     agent_runtime_view,
     ai_activity_view,
     ai_view,
+    chrome_status,
     dashboard_state,
     dashboard_view,
     discovery_view,
@@ -93,6 +95,10 @@ def create_app(root: Path | None = None) -> Flask:
     app.config["SESSION_COOKIE_SECURE"] = False
     app.secret_key = "localhost-dashboard-not-a-broker-credential"
     app.config["READONLY_BROKER_RUNTIME"] = bootstrap_readonly_broker_runtime()
+    app.jinja_env.filters["et"] = lambda value, seconds=False, time_only=False, date_only=False: format_et(
+        value, seconds=bool(seconds), time_only=bool(time_only), date_only=bool(date_only)
+    )
+    app.jinja_env.filters["et_rel"] = format_relative
     accounts = AccountStore(app.config["ROOT"])
 
     def state():
@@ -235,6 +241,12 @@ def create_app(root: Path | None = None) -> Flask:
             initials = name[:2].upper()
         pending_count = 0
         unread_count = 0
+        chrome = {}
+        if user:
+            try:
+                chrome = chrome_status(state())
+            except Exception:  # noqa: BLE001
+                chrome = {}
         if user and user.get("role") == ROLE_ADMIN:
             pending_count = int(list_approvals(state()).get("pending_count") or 0)
             unread_count = int(notifications_view(state()).get("unread_count") or 0)
@@ -263,6 +275,8 @@ def create_app(root: Path | None = None) -> Flask:
             "user_initials": initials,
             "pending_count": pending_count,
             "unread_count": unread_count,
+            "chrome": chrome,
+            "tz_name": TZ_NAME,
         }
 
     @app.get("/login")
@@ -479,6 +493,10 @@ def create_app(root: Path | None = None) -> Flask:
     @app.get("/watchlist")
     def watchlist_page():
         return render_template("watchlist.html", view=watchlist_view(state()), page="watchlist")
+
+    @app.get("/positions")
+    def positions_page():
+        return render_template("positions.html", view=dashboard_view(state()), page="positions")
 
     @app.get("/notifications")
     def notifications_page():

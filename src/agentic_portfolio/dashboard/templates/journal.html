@@ -1,33 +1,39 @@
 {% extends "base.html" %}
 {% block title %}Journal · Agentic Portfolio{% endblock %}
 {% block content %}
-<section class="card">
-  <h2>Chronological history</h2>
-  <p class="meta"><span class="book-tag {{ 'live' if view.runtime_mode == 'LIVE' or environment == 'LIVE' else 'paper' }}">{{ view.book_label }}</span> journal for the active runtime. Paper fill history is diagnostics-only in LIVE. Showing latest {{ view.entries|length }} of {{ view.count }}.</p>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>When</th><th>Source</th><th>Type</th><th>Detail</th></tr></thead>
-      <tbody>
-        {% for e in view.entries %}
-        <tr>
-          <td class="mono">{{ e._at or '—' }}</td>
-          <td>{{ e._source }}</td>
-          <td>{{ e.type or e.status or '—' }}</td>
-          <td>
-            {% if e.symbol %}{{ e.symbol }} {% endif %}
-            {% if e.action %}{{ e.action }} {% endif %}
-            {% if e.decision %}{{ e.decision }} {% endif %}
-            {% if e.status and e.type %}{{ e.status }} {% endif %}
-            {% if e.verdict %}{{ e.verdict }} {% endif %}
-            {% if e.batch_id %}batch {{ e.batch_id[:8] }}{% endif %}
-            {% if e.approval_id %}pkt {{ e.approval_id[:8] }}{% endif %}
-          </td>
-        </tr>
-        {% else %}
-        <tr><td colspan="4" class="empty">No journal rows.</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+<div class="page">
+  <header class="page-head">
+    <div>
+      <h1>Journal</h1>
+      <p class="lede"><span class="book-tag {{ 'live' if view.runtime_mode == 'LIVE' or environment == 'LIVE' else 'paper' }}">{{ view.book_label }}</span> chronological history. Showing latest {{ view.entries|length }} of {{ view.count }}.</p>
+    </div>
+  </header>
+  <section class="card table-card">
+    <div class="table-wrap">
+      <table data-page-size="12">
+        <thead><tr><th>When</th><th>Source</th><th>Type</th><th>Detail</th></tr></thead>
+        <tbody>
+          {% for e in view.entries %}
+          <tr>
+            <td class="meta">{{ e._at | et(seconds=True) }}</td>
+            <td>{{ e._source }}</td>
+            <td>{{ e.type or e.status or '—' }}</td>
+            <td>
+              {% if e.symbol %}{{ e.symbol }} {% endif %}
+              {% if e.action %}{{ e.action }} {% endif %}
+              {% if e.decision %}{{ e.decision }} {% endif %}
+              {% if e.status and e.type %}{{ e.status }} {% endif %}
+              {% if e.verdict %}{{ e.verdict }} {% endif %}
+              {% if e.batch_id %}batch {{ e.batch_id[:8] }}{% endif %}
+              {% if e.approval_id %}pkt {{ e.approval_id[:8] }}{% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr class="empty"><td colspan="4">No journal rows.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
 {% endblock %}
