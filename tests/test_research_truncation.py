@@ -64,7 +64,7 @@ class ResearchTruncationProvider:
             if self.other_malformed and self.research_attempts == 1:
                 raise MalformedResponse(self.other_malformed)
             if self.schema_fail_first and self.research_attempts == 1:
-                payload = {**self.report, "bull_case": None, "base_case": None, "bear_case": None}
+                payload = {**self.report, "research_conclusion": None}
             elif self.research_attempts <= self.fail_times:
                 raise MalformedResponse("OpenAI response incomplete (max_output_tokens)")
             else:

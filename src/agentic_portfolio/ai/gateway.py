@@ -28,7 +28,7 @@ from agentic_portfolio.ai.providers.anthropic import AnthropicProvider
 from agentic_portfolio.ai.providers.base import ProviderAdapter, ProviderRequest
 from agentic_portfolio.ai.providers.openai import OpenAIProvider
 from agentic_portfolio.ai.providers.scripted import ScriptedProvider
-from agentic_portfolio.ai.schemas import SCHEMAS, validate_against_schema
+from agentic_portfolio.ai.schemas import SCHEMAS, normalize_openai_strict_payload, validate_against_schema
 from agentic_portfolio.ai.types import BudgetMode, GatewayResult, ModelRole
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.runtime import RuntimeMode
@@ -206,7 +206,11 @@ class AIGateway:
         fallback_used: bool,
     ) -> GatewayResult:
         response = adapter.complete(request)
-        payload = validate_against_schema(response.payload, schema_body, name=request.schema_name)
+        payload = validate_against_schema(
+            normalize_openai_strict_payload(response.payload, schema_body),
+            schema_body,
+            name=request.schema_name,
+        )
         rate_model = response.model if response.model else request.model
         actual = estimate_cost(
             model=rate_model,

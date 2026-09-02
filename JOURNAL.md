@@ -497,6 +497,20 @@ Committed defaults unchanged: `auto_execution=false`, `require_human_approval=tr
 
 ---
 
+## 2026-09-02 — OpenAI strict optional-null payloads failed canonical validation
+
+**Type:** `ai` / `schema`
+
+OpenAI Structured Outputs converts canonical-optional properties to required+nullable. Seven LIVE `portfolio_decision` / `thesis_decision` calls then failed canonical validation with `thesis_decision.decisions[].why_preferable_to_cash: null not allowed` (same for `why_preferable_to_spy` / `why_preferable_to_alternatives`). The model was allowed to return `null`; the canonical schema was not.
+
+Fix: before canonical `validate_against_schema`, omit `None` on properties that are optional in the canonical schema and whose canonical type does not include `"null"`. Explicitly nullable canonical fields keep `null`. Required canonical nulls still fail. BUY/ADD semantic comparison/thesis/allocation rules, the named-decision invariant, CASH/SPY-only rejection, Risk Gate, human approval, `auto_execution=false`, and the $10/month AI cap are unchanged. Named-decision repair is not run here and still must not call Terra.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Committed defaults unchanged: `auto_execution=false`, `require_human_approval=true`.
+
+---
+
 ## Template
 
 ```

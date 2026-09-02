@@ -254,6 +254,8 @@ def to_openai_strict_schema(schema: dict[str, Any]) -> dict[str, Any]:
     Internal canonical schemas may keep optional properties out of `required`.
     OpenAI strict objects must list every property in `required` and set
     `additionalProperties=false`. Previously-optional fields become nullable.
+    Payloads that come back from that strict schema must be passed through
+    `normalize_openai_strict_payload` before canonical validation.
     """
     return _strict_node(schema)
 
@@ -289,6 +291,59 @@ def _make_nullable(spec: dict[str, Any]) -> dict[str, Any]:
     if "null" not in types:
         child["type"] = [*types, "null"]
     return child
+
+
+def _schema_type_list(spec: dict[str, Any]) -> list[Any]:
+    raw = spec.get("type")
+    if isinstance(raw, list):
+        return list(raw)
+    if raw:
+        return [raw]
+    return []
+
+
+def normalize_openai_strict_payload(payload: Any, schema: dict[str, Any]) -> Any:
+    """Map OpenAI-strict structured output back onto a canonical schema.
+
+    `to_openai_strict_schema()` makes every property required and adds `"null"`
+    to types that were merely optional in the canonical schema. OpenAI may
+    therefore return `null` for a field whose canonical type is e.g. `"string"`.
+    Canonical validation then raises `null not allowed`.
+
+    Inverse: if a property is optional in the canonical schema (absent from
+    `required`) and the canonical type does not include `"null"`, drop a
+    returned `None` so the key is omitted. Preserve `None` when the canonical
+    schema itself permits `"null"`. Never drop a required canonical field —
+    a required `None` stays in place so validation still fails.
+    """
+    return _normalize_openai_strict_node(payload, schema)
+
+
+def _normalize_openai_strict_node(value: Any, spec: dict[str, Any]) -> Any:
+    types = _schema_type_list(spec)
+    is_object = "object" in types or (not types and "properties" in spec)
+    if is_object and isinstance(value, dict):
+        props = dict(spec.get("properties") or {})
+        required = set(spec.get("required") or [])
+        out: dict[str, Any] = {}
+        for key, child_value in value.items():
+            child_spec = props.get(key)
+            if not isinstance(child_spec, dict):
+                out[key] = child_value
+                continue
+            if child_value is None:
+                if key not in required and "null" not in _schema_type_list(child_spec):
+                    continue
+                out[key] = None
+                continue
+            out[key] = _normalize_openai_strict_node(child_value, child_spec)
+        return out
+    if "array" in types and isinstance(value, list):
+        item_spec = spec.get("items")
+        if isinstance(item_spec, dict):
+            return [_normalize_openai_strict_node(item, item_spec) for item in value]
+        return list(value)
+    return value
 
 
 def validate_against_schema(payload: Any, schema: dict[str, Any], *, name: str) -> dict[str, Any]:
