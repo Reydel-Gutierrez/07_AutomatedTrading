@@ -483,6 +483,20 @@ Committed defaults unchanged: `auto_execution=false`, `require_human_approval=tr
 
 ---
 
+## 2026-09-02 — ADVANCE_TO_THESIS requires a named portfolio decision
+
+**Type:** `decision` / `repair`
+
+Portfolio Decision treated a non-empty CASH/SPY `decisions[]` as valid. Preferring cash omitted the researched ADVANCE_TO_THESIS ticker (`no_named_decision`), and a missing named row could still look like a completed watch/thesis path. Invariant: every ADVANCE_TO_THESIS report must produce exactly one `decisions[]` row for that symbol. CASH and SPY may coexist; CASH-only, SPY-only, or CASH+SPY without the researched ticker fails closed and retries. Duplicates fail validation. Missing named rows do not mint WATCH, NO_ACTION, thesis completion, allocation, Risk Gate, or approval.
+
+LIVE-only repair re-runs Portfolio Decision against existing FRESH research/thesis artifacts for names persisted with reason `no_named_decision`. It does not call Terra/research, does not touch PAPER/legacy, does not force BUY, and only proceeds to Risk Gate/approval when the new named decision is actionable. Human APPROVE remains mandatory. Combined AI cap stays $10/month.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Committed defaults unchanged: `auto_execution=false`, `require_human_approval=true`.
+
+---
+
 ## Template
 
 ```

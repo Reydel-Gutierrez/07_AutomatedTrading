@@ -148,6 +148,25 @@ def _payload(symbol="QUAL", decision="BUY", alloc=5.0, extra=None, theses=None, 
     return payload
 
 
+def _cash_spy_only_payload(symbol="QUAL", *rows: str):
+    names = list(rows) or ["CASH"]
+    decisions = []
+    for name in names:
+        if name == "CASH":
+            decisions.append({"symbol": "CASH", "decision": "HOLD", "desired_allocation_pct": 100, "rationale": "Prefer residual cash."})
+        else:
+            decisions.append({"symbol": name, "decision": "NO_ACTION", "desired_allocation_pct": 0, "rationale": "Prefer cash/SPY residual."})
+    return {
+        "theses": [_thesis(symbol)],
+        "comparison": {
+            "ranking": [symbol, "CASH", "SPY"],
+            "vs_cash": "Prefer idle cash to this name.",
+            "vs_spy": "Prefer not to fund this name versus SPY residual.",
+        },
+        "decisions": decisions,
+    }
+
+
 def _run(reports=None, nav=10_000, payload=None, tmp_path=None, persist=False, **kwargs):
     reports = reports or [_report()]
     reasoner = ScriptedDecisionReasoner(payload or _payload())
@@ -345,6 +364,60 @@ def test_single_report_wrapper():
         journal=None,
     )
     assert out.decisions[0].symbol == "QUAL"
+
+
+def test_advance_named_watch_is_valid():
+    out = _run(payload=_payload(decision="WATCH", alloc=0))
+    assert out.validation_errors == []
+    assert out.decisions[0].symbol == "QUAL"
+    assert out.decisions[0].decision == Decision.WATCH
+
+
+def test_advance_named_no_action_is_valid():
+    out = _run(payload=_payload(decision="NO_ACTION", alloc=0, theses=[]))
+    assert out.validation_errors == []
+    assert out.decisions[0].symbol == "QUAL"
+    assert out.decisions[0].decision == Decision.NO_ACTION
+
+
+def test_advance_cash_only_is_malformed(tmp_path):
+    out = _run(tmp_path=tmp_path, payload=_cash_spy_only_payload("QUAL", "CASH"))
+    assert out.theses == []
+    assert out.gated_actions == []
+    blob = " ".join(out.validation_errors)
+    assert "no_named_decision:QUAL" in blob
+    assert "cash_spy_only_payload" in blob
+    assert ThesisRegistry(tmp_path / "theses.json").all_records() == []
+    journal = (tmp_path / "journal.jsonl").read_text(encoding="utf-8")
+    assert "THESIS_DECISION_INCONCLUSIVE" in journal
+    assert "PORTFOLIO_DECISION_COMPLETED" not in journal
+
+
+def test_advance_spy_only_is_malformed():
+    out = _run(payload=_cash_spy_only_payload("QUAL", "SPY"))
+    blob = " ".join(out.validation_errors)
+    assert "no_named_decision:QUAL" in blob
+    assert out.gated_actions == []
+
+
+def test_advance_cash_and_spy_missing_researched_ticker_is_malformed():
+    out = _run(payload=_cash_spy_only_payload("QUAL", "CASH", "SPY"))
+    blob = " ".join(out.validation_errors)
+    assert "no_named_decision:QUAL" in blob
+    assert "cash_spy_only_payload" in blob
+    assert out.theses == []
+
+
+def test_duplicate_researched_decision_rows_fail_validation():
+    payload = _payload(decision="WATCH", alloc=0)
+    payload["decisions"] = [
+        dict(payload["decisions"][0]),
+        dict(payload["decisions"][0]),
+        payload["decisions"][1],
+    ]
+    out = _run(payload=payload)
+    assert out.theses == []
+    assert "duplicate decision for QUAL" in out.validation_errors[0]
 
 
 def test_paper_existing_research_reports(tmp_path):

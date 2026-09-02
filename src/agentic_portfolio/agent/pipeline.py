@@ -30,7 +30,7 @@ from agentic_portfolio.decision.engine import run_portfolio_decision
 from agentic_portfolio.decision.reasoner import DecisionReasoner
 from agentic_portfolio.decision.store import DecisionStore
 from agentic_portfolio.decision.types import GatedAction
-from agentic_portfolio.decision.validate import DecisionValidationError
+from agentic_portfolio.decision.validate import DecisionValidationError, is_no_named_decision_reason
 from agentic_portfolio.discovery.freshness import is_queue_expired, normalize_queue_freshness
 from agentic_portfolio.discovery.store import CandidateStore, ResearchQueue
 from agentic_portfolio.journal import append_jsonl
@@ -94,6 +94,10 @@ RISK_PERMIT = {GateVerdict.PASS, GateVerdict.REQUIRES_ENHANCED_REVIEW}
 ACTIONABLE = {Decision.BUY, Decision.ADD, Decision.REDUCE, Decision.SELL}
 PAPER_NAV_LEAK = 10_000.0
 STALE_CLAIM_SECONDS = 900
+
+
+def _named_decision_reason(reason: str) -> str:
+    return "no_named_decision" if is_no_named_decision_reason(reason) else reason
 
 
 @dataclass
@@ -807,19 +811,19 @@ class ResearchQueueWorker:
                 journal=self.root / "logs" / "thesis_decision.jsonl",
             )
         except DecisionValidationError as exc:
-            return self._decision_operational_failure(report, row, str(exc))
+            return self._decision_operational_failure(report, row, _named_decision_reason(str(exc)))
         if decided.validation_errors:
             return self._decision_operational_failure(
                 report,
                 row,
-                "; ".join(str(item) for item in decided.validation_errors),
+                _named_decision_reason("; ".join(str(item) for item in decided.validation_errors)),
             )
-        row["theses_created"] = len(decided.theses)
-        row["ai_calls"] = int(row.get("ai_calls") or 0) + 1
         name = next((d for d in decided.decisions if d.symbol.upper() == report.symbol.upper()), None)
         thesis = next((t for t in decided.theses if t.symbol.upper() == report.symbol.upper()), None)
         if name is None:
             return self._decision_operational_failure(report, row, "no_named_decision")
+        row["theses_created"] = len(decided.theses)
+        row["ai_calls"] = int(row.get("ai_calls") or 0) + 1
         if name.decision in {Decision.REJECT}:
             row["rejected"] = 1
             self._watch_from_research(candidate, report, thesis=thesis, status=WatchStatus.REJECTED, reason="portfolio_reject")
@@ -917,6 +921,10 @@ class ResearchQueueWorker:
         row["retry_queue"] = True
         row["operational_failure"] = True
         row["skipped_reason"] = "decision_validation_failure"
+        row["watches_created"] = 0
+        row["theses_created"] = 0
+        row["proposals_created"] = 0
+        row["rejected"] = 0
         log_lifecycle(
             symbol=report.symbol,
             source="decision_error",
@@ -984,7 +992,11 @@ class ResearchQueueWorker:
             "holdings_count": context.holdings_count,
             "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
         }
-        gw = getattr(self._reasoner(), "last_result", None) or getattr(self._decision(), "last_result", None)
+        gw = None
+        if self.decision_reasoner is not None or self.gateway is not None:
+            gw = getattr(self._decision(), "last_result", None)
+        if gw is None and (self.research_reasoner is not None or self.gateway is not None):
+            gw = getattr(self._reasoner(), "last_result", None)
         item = self.approvals.create(
             ticker=report.symbol,
             proposed_action=action.decision.value,

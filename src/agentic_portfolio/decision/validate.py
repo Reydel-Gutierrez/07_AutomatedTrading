@@ -13,6 +13,10 @@ VALID_DECISIONS.add("EXIT")
 VALID_SLEEVES = {s.value for s in Sleeve}
 VALID_CONFIDENCE = {"LOW", "MEDIUM", "HIGH"}
 RISK_UP_VALUES = {d.value for d in RISK_UP}
+ALTERNATIVE_SYMBOLS = {CASH_SYMBOL, SPY_SYMBOL}
+NO_NAMED_DECISION = "no_named_decision"
+CASH_SPY_ONLY_PAYLOAD = "cash_spy_only_payload"
+REQUIRED_NAMED_DECISION_CONCLUSION = ResearchConclusion.ADVANCE_TO_THESIS
 PROTECTED_KEYS = {
     "current_nav",
     "cash",
@@ -28,6 +32,46 @@ PROTECTED_KEYS = {
 
 class DecisionValidationError(ValueError):
     """Malformed AI output. Engine must not persist this as a valid decision."""
+
+
+def is_no_named_decision_reason(reason: str | None) -> bool:
+    """True when a stored/queue/watch reason is the missing researched-symbol decision."""
+    text = str(reason or "").strip().lower().replace("-", "_")
+    if not text:
+        return False
+    return NO_NAMED_DECISION in text or CASH_SPY_ONLY_PAYLOAD in text
+
+
+def advance_to_thesis_symbols(reports: list[ResearchReport]) -> list[str]:
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for report in reports:
+        if report.research_conclusion != REQUIRED_NAMED_DECISION_CONCLUSION:
+            continue
+        sym = str(report.symbol or "").upper()
+        if not sym or sym in seen:
+            continue
+        seen.add(sym)
+        symbols.append(sym)
+    return symbols
+
+
+def named_decision_invariant_errors(seen: set[str], reports: list[ResearchReport]) -> list[str]:
+    """Every ADVANCE_TO_THESIS report must have exactly one decisions[] row.
+
+    CASH and SPY may coexist. A CASH/SPY-only payload that omits the researched
+    ticker is malformed. Duplicates are rejected before this runs.
+    """
+    required = advance_to_thesis_symbols(reports)
+    errors: list[str] = []
+    for sym in required:
+        if sym not in seen:
+            errors.append(f"{NO_NAMED_DECISION}:{sym}")
+    if required and not any(sym in seen for sym in required):
+        decided = {str(s).upper() for s in seen}
+        if decided and decided <= ALTERNATIVE_SYMBOLS:
+            errors.append(CASH_SPY_ONLY_PAYLOAD)
+    return errors
 
 
 def validate_payload(
@@ -168,6 +212,7 @@ def validate_payload(
 
         normalized_decisions.append(item)
 
+    errors.extend(named_decision_invariant_errors(seen, reports))
     if risk_up_pct > 100 + 1e-9:
         errors.append("risk_increasing_allocation_exceeds_100")
     if current_nav is not None and current_nav <= 0:

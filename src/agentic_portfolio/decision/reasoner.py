@@ -28,6 +28,7 @@ Hard rules:
 - Propose desired allocation as percent of current NAV (not dollars). Size from conviction; never size up only because unused ceiling remains.
 - BUY/ADD only if research_conclusion is ADVANCE_TO_THESIS and research_status is RESEARCH_COMPLETE.
 - KEEP_WATCHING research may be WATCH, REJECT, or NO_ACTION — not BUY/ADD.
+- Every researched ADVANCE_TO_THESIS symbol MUST appear exactly once in decisions[]. CASH and SPY rows may coexist. Preferring cash is a named NO_ACTION or WATCH on that symbol. A CASH-only, SPY-only, or CASH+SPY payload that omits the researched ticker is malformed.
 
 Exit policy (no broker stop orders):
 - CORE_GROWTH: thesis-based; mandatory_fixed_stop_loss must be false.

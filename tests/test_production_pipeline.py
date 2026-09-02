@@ -66,7 +66,7 @@ from agentic_portfolio.schemas import (
 from agentic_portfolio.watch import WatchEngine, WatchStatus, WatchStore
 from tests.conftest import ctx
 from tests.test_ai_gateway import SCREEN
-from tests.test_decision import _payload as _decision_payload
+from tests.test_decision import _cash_spy_only_payload, _payload as _decision_payload
 from tests.test_research import _ai, _candidate, _etf_payload, _payload
 
 NOW = datetime(2026, 8, 31, 12, 0, tzinfo=timezone.utc)
@@ -358,6 +358,109 @@ def test_watch_decision_preserves_desired_allocation_pct(tmp_path):
     assert item.desired_allocation_pct == pytest.approx(5.0)
     assert worker.approvals.store.pending() == []
     assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_advance_named_watch_succeeds(tmp_path):
+    _seed(tmp_path)
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="ADVANCE_TO_THESIS")}),
+        decision=ScriptedDecisionReasoner(_decision_payload("QUAL", decision="WATCH", alloc=0)),
+    )
+    result = worker.run_cycle()
+    assert result.watches_created == 1
+    assert result.proposals_created == 0
+    item = worker.watch.store.by_ticker("QUAL")
+    assert item is not None
+    assert item.status is WatchStatus.WATCH
+    assert item.reason_for_watch == "decision_watch"
+    assert worker.approvals.store.pending() == []
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    assert queue.all()[0].status is ResearchQueueStatus.COMPLETED
+
+
+def test_advance_named_no_action_succeeds(tmp_path):
+    _seed(tmp_path)
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="ADVANCE_TO_THESIS")}),
+        decision=ScriptedDecisionReasoner(_decision_payload("QUAL", decision="NO_ACTION", alloc=0, theses=[])),
+    )
+    result = worker.run_cycle()
+    assert result.watches_created == 1
+    assert result.proposals_created == 0
+    item = worker.watch.store.by_ticker("QUAL")
+    assert item is not None
+    assert item.reason_for_watch == "decision_no_action"
+    assert worker.approvals.store.pending() == []
+
+
+def test_advance_named_buy_proceeds_to_risk_gate(tmp_path):
+    _seed(tmp_path)
+    research, decision = _buy_reasoners()
+    worker = _worker(tmp_path, research=research, decision=decision)
+    result = worker.run_cycle()
+    assert result.proposals_created == 1
+    pending = worker.approvals.store.pending()
+    assert pending
+    assert pending[0].proposed_action == "BUY"
+    assert pending[0].placed_order is False
+    watch = worker.watch.store.by_ticker("QUAL")
+    assert watch is not None
+    assert watch.reason_for_watch == "approval_created"
+    assert watch.status in {WatchStatus.APPROVAL_REQUIRED, WatchStatus.WAITING_FOR_OPEN}
+
+
+def _assert_advance_missing_named_fails(tmp_path, payload):
+    _seed(tmp_path)
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="ADVANCE_TO_THESIS")}),
+        decision=ScriptedDecisionReasoner(payload),
+    )
+    result = worker.run_cycle()
+    assert result.watches_created == 0
+    assert result.theses_created == 0
+    assert result.proposals_created == 0
+    assert worker.watch.store.by_ticker("QUAL") is None
+    assert worker.approvals.store.pending() == []
+    assert worker.theses.all_records() == []
+    _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
+    entry = queue.all()[0]
+    assert entry.status is ResearchQueueStatus.QUEUED
+    assert "no_named_decision" in (entry.last_error or "")
+    assert any(row.get("retry_queue") and row.get("reason") == "no_named_decision" for row in result.details)
+    return result
+
+
+def test_advance_cash_only_fails_and_retries(tmp_path):
+    _assert_advance_missing_named_fails(tmp_path, _cash_spy_only_payload("QUAL", "CASH"))
+
+
+def test_advance_spy_only_fails_and_retries(tmp_path):
+    _assert_advance_missing_named_fails(tmp_path, _cash_spy_only_payload("QUAL", "SPY"))
+
+
+def test_advance_cash_and_spy_missing_ticker_fails_and_retries(tmp_path):
+    _assert_advance_missing_named_fails(tmp_path, _cash_spy_only_payload("QUAL", "CASH", "SPY"))
+
+
+def test_advance_duplicate_named_rows_fail_validation(tmp_path):
+    payload = _decision_payload("QUAL", decision="WATCH", alloc=0)
+    payload["decisions"] = [dict(payload["decisions"][0]), dict(payload["decisions"][0]), payload["decisions"][1]]
+    _seed(tmp_path)
+    worker = _worker(
+        tmp_path,
+        research=ScriptedResearchReasoner({"QUAL": _ai("QUAL", conclusion="ADVANCE_TO_THESIS")}),
+        decision=ScriptedDecisionReasoner(payload),
+    )
+    result = worker.run_cycle()
+    assert result.watches_created == 0
+    assert result.proposals_created == 0
+    assert worker.watch.store.by_ticker("QUAL") is None
+    assert worker.approvals.store.pending() == []
+    assert any(row.get("retry_queue") for row in result.details)
+    assert "duplicate decision for QUAL" in " ".join(str(row.get("reason") or "") for row in result.details)
 
 
 def test_l_buy_creates_proposed_action_not_direct_order(tmp_path):
