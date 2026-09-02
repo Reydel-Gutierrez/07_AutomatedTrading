@@ -16,33 +16,31 @@
   </nav>
   <section class="card table-card">
     <div class="table-wrap">
-      <table id="watch-table" data-page-size="10">
+      <table id="watch-table" class="compact" data-page-size="12">
         <thead>
           <tr>
             <th>Ticker</th>
             <th>Status</th>
             <th>Sleeve</th>
             <th>Score</th>
-            <th>Thesis</th>
             <th>Last change</th>
             <th>Next review</th>
-            <th>Expires</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           {% for w in view.rows %}
           <tr class="{% if w.operational_error %}stale-row{% endif %}" data-bucket="{{ w.sleeve or 'UNASSIGNED' }}">
-            <td class="symbol">{{ w.ticker }}</td>
+            <td class="symbol"><a class="text-link" href="{{ url_for('watch_detail_page', watch_id=w.watch_id) }}">{{ w.ticker }}</a></td>
             <td><span class="pill">{{ w.status }}</span></td>
             <td><span class="pill sleeve-{{ w.sleeve }}">{{ w.sleeve_label or w.sleeve or '—' }}</span></td>
             <td>{{ w.score if w.score is not none else '—' }}</td>
-            <td class="wrap">{{ w.thesis or w.reason_for_watch or '—' }}</td>
             <td class="meta">{{ (w.last_state_at or w.last_updated or w.last_reassessed) | et }}</td>
             <td class="meta">{{ w.next_review_at | et }}</td>
-            <td class="meta">{{ w.expiration | et }}</td>
+            <td><a class="open-link" href="{{ url_for('watch_detail_page', watch_id=w.watch_id) }}">Open</a></td>
           </tr>
           {% else %}
-          <tr class="empty"><td colspan="8">No watch items.</td></tr>
+          <tr class="empty"><td colspan="7">No watch items.</td></tr>
           {% endfor %}
         </tbody>
       </table>

@@ -390,3 +390,37 @@ def test_watchlist_groups_by_sleeve(tmp_path):
     by_id = {g["id"]: g for g in view["groups"]}
     assert [row["ticker"] for row in by_id["CORE_GROWTH"]["rows"]] == ["NVDA"]
     assert by_id["ALL"]["count"] == 3
+
+
+def test_watch_detail_opens_full_thesis(tmp_path):
+    from agentic_portfolio.watch.types import WatchItem
+    from tests.test_dashboard import _client
+
+    thesis = "Long paragraph thesis that must not appear as a full table row on the watchlist page."
+    item = WatchItem(
+        watch_id="w-NVDA",
+        ticker="NVDA",
+        status=WatchStatus.WATCH,
+        created_at=NOW.isoformat(),
+        last_updated=NOW.isoformat(),
+        sleeve="CORE_GROWTH",
+        research_thesis=thesis,
+        reasons=["durable_revenue_growth"],
+        risks=["valuation"],
+    )
+    WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE).save(item)
+    WatchStore(tmp_path, runtime_mode=RuntimeMode.PAPER).save(item)
+    client = _client(tmp_path)
+    listing = client.get("/watchlist")
+    assert listing.status_code == 200
+    html = listing.get_data(as_text=True)
+    assert "<th>Thesis</th>" not in html
+    assert 'href="/watchlist/w-NVDA"' in html
+    assert "Open" in html
+    assert thesis not in html
+    detail = client.get("/watchlist/w-NVDA")
+    assert detail.status_code == 200
+    body = detail.get_data(as_text=True)
+    assert "NVDA" in body
+    assert thesis in body
+    assert "durable_revenue_growth" in body

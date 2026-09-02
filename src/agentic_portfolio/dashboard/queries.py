@@ -604,44 +604,61 @@ def live_approval_detail(item: LiveApproval) -> dict[str, Any]:
     return row
 
 
+def _watch_row(item: Any, lifecycle: dict[str, Any] | None = None) -> dict[str, Any]:
+    plan = item.conditional_plan
+    last = (lifecycle or {}).get(str(item.ticker).upper()) or {}
+    thesis = item.research_thesis or item.reason_for_watch or ""
+    preview = " ".join(str(thesis).split())
+    if len(preview) > 72:
+        preview = preview[:69].rstrip() + "…"
+    return {
+        "watch_id": item.watch_id,
+        "ticker": item.ticker,
+        "status": item.status.value,
+        "thesis": item.research_thesis,
+        "thesis_preview": preview or "—",
+        "confidence": item.confidence,
+        "score": item.source_candidate_score,
+        "entry_conditions": list(item.entry_conditions),
+        "invalidating_conditions": list(item.invalidating_conditions),
+        "last_reassessed": item.last_reassessed_at,
+        "next_review_at": item.next_review_at,
+        "expiration": item.expiration,
+        "required_market_confirmation": item.required_market_confirmation,
+        "max_price": plan.max_price if plan else None,
+        "max_spread_bps": plan.max_spread_bps if plan else None,
+        "min_dollar_volume": getattr(plan, "min_dollar_volume", None) if plan else None,
+        "plan_notes": getattr(plan, "notes", None) if plan else None,
+        "last_updated": item.last_updated,
+        "created_at": item.created_at,
+        "last_price": item.last_price,
+        "proposed_notional": item.proposed_notional,
+        "desired_allocation_pct": item.desired_allocation_pct,
+        "approval_id": item.approval_id,
+        "sleeve": item.sleeve,
+        "sleeve_label": friendly_enum(item.sleeve),
+        "catalysts": list(item.catalysts or []),
+        "reasons": list(item.reasons or []),
+        "risks": list(item.risks or []),
+        "invalidation": list(item.invalidating_conditions or []),
+        "reason_for_watch": item.reason_for_watch,
+        "research_id": item.research_id,
+        "thesis_id": item.thesis_id,
+        "candidate_id": item.candidate_id,
+        "price_levels": dict(item.price_levels or {}),
+        "last_state_change": last.get("reason"),
+        "last_state_from": last.get("from_status"),
+        "last_state_to": last.get("to_status") or last.get("to_status"),
+        "last_state_at": last.get("logged_at"),
+        "operational_error": bool(last.get("operational_failure")),
+    }
+
+
 def watchlist_view(state: DashboardState) -> dict[str, Any]:
     items = []
     lifecycle = latest_by_symbol(state.root)
     for item in _watch_store(state).all():
-        plan = item.conditional_plan
-        last = lifecycle.get(str(item.ticker).upper()) or {}
-        items.append(
-            {
-                "watch_id": item.watch_id,
-                "ticker": item.ticker,
-                "status": item.status.value,
-                "thesis": item.research_thesis,
-                "confidence": item.confidence,
-                "score": item.source_candidate_score,
-                "entry_conditions": list(item.entry_conditions),
-                "invalidating_conditions": list(item.invalidating_conditions),
-                "last_reassessed": item.last_reassessed_at,
-                "next_review_at": item.next_review_at,
-                "expiration": item.expiration,
-                "required_market_confirmation": item.required_market_confirmation,
-                "max_price": plan.max_price if plan else None,
-                "max_spread_bps": plan.max_spread_bps if plan else None,
-                "last_updated": item.last_updated,
-                "approval_id": item.approval_id,
-                "sleeve": item.sleeve,
-                "sleeve_label": friendly_enum(item.sleeve),
-                "catalysts": list(item.catalysts or []),
-                "invalidation": list(item.invalidating_conditions or []),
-                "reason_for_watch": item.reason_for_watch,
-                "research_id": item.research_id,
-                "thesis_id": item.thesis_id,
-                "last_state_change": last.get("reason"),
-                "last_state_from": last.get("from_status"),
-                "last_state_to": last.get("to_status") or last.get("to_status"),
-                "last_state_at": last.get("logged_at"),
-                "operational_error": bool(last.get("operational_failure")),
-            }
-        )
+        items.append(_watch_row(item, lifecycle))
     terminal = {"REJECTED", "EXPIRED", "INVALIDATED"}
     items = newest_first(items, "last_state_at", "last_updated", "last_reassessed", "next_review_at")
     active_rows = [row for row in items if row["status"] not in terminal]
@@ -678,6 +695,13 @@ def watchlist_view(state: DashboardState) -> dict[str, Any]:
         "by_sleeve": {g["id"]: g["count"] for g in groups if g["id"] not in {"ALL", "UNASSIGNED"}},
         "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
     }
+
+
+def get_watch(state: DashboardState, watch_id: str) -> dict[str, Any] | None:
+    item = _watch_store(state).get(watch_id)
+    if item is None:
+        return None
+    return _watch_row(item, latest_by_symbol(state.root))
 
 
 def notifications_view(state: DashboardState) -> dict[str, Any]:

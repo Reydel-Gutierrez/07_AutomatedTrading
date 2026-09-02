@@ -36,6 +36,7 @@ from agentic_portfolio.dashboard.queries import (
     get_approval,
     get_report,
     get_thesis,
+    get_watch,
     journal_view,
     list_approvals,
     notifications_view,
@@ -494,6 +495,13 @@ def create_app(root: Path | None = None) -> Flask:
     def watchlist_page():
         return render_template("watchlist.html", view=watchlist_view(state()), page="watchlist")
 
+    @app.get("/watchlist/<watch_id>")
+    def watch_detail_page(watch_id: str):
+        item = get_watch(state(), watch_id)
+        if item is None:
+            abort(404)
+        return render_template("watch_detail.html", item=item, page="watchlist")
+
     @app.get("/positions")
     def positions_page():
         return render_template("positions.html", view=dashboard_view(state()), page="positions")
@@ -512,6 +520,13 @@ def create_app(root: Path | None = None) -> Flask:
     @app.get("/api/watchlist")
     def api_watchlist():
         return jsonify(watchlist_view(state()))
+
+    @app.get("/api/watchlist/<watch_id>")
+    def api_watch(watch_id: str):
+        item = get_watch(state(), watch_id)
+        if item is None:
+            abort(404)
+        return jsonify(item)
 
     @app.get("/api/notifications")
     def api_notifications():

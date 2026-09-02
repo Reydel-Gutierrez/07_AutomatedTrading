@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}{{ item.ticker }} watch{% endblock %}
+{% block content %}
+<div class="page detail">
+  <p class="crumb"><a href="{{ url_for('watchlist_page') }}">Watchlist</a> / {{ item.ticker }}</p>
+  <header class="page-head">
+    <div>
+      <h1>{{ item.ticker }}</h1>
+      <p class="lede">
+        <span class="pill">{{ item.status }}</span>
+        <span class="pill sleeve-{{ item.sleeve }}">{{ item.sleeve_label or item.sleeve or '—' }}</span>
+        {% if item.confidence %}<span class="pill">{{ item.confidence }}</span>{% endif %}
+      </p>
+    </div>
+  </header>
+
+  <section class="kpis dash-kpis">
+    <article class="kpi"><h2>Score</h2><p class="figure">{{ item.score if item.score is not none else '—' }}</p><p class="meta">Source candidate</p></article>
+    <article class="kpi"><h2>Last price</h2><p class="figure">{{ item.last_price if item.last_price is not none else '—' }}</p><p class="meta">Max {{ item.max_price if item.max_price is not none else '—' }}</p></article>
+    <article class="kpi"><h2>Last change</h2><p class="figure-sm">{{ (item.last_state_at or item.last_updated or item.last_reassessed) | et }}</p><p class="meta">{% if item.last_state_from %}{{ item.last_state_from }} → {{ item.last_state_to }}{% else %}{{ item.last_state_change or '—' }}{% endif %}</p></article>
+    <article class="kpi"><h2>Next review</h2><p class="figure-sm">{{ item.next_review_at | et }}</p><p class="meta">Expires {{ item.expiration | et }}</p></article>
+    <article class="kpi"><h2>Proposed size</h2><p class="figure-sm">{% if item.proposed_notional is not none %}${{ '%.2f'|format(item.proposed_notional) }}{% else %}—{% endif %}</p><p class="meta">{% if item.desired_allocation_pct is not none %}{{ '%.1f'|format(item.desired_allocation_pct * 100) }}% NAV{% else %}allocation —{% endif %}</p></article>
+    <article class="kpi"><h2>Created</h2><p class="figure-sm">{{ item.created_at | et }}</p><p class="meta">Updated {{ item.last_updated | et }}</p></article>
+  </section>
+
+  <section class="card">
+    <h2>Thesis</h2>
+    <p class="thesis-body">{{ item.thesis or item.reason_for_watch or '—' }}</p>
+    {% if item.reason_for_watch and item.thesis and item.reason_for_watch != item.thesis %}
+    <p class="meta">Reason for watch: {{ item.reason_for_watch }}</p>
+    {% endif %}
+  </section>
+
+  <section class="grid-3">
+    <article class="card">
+      <h2>Entry conditions</h2>
+      <ul>{% for r in item.entry_conditions %}<li>{{ r }}</li>{% else %}<li class="empty">None recorded.</li>{% endfor %}</ul>
+    </article>
+    <article class="card">
+      <h2>Invalidation</h2>
+      <ul>{% for r in item.invalidation %}<li>{{ r }}</li>{% else %}<li class="empty">None recorded.</li>{% endfor %}</ul>
+    </article>
+    <article class="card">
+      <h2>Risks</h2>
+      <ul>{% for r in item.risks %}<li>{{ r }}</li>{% else %}<li class="empty">None recorded.</li>{% endfor %}</ul>
+    </article>
+  </section>
+
+  <section class="grid-2">
+    <article class="card">
+      <h2>Catalysts / reasons</h2>
+      <ul>
+        {% for r in item.catalysts %}<li>{{ r }}</li>{% endfor %}
+        {% for r in item.reasons %}<li>{{ r }}</li>{% endfor %}
+        {% if not item.catalysts and not item.reasons %}<li class="empty">None recorded.</li>{% endif %}
+      </ul>
+    </article>
+    <article class="card">
+      <h2>Plan / links</h2>
+      <dl class="facts">
+        <dt>Spread cap</dt><dd>{{ item.max_spread_bps if item.max_spread_bps is not none else '—' }} bps</dd>
+        <dt>Min dollar volume</dt><dd>{{ item.min_dollar_volume if item.min_dollar_volume is not none else '—' }}</dd>
+        <dt>Market confirmation</dt><dd>{{ 'yes' if item.required_market_confirmation else 'no' }}</dd>
+        <dt>Plan notes</dt><dd>{{ item.plan_notes or '—' }}</dd>
+        <dt>Research</dt><dd>{% if item.research_id %}<a href="{{ url_for('report_detail_page', research_id=item.research_id) }}">Open report</a>{% else %}—{% endif %}</dd>
+        <dt>Thesis record</dt><dd>{% if item.thesis_id %}<a href="{{ url_for('thesis_detail_page', thesis_id=item.thesis_id) }}">Open thesis</a>{% else %}—{% endif %}</dd>
+        <dt>Approval</dt><dd>{% if item.approval_id %}<a href="{{ url_for('approval_detail_page', approval_id=item.approval_id) }}">Open packet</a>{% else %}—{% endif %}</dd>
+      </dl>
+    </article>
+  </section>
+</div>
+{% endblock %}

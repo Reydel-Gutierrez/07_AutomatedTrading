@@ -44,6 +44,17 @@
 
       const pager = ensurePager(table);
       pager.innerHTML = "";
+      const prev = document.createElement("button");
+      prev.type = "button";
+      prev.textContent = "Previous";
+      prev.disabled = table._page <= 1;
+      prev.addEventListener("click", () => {
+        if (table._page > 1) {
+          table._page -= 1;
+          render();
+        }
+      });
+      pager.appendChild(prev);
       const maxButtons = 5;
       let from = Math.max(1, table._page - 2);
       let to = Math.min(pages, from + maxButtons - 1);

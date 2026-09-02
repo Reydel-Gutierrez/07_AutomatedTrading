@@ -234,6 +234,20 @@ th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line
 th { color: var(--muted); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
 td.symbol { font-size: 14px; font-weight: 800; letter-spacing: .02em; color: var(--text); }
 td.wrap { max-width: 220px; color: var(--muted); }
+table.compact td, table.compact th { white-space: nowrap; }
+table.compact td.clip { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
+a.open-link {
+  display: inline-block;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 3px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  text-decoration: none;
+  color: var(--text);
+  background: var(--bg-2);
+}
+.thesis-body { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.45; margin: 0; }
 .pill { display: inline-block; border: 0; border-radius: 999px; padding: 2px 8px; margin: 0 4px 0 0; font-size: 11px; font-weight: 700; background: var(--bg-2); color: var(--text); }
 .pill.NORMAL, .pill.APPROVED, .pill.FILLED, .pill.act-BUY { color: var(--ok); background: #e5f0e6; }
 .pill.CONSERVING { color: var(--warn); background: #f6edd8; }
