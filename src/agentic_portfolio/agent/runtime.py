@@ -22,7 +22,7 @@ from agentic_portfolio.live_approval import LiveApprovalEngine, LiveApprovalStor
 from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.policy import load_account_rules, load_agent_config
-from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode, get_active_runtime
+from agentic_portfolio.runtime import RuntimeMode, get_active_runtime
 from agentic_portfolio.watch import WatchEngine, WatchStore
 
 
@@ -274,6 +274,14 @@ class AgentRuntime:
         ready = bool(adapter.available()) if adapter is not None else bool(os.environ.get("OPENAI_API_KEY"))
         return {"state": "READY" if ready else "UNCONFIGURED", "calls_allowed": ready}
 
+    def _write_transport_ready(self) -> bool:
+        executor = getattr(self.services, "executor", None)
+        if getattr(executor, "broker", None) is not None:
+            return True
+        from agentic_portfolio.live_execution.broker import write_transport_is_ready
+
+        return bool(write_transport_is_ready())
+
     def cycle(self) -> list[dict[str, Any]]:
         stamp = self.now()
         session = classify_market_phase(stamp)
@@ -306,6 +314,7 @@ class AgentRuntime:
             config=self.config,
             live_error=live_error,
             job_skips=job_skips,
+            write_transport_ready=self._write_transport_ready(),
         )
         return results
 
@@ -331,6 +340,7 @@ class AgentRuntime:
             cycles=0,
             runtime_mode=self.runtime_mode.value,
             config=self.config,
+            write_transport_ready=self._write_transport_ready(),
         )
         try:
             while not self._should_stop():

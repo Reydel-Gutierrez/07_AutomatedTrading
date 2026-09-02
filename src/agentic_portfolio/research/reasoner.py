@@ -81,12 +81,14 @@ ai_interpretations: list of {name, value, evidence_refs}.
 
 CONCISE_RETRY_INSTRUCTION = (
     "AGGRESSIVE CONCISENESS REQUIRED. A prior attempt was discarded because it was "
-    "incomplete (max_output_tokens) and must not be used as a ResearchReport. "
-    "Return a COMPLETE structured ResearchReport that fits the output-token budget. "
+    "incomplete, truncated, or failed schema validation and must not be used as a "
+    "ResearchReport. Return a COMPLETE structured ResearchReport that fits the "
+    "output-token budget and includes every required field. "
     "Follow the word and list limits already specified. Do not truncate JSON. "
     "Use empty strings or empty lists for non-applicable sections. "
     "Do not repeat the same fact across sections. Research quality and conclusions "
-    "must still be evidence-based."
+    "must still be evidence-based. KEEP_WATCHING and ADVANCE_TO_THESIS require "
+    "bull_case, base_case, and bear_case objects with summaries."
 )
 
 

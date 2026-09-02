@@ -244,6 +244,8 @@ td.wrap { max-width: 220px; color: var(--muted); }
 .pill.sleeve-OPPORTUNISTIC { background: #f6ead8; color: #8a5a1e; }
 .pill.sleeve-TACTICAL { background: #ece6f6; color: #5a4a86; }
 .pill.sleeve-SPECULATIVE { background: #eceae6; color: #5c5852; }
+.sleeve-group { margin-bottom: 18px; }
+.sleeve-group h2 .meta { font-weight: 500; }
 .pill.pri-HIGH, .pill.pri-High { background: #f4e4e2; color: var(--halt); }
 .pill.pri-MEDIUM, .pill.pri-Medium { background: #f6edd8; color: var(--warn); }
 .pill.pri-LOW, .pill.pri-Low { background: var(--bg-2); color: var(--muted); }

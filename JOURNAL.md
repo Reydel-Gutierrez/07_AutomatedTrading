@@ -445,6 +445,30 @@ Committed defaults unchanged: `auto_execution=false`, `require_human_approval=tr
 
 ---
 
+## 2026-09-01 — Operational failures are not investment conclusions
+
+**Type:** `research` / `watch` / `config_change`
+
+Schema, provider, budget, timeout, truncation, and collector-bug failures no longer become `NEED_MORE_DATA` / `REJECT` / `WATCH`. Failed Terra/decision attempts preserve the last valid thesis, journal `RESEARCH_ERROR`, and retry within the $10/month AI cap. Poisoned reports (including NVDA schema-validation fallbacks) stay on disk but are not canonical; last valid KEEP_WATCHING/ADVANCE_TO_THESIS is restored. Ordinary research watches stay `WATCH`; `WAITING_FOR_OPEN` is next-session confirmation only. Luna screens expire (48h). Watch expiry follows research freshness. Dashboard watchlist is grouped by sleeve. Does not place orders, weaken human approval, or change live placement.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Committed defaults unchanged: `auto_execution=false`, `require_human_approval=true`. Production env remains `LIVE_ORDER_PLACEMENT=ON` with human approval required.
+
+---
+
+## 2026-09-01 — Coherent live execution authority
+
+**Type:** `config_change` / `execution`
+
+Dashboard/health could show `LIVE_ORDER_PLACEMENT=true` from `AGENTIC_LIVE_ORDER_PLACEMENT` while Robinhood health stayed hardcoded `READ_ONLY` / `LIVE_ORDER_PLACEMENT=false` and `live_trade_actions_allowed` stayed hardcoded false. Observation MCP is still read-only by design; placement is a separate `LiveOrderExecutor` write adapter (`agentic-portfolio-executor`).
+
+Authoritative runtime snapshot is now `live_execution_authority()`: placement ON only when runtime is LIVE, the env/config switch is on, **and** the write transport bound. Health, dashboard, and Robinhood execution_mode all read that snapshot. Observation remains `READ_ONLY`. `auto_execution` stays false. Human APPROVE is still mandatory. REJECT still places nothing. Committed config files stay placement-off for tests/dev. The $10/month AI cap is unchanged.
+
+**MCP NOT called:** no live `place_equity_order` / `cancel_equity_order` during this change. No test order submitted.
+
+---
+
 ## Template
 
 ```

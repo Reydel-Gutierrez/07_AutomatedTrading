@@ -463,7 +463,17 @@ def create_app(root: Path | None = None) -> Flask:
         from agentic_portfolio.agent.heartbeat import load_health
 
         payload = load_health(app.config["ROOT"])
-        payload["live_order_placement_enabled"] = False
+        from agentic_portfolio.runtime import live_execution_authority
+
+        ready = payload.get("write_transport_ready") if payload.get("alive") else None
+        auth = live_execution_authority(write_transport_ready=ready if isinstance(ready, bool) else None)
+        if payload.get("execution_mode"):
+            payload["live_order_placement_enabled"] = bool(payload.get("LIVE_ORDER_PLACEMENT"))
+        else:
+            payload["live_order_placement_enabled"] = auth.LIVE_ORDER_PLACEMENT
+            payload["LIVE_ORDER_PLACEMENT"] = auth.LIVE_ORDER_PLACEMENT
+            payload["live_trade_actions_allowed"] = auth.live_trade_actions_allowed
+            payload["auto_execution"] = False
         return jsonify(payload)
 
     @app.get("/watchlist")
@@ -558,10 +568,25 @@ def create_app(root: Path | None = None) -> Flask:
             flash(str(exc))
             return redirect(url_for("approval_detail_page", approval_id=approval_id))
         if _json_request():
-            return jsonify({"ok": True, "packet": packet, "placed_order": False, "approved_does_not_place_order": True})
-        flash(
-            f"{packet['symbol']} {packet.get('status')}. This still does not place an order."
-        )
+            placed = bool(packet.get("placed_order"))
+            return jsonify(
+                {
+                    "ok": True,
+                    "packet": packet,
+                    "placed_order": placed,
+                    "approved_does_not_place_order": not placed,
+                }
+            )
+        if packet.get("placed_order"):
+            flash(f"{packet['symbol']} {packet.get('status')}. Order submitted to Robinhood after approval.")
+        else:
+            from agentic_portfolio.runtime import live_execution_authority
+
+            flash(
+                f"{packet['symbol']} {packet.get('status')}. This still does not place an order."
+                if not live_execution_authority().LIVE_ORDER_PLACEMENT
+                else f"{packet['symbol']} {packet.get('status')}. Placement did not submit (see packet status)."
+            )
         return redirect(url_for("approval_detail_page", approval_id=approval_id))
 
     @app.post("/approvals/<approval_id>/approve")

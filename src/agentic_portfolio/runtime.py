@@ -2,12 +2,16 @@
 
 LIVE uses the Agentic Robinhood account as the single source of truth.
 PAPER keeps the isolated paper book for tests/dev. The two books never mix.
-Live order placement stays disabled in both modes.
+
+Committed default for live order placement is false. Production enables it only
+via AGENTIC_LIVE_ORDER_PLACEMENT. Display and health must not report placement
+ON unless the write transport is actually bound. Observation MCP stays READ_ONLY.
 """
 
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping
@@ -87,9 +91,12 @@ def live_placement_enabled(
     runtime_config: dict[str, Any] | None = None,
     account_rules: dict[str, Any] | None = None,
 ) -> bool:
-    """Explicit opt-in only. Default false. Ambiguous values fail closed.
+    """Explicit opt-in intent. Default false. Ambiguous values fail closed.
 
     LIVE mode does not imply placement. Committed default remains false.
+    This is the master switch LiveOrderExecutor consults. Dashboard/health
+    display must use live_execution_authority so ON cannot appear when the
+    write transport is unbound or still READ_ONLY.
     """
     env = environ if environ is not None else os.environ
     for name in ("AGENTIC_LIVE_ORDER_PLACEMENT", "LIVE_ORDER_PLACEMENT"):
@@ -117,6 +124,95 @@ def live_placement_enabled(
         if "live_order_placement_enabled" in exe:
             return _truthy(exe.get("live_order_placement_enabled"))
     return False
+
+
+OBSERVATION_MODE = "READ_ONLY"
+EXECUTION_MODE_LIVE_WRITE = "LIVE_WRITE"
+EXECUTION_MODE_DISABLED = "DISABLED"
+EXECUTION_MODE_UNAVAILABLE = "UNAVAILABLE"
+EXECUTION_MODE_PAPER = "PAPER"
+
+
+@dataclass(frozen=True)
+class LiveExecutionAuthority:
+    """Single runtime source of truth for live placement after human approval.
+
+    Committed config files keep placement off for tests/dev. Production opt-in
+    is AGENTIC_LIVE_ORDER_PLACEMENT. auto_execution is never true. Observation
+    MCP remains READ_ONLY; only LiveOrderExecutor uses the write transport.
+    """
+
+    runtime_mode: RuntimeMode
+    placement_requested: bool
+    write_transport_ready: bool
+    LIVE_ORDER_PLACEMENT: bool
+    live_trade_actions_allowed: bool
+    auto_execution: bool = False
+    require_human_approval: bool = True
+    observation_mode: str = OBSERVATION_MODE
+    execution_mode: str = EXECUTION_MODE_DISABLED
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "runtime_mode": self.runtime_mode.value,
+            "placement_requested": self.placement_requested,
+            "write_transport_ready": self.write_transport_ready,
+            "LIVE_ORDER_PLACEMENT": self.LIVE_ORDER_PLACEMENT,
+            "live_order_placement_enabled": self.LIVE_ORDER_PLACEMENT,
+            "live_trade_actions_allowed": self.live_trade_actions_allowed,
+            "auto_execution": False,
+            "require_human_approval": True,
+            "observation_mode": self.observation_mode,
+            "execution_mode": self.execution_mode,
+            "autonomous_trading_disabled": True,
+            "approved_does_not_place_order": not self.LIVE_ORDER_PLACEMENT,
+        }
+
+
+def live_execution_authority(
+    *,
+    environ: Mapping[str, str] | None = None,
+    runtime_config: dict[str, Any] | None = None,
+    dashboard_config: dict[str, Any] | None = None,
+    write_transport_ready: bool | None = None,
+) -> LiveExecutionAuthority:
+    """Authoritative live-execution snapshot. Dashboard, health, and executor agree here."""
+    requested = live_placement_enabled(environ=environ, runtime_config=runtime_config)
+    mode = resolve_runtime_mode(
+        environ=environ,
+        runtime_config=runtime_config,
+        dashboard_config=dashboard_config,
+    )
+    ready = bool(write_transport_ready) if write_transport_ready is not None else _write_transport_ready()
+    executable = bool(requested and mode is RuntimeMode.LIVE and ready)
+    if mode is RuntimeMode.PAPER:
+        execution_mode = EXECUTION_MODE_PAPER
+    elif executable:
+        execution_mode = EXECUTION_MODE_LIVE_WRITE
+    elif requested and mode is RuntimeMode.LIVE:
+        execution_mode = EXECUTION_MODE_UNAVAILABLE
+    else:
+        execution_mode = EXECUTION_MODE_DISABLED
+    return LiveExecutionAuthority(
+        runtime_mode=mode,
+        placement_requested=requested,
+        write_transport_ready=ready,
+        LIVE_ORDER_PLACEMENT=executable,
+        live_trade_actions_allowed=executable,
+        auto_execution=False,
+        require_human_approval=True,
+        observation_mode=OBSERVATION_MODE,
+        execution_mode=execution_mode,
+    )
+
+
+def _write_transport_ready() -> bool:
+    try:
+        from agentic_portfolio.live_execution.broker import write_transport_is_ready
+
+        return bool(write_transport_is_ready())
+    except Exception:  # noqa: BLE001 — fail closed: cannot display ON
+        return False
 
 
 def require_human_approval(

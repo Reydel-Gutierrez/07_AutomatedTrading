@@ -56,8 +56,8 @@ class ConnectionManager:
             "error": error,
             "error_code": code,
             "mode": "READ_ONLY",
+            "observation_mode": "READ_ONLY",
             "last_change_at": self.last_change_at,
-            "LIVE_ORDER_PLACEMENT": False,
         }
 
     def ensure(self, *, environ: Mapping[str, str] | None = None, force: bool = False) -> ReadonlyBrokerRuntime:

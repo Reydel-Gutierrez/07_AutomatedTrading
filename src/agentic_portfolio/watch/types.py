@@ -40,6 +40,15 @@ ACTIVE_WATCH = {
     WatchStatus.APPROVAL_REQUIRED,
 }
 
+# Next-session / live-condition states. Ordinary KEEP_WATCHING is not among these.
+TRADE_CONFIRMATION = {
+    WatchStatus.WAITING_FOR_PRICE,
+    WatchStatus.WAITING_FOR_LIQUIDITY,
+    WatchStatus.WAITING_FOR_CATALYST,
+    WatchStatus.READY_FOR_RISK_GATE,
+    WatchStatus.APPROVAL_REQUIRED,
+}
+
 
 class ReassessTrigger(str, Enum):
     PRICE_MOVE = "PRICE_MOVE"
@@ -123,6 +132,23 @@ class WatchItem:
         if self.conditional_plan is not None:
             data["conditional_plan"] = self.conditional_plan.to_dict()
         return data
+
+
+def approaching_next_session(item: WatchItem) -> bool:
+    """True when this watch is genuinely waiting on a trade or next-session check.
+
+    KEEP_WATCHING research items are not approaching a trade just because the
+    market is closed.
+    """
+    if item.status in TRADE_CONFIRMATION:
+        return True
+    if item.conditional_plan is not None:
+        return True
+    if item.approval_id:
+        return True
+    if item.proposed_notional is not None:
+        return True
+    return False
 
 
 def watch_from_dict(raw: dict[str, Any]) -> WatchItem:

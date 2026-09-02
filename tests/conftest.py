@@ -31,8 +31,10 @@ def _isolate_live_and_ai_env(monkeypatch, tmp_path):
     monkeypatch.delenv("LIVE_ORDER_PLACEMENT", raising=False)
     monkeypatch.setenv("AGENTIC_READONLY_MCP_HOME", str(tmp_path / "mcp-home"))
     from agentic_portfolio.runtime import reset_readonly_broker_runtime
+    from agentic_portfolio.live_execution.broker import reset_live_write_broker
 
     reset_readonly_broker_runtime()
+    reset_live_write_broker()
 
 
 def ctx(

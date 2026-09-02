@@ -36,6 +36,7 @@ def _blocked(ctx: AIContext, reason: str, classification: str, flags: list[str])
         screening_id=str(uuid4()),
         runtime_mode=ctx.runtime_mode,
         rejection_reason=reason,
+        operational_failure=True,
     )
 
 
@@ -75,7 +76,7 @@ def screen_candidate(
     if row.ticker != ctx.ticker:
         row.ticker = ctx.ticker
         row.rejection_reason = "ticker_mismatch_overlaid"
-    if persist is not None:
+    if persist is not None and not row.operational_failure:
         persist.save_screening(
             row.screening_id,
             {**row.__dict__, "created_at": stamp.isoformat(), "context_id": ctx.context_id},

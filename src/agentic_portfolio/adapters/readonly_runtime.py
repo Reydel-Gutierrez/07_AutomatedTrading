@@ -362,6 +362,7 @@ class StreamableHttpMcpTransport:
         timeout: float = 30.0,
         post: Any | None = None,
         refresh_token_fn: Any | None = None,
+        client_name: str = "agentic-portfolio-readonly",
     ) -> None:
         self.url = str(url).rstrip("/")
         self._token = token
@@ -371,6 +372,7 @@ class StreamableHttpMcpTransport:
         self._initialized = False
         self._post = post or self._default_post
         self._refresh_token_fn = refresh_token_fn
+        self.client_name = str(client_name or "agentic-portfolio-readonly")
 
     def update_token(self, token: str) -> None:
         self._token = token
@@ -483,7 +485,7 @@ class StreamableHttpMcpTransport:
             {
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
-                "clientInfo": {"name": "agentic-portfolio-readonly", "version": "1.0.0"},
+                "clientInfo": {"name": self.client_name, "version": "1.0.0"},
             },
         )
         self._rpc("notifications/initialized", {}, notification=True)
@@ -571,7 +573,13 @@ def reconnect_readonly_broker_runtime(
     return bootstrap_readonly_broker_runtime(environ=environ, account_number=account_number, force=True)
 
 
-def _make_http_transport(url: str, token: str, *, environ: Mapping[str, str]) -> StreamableHttpMcpTransport:
+def _make_http_transport(
+    url: str,
+    token: str,
+    *,
+    environ: Mapping[str, str],
+    client_name: str = "agentic-portfolio-readonly",
+) -> StreamableHttpMcpTransport:
     def refresh() -> str:
         access, error = load_or_refresh_access_token(environ=environ, force_refresh=True)
         if not access:
@@ -581,7 +589,7 @@ def _make_http_transport(url: str, token: str, *, environ: Mapping[str, str]) ->
             )
         return access
 
-    return StreamableHttpMcpTransport(url, token, refresh_token_fn=refresh)
+    return StreamableHttpMcpTransport(url, token, refresh_token_fn=refresh, client_name=client_name)
 
 
 def _coded_error(exc: BaseException, *, default: str = LiveErrorCode.MCP_INITIALIZE_FAILED) -> str:

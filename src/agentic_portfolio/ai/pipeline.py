@@ -338,10 +338,11 @@ def run_candidate_pipeline(
             )
             row = screen_candidate(gateway, ctx, persist=store if persist else None, now=stamp)
             screened.append(row)
-            if row.rejection_reason and row.classification in {"BUDGET_BLOCKED", "AI_UNAVAILABLE"}:
+            if getattr(row, "operational_failure", False) or (
+                row.rejection_reason and row.classification in {"BUDGET_BLOCKED", "AI_UNAVAILABLE"}
+            ):
                 ai_blocked = True
                 blockers.append(row.rejection_reason)
-                rejected.append({"ticker": cand.symbol, "reason": row.rejection_reason, "stage": "screening"})
                 break
             if (not row.worth_deep_research) or row.score < min_screen:
                 rejected.append(
@@ -376,8 +377,10 @@ def run_candidate_pipeline(
         )
         report = research_candidate(gateway, ctx, context, persist=store if persist else None, now=stamp)
         researched.append(report)
-        if report.rejection_reason and report.recommended_action is RecommendedAction.REJECT and not report.thesis:
-            rejected.append({"ticker": screen.ticker, "reason": report.rejection_reason, "stage": "research"})
+        if getattr(report, "operational_failure", False) or (
+            report.rejection_reason and report.recommended_action is RecommendedAction.REJECT and not report.thesis
+        ):
+            blockers.append(report.rejection_reason or "research_operational_failure")
             continue
         if report.recommended_action in {RecommendedAction.REJECT, RecommendedAction.WATCH}:
             rejected.append(
@@ -394,6 +397,9 @@ def run_candidate_pipeline(
             rejected.append({"ticker": screen.ticker, "reason": "decision_cap", "stage": "decision"})
             continue
         decision = decide_candidate(gateway, ctx, context, report, persist=store if persist else None, now=stamp)
+        if getattr(decision, "operational_failure", False):
+            blockers.append(decision.rejection_reason or "decision_operational_failure")
+            continue
         decisions.append(decision)
         cand = next((c for c in ranked if c.symbol == screen.ticker), None)
         sleeve = cand.provisional_sleeve if cand else Sleeve.CORE_GROWTH

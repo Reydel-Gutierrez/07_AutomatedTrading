@@ -174,8 +174,8 @@ def test_latest_session_analysis_creates_watch_and_persists(tmp_path):
     assert row["status"] == "OK"
     item = services.watch_store.by_ticker("QUAL")
     assert item is not None
-    assert item.status in {WatchStatus.WATCH, WatchStatus.WAITING_FOR_OPEN, WatchStatus.DISCOVERED}
-    assert item.conditional_plan is not None
+    assert item.status in {WatchStatus.WATCH, WatchStatus.DISCOVERED}
+    assert item.research_thesis == "Quality vs cash"
     restarted = WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
     again = restarted.by_ticker("QUAL")
     assert again is not None
@@ -219,10 +219,11 @@ def test_waiting_for_open_schedules_next_regular_open_not_sleeve_interval(tmp_pa
         ticker="HD",
         thesis="keep watching",
         last_price=180.0,
-        status=WatchStatus.WATCH,
+        status=WatchStatus.WAITING_FOR_OPEN,
         off_hours=True,
-        prepare_conditional_plan=False,
+        prepare_conditional_plan=True,
         sleeve="OPPORTUNISTIC",
+        proposed_notional=25.0,
     )
     assert item.status is WatchStatus.WAITING_FOR_OPEN
     nxt = parse_iso(item.next_review_at)
@@ -263,7 +264,7 @@ def _persist_waiting_for_open(
     last_updated="2026-09-01T08:00:00-04:00",
     watch_id="w-hd-pre-fix",
     status=WatchStatus.WAITING_FOR_OPEN,
-    plan: bool = False,
+    plan: bool = True,
     proposed_notional: float | None = None,
     desired_allocation_pct: float | None = None,
     research_id=None,

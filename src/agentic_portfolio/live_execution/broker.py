@@ -35,7 +35,10 @@ class BrokerClient(Protocol):
     def get_equity_tradability(self, symbols: str | list[str]) -> dict[str, Any]: ...
 
 
+WRITE_CLIENT_NAME = "agentic-portfolio-executor"
 WRITE_TOOLS = frozenset({"review_equity_order", "place_equity_order", "cancel_equity_order"})
+_WRITE_READY = False
+_WRITE_ADAPTER: LiveWriteAdapter | None = None
 READ_TOOLS = frozenset(
     {
         "get_accounts",
@@ -92,6 +95,25 @@ class LiveWriteAdapter:
         return self._invoke("get_equity_tradability", account_number=self.account_number, symbols=tickers)
 
 
+def write_transport_is_ready() -> bool:
+    """True only after a write adapter bound successfully. Fail closed otherwise."""
+    return bool(_WRITE_READY and _WRITE_ADAPTER is not None)
+
+
+def reset_live_write_broker() -> None:
+    """Test helper. Clears the process-wide write adapter."""
+    global _WRITE_READY, _WRITE_ADAPTER
+    _WRITE_READY = False
+    _WRITE_ADAPTER = None
+
+
+def _mark_write_ready(adapter: LiveWriteAdapter | None) -> LiveWriteAdapter | None:
+    global _WRITE_READY, _WRITE_ADAPTER
+    _WRITE_ADAPTER = adapter
+    _WRITE_READY = adapter is not None
+    return adapter
+
+
 def bind_live_write_broker(
     *,
     account_number: str,
@@ -101,13 +123,14 @@ def bind_live_write_broker(
     """Return a write adapter only when LIVE_ORDER_PLACEMENT is explicitly on.
 
     The readonly observation transport stays read-only. This adapter is a
-    separate allowlisted client. Missing credentials fail closed (None).
+    separate allowlisted client that initializes as agentic-portfolio-executor.
+    Missing credentials or initialize failure fail closed (None).
     """
     env = environ if environ is not None else os.environ
     if not live_placement_enabled(environ=env):
-        return None
+        return _mark_write_ready(None)
     if transport is not None:
-        return LiveWriteAdapter(transport, account_number=str(account_number))
+        return _mark_write_ready(LiveWriteAdapter(transport, account_number=str(account_number)))
     try:
         from agentic_portfolio.adapters.readonly_runtime import (
             _make_http_transport,
@@ -115,17 +138,18 @@ def bind_live_write_broker(
             resolve_readonly_mcp_url,
         )
     except Exception:  # noqa: BLE001
-        return None
+        return _mark_write_ready(None)
     token, error = _read_token(environ=env)
     if not token:
         del error
-        return None
+        return _mark_write_ready(None)
     url = resolve_readonly_mcp_url(environ=env)
     try:
-        http = _make_http_transport(url, token, environ=env)
-    except Exception:  # noqa: BLE001
-        return None
-    return LiveWriteAdapter(http, account_number=str(account_number))
+        http = _make_http_transport(url, token, environ=env, client_name=WRITE_CLIENT_NAME)
+        http.initialize()
+    except Exception:  # noqa: BLE001 — fail closed; do not report placement ON
+        return _mark_write_ready(None)
+    return _mark_write_ready(LiveWriteAdapter(http, account_number=str(account_number)))
 
 
 @dataclass

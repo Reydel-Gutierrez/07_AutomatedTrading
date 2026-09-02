@@ -23,10 +23,10 @@ NAV is whatever `get_portfolio` returns on the configured Agentic account. It is
 | Field | Value |
 |---|---|
 | state | `HUMAN_APPROVAL` |
-| `auto_execution` | `false` |
+| `auto_execution` | `false` (never). Orders cannot place without explicit human APPROVE. |
 | `require_human_approval` | `true` |
-| `live_trade_actions_allowed` | `false` |
-| stop | after send-time revalidation; place only via LiveOrderExecutor when `AGENTIC_LIVE_ORDER_PLACEMENT=true` |
+| `live_trade_actions_allowed` | runtime: true only after `AGENTIC_LIVE_ORDER_PLACEMENT=true` **and** the write transport is bound. Committed `account_rules` stays false so paper/autonomous jobs cannot place. |
+| stop | after send-time revalidation; place only via LiveOrderExecutor when the live execution authority reports placement ON |
 
 `HALTED` → keep/force `auto_execution` false. No self-resume.
 

@@ -255,6 +255,34 @@ class ResearchQueue:
                 found = entry
         return found
 
+    def collapse_duplicate_active_entries(self) -> list[str]:
+        """Keep one active row per symbol. Older duplicates are DROPPED, not deleted."""
+        by_symbol: dict[str, list[ResearchQueueEntry]] = {}
+        for entry in self.all():
+            if entry.status not in ACTIVE_QUEUE_STATUSES:
+                continue
+            by_symbol.setdefault(entry.symbol.upper(), []).append(entry)
+        dropped: list[str] = []
+        inflight = {ResearchQueueStatus.RESEARCHING, ResearchQueueStatus.IN_PROGRESS}
+        for rows in by_symbol.values():
+            if len(rows) < 2:
+                continue
+            ranked = sorted(
+                rows,
+                key=lambda e: (0 if e.status in inflight else 1, e.enqueued_at or ""),
+                reverse=False,
+            )
+            keep = ranked[0]
+            for extra in ranked[1:]:
+                extra.status = ResearchQueueStatus.DROPPED
+                extra.claimed_at = None
+                extra.skipped_reason = extra.skipped_reason or "duplicate_active_queue"
+                extra.notes = ((extra.notes or "") + " | duplicate_active_queue").strip(" |")
+                extra.last_error = extra.last_error or f"duplicate of {keep.queue_id}"
+                self.save_entry(extra)
+                dropped.append(extra.queue_id)
+        return dropped
+
     def enqueue(self, entry: ResearchQueueEntry) -> ResearchQueueEntry:
         from agentic_portfolio.discovery.freshness import normalize_queue_freshness
 

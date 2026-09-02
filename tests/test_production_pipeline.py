@@ -297,14 +297,11 @@ def test_k_watch_creates_persistent_watch_item(tmp_path):
     assert result.watches_created == 1
     item = worker.watch.store.by_ticker("QUAL")
     assert item is not None
-    assert item.status in {WatchStatus.WATCH, WatchStatus.WAITING_FOR_OPEN}
+    assert item.status is WatchStatus.WATCH
     assert item.research_thesis
 
 
-def test_keep_watching_waiting_for_open_schedules_next_regular_open(tmp_path):
-    from datetime import date, time
-
-    from agentic_portfolio.calendar import EASTERN
+def test_keep_watching_premarket_stays_watch_with_sleeve_interval(tmp_path):
     from agentic_portfolio.watch.types import parse_iso
 
     pre = datetime(2026, 9, 1, 12, 49, tzinfo=timezone.utc)  # 08:49 ET Tuesday
@@ -318,14 +315,11 @@ def test_keep_watching_waiting_for_open_schedules_next_regular_open(tmp_path):
     assert result.watches_created == 1
     item = worker.watch.store.by_ticker("HD")
     assert item is not None
-    assert item.status is WatchStatus.WAITING_FOR_OPEN
+    assert item.status is WatchStatus.WATCH
     nxt = parse_iso(item.next_review_at)
     assert nxt is not None
-    local = nxt.astimezone(EASTERN)
-    assert local.date() == date(2026, 9, 1)
-    assert local.time() == time(9, 30)
-    # Opportunistic WATCH interval is 48h and must not apply here.
-    assert local.date() != date(2026, 9, 3)
+    hours = (nxt - pre).total_seconds() / 3600.0
+    assert 40.0 <= hours <= 56.0
 
 
 def test_keep_watching_during_rth_uses_sleeve_watch_interval(tmp_path):
@@ -1479,7 +1473,7 @@ def test_pre_fix_spy_need_more_data_is_requeued_without_forcing_buy(tmp_path):
     assert worker.approvals.store.pending() == []
     _, queue = resolve_queue_stores(tmp_path, runtime_mode=RuntimeMode.LIVE)
     assert queue.all()[0].status is ResearchQueueStatus.COMPLETED
-    assert any(row.get("status") == "COLLECTOR_REPAIR_REQUEUE" for row in result.details)
+    assert any(row.get("status") in {"COLLECTOR_REPAIR_REQUEUE", "OPERATIONAL_RESEARCH_REPAIR"} for row in result.details)
 
 
 def test_pre_fix_etf_repair_does_not_requeue_the_same_report_twice(tmp_path):
@@ -1503,7 +1497,7 @@ def test_pre_fix_etf_repair_does_not_requeue_the_same_report_twice(tmp_path):
     second = worker.run_cycle()
     assert first.reports_created == 1
     assert second.reports_created == 0
-    assert not any(row.get("status") == "COLLECTOR_REPAIR_REQUEUE" for row in second.details)
+    assert not any(row.get("status") in {"COLLECTOR_REPAIR_REQUEUE", "OPERATIONAL_RESEARCH_REPAIR"} for row in second.details)
     assert worker.research_store.by_symbol("VTI")[-1].research_conclusion is ResearchConclusion.KEEP_WATCHING
 
 

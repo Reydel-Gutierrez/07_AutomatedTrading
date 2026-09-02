@@ -38,6 +38,8 @@ from agentic_portfolio.decision.store import DecisionStore
 from agentic_portfolio.discovery.store import CandidateStore, DiscoveryRunStore, ResearchQueue
 from agentic_portfolio.execution.store import OrderPlanStore
 from agentic_portfolio.journal import read_jsonl
+from agentic_portfolio.lifecycle import latest_by_symbol
+from agentic_portfolio.research.operational import looks_like_schema_failure_report
 from agentic_portfolio.live.isolation import detect_paper_contamination
 from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.monitoring.store import MonitoringStore
@@ -53,6 +55,7 @@ from agentic_portfolio.runtime import (
     get_active_artifact_environment,
     get_active_portfolio_source,
     get_active_runtime,
+    live_execution_authority,
     live_placement_enabled,
 )
 from agentic_portfolio.schemas import ThesisRecord, to_dict
@@ -206,18 +209,21 @@ def _metric(value: Any, display: str | None, *, available: bool | None = None) -
 def execution_flags(rules: dict[str, Any] | None = None) -> dict[str, Any]:
     rules = rules or load_account_rules()
     exe = dict(rules.get("execution") or {})
-    auto = bool(exe.get("auto_execution"))
-    live = bool(exe.get("live_trade_actions_allowed"))
+    auth = live_execution_authority()
     return {
-        "state": exe.get("state") or exe.get("mode"),
-        "mode": exe.get("mode"),
-        "auto_execution": auto,
-        "require_human_approval": bool(exe.get("require_human_approval", True)),
-        "live_trade_actions_allowed": live,
+        "state": exe.get("state") or exe.get("mode") or "HUMAN_APPROVAL",
+        "mode": exe.get("mode") or "HUMAN_APPROVAL",
+        "auto_execution": False,
+        "require_human_approval": True,
+        "live_trade_actions_allowed": auth.live_trade_actions_allowed,
         "current_terminal_stage": exe.get("current_terminal_stage"),
-        "autonomous_trading_disabled": (not auto) and (not live),
-        "approved_does_not_place_order": not live_placement_enabled(),
-        "live_order_placement_enabled": live_placement_enabled(),
+        "autonomous_trading_disabled": True,
+        "approved_does_not_place_order": not auth.LIVE_ORDER_PLACEMENT,
+        "live_order_placement_enabled": auth.LIVE_ORDER_PLACEMENT,
+        "execution_mode": auth.execution_mode,
+        "observation_mode": auth.observation_mode,
+        "placement_requested": auth.placement_requested,
+        "write_transport_ready": auth.write_transport_ready,
     }
 
 
@@ -420,7 +426,7 @@ def _packet_row(packet: ApprovalPacket, *, flags: dict[str, Any] | None = None) 
         "approved_does_not_place_order": True,
         "broker_submitted": False,
         "live_execution_blocked": True,
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
     }
 
 
@@ -530,10 +536,10 @@ def _live_approval_row(item: LiveApproval) -> dict[str, Any]:
         "runtime_mode": item.runtime_mode,
         "decision_block_reason": None,
         "can_decide": pending,
-        "approved_does_not_place_order": not live_placement_enabled(),
+        "approved_does_not_place_order": not live_execution_authority().LIVE_ORDER_PLACEMENT,
         "broker_submitted": bool(item.broker_submitted),
         "live_execution_blocked": bool(item.live_execution_blocked),
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
         "placed_order": bool(item.placed_order),
         "ai_rationale": item.ai_rationale,
         "supporting_thesis": item.supporting_thesis,
@@ -599,8 +605,10 @@ def live_approval_detail(item: LiveApproval) -> dict[str, Any]:
 
 def watchlist_view(state: DashboardState) -> dict[str, Any]:
     items = []
+    lifecycle = latest_by_symbol(state.root)
     for item in _watch_store(state).all():
         plan = item.conditional_plan
+        last = lifecycle.get(str(item.ticker).upper()) or {}
         items.append(
             {
                 "watch_id": item.watch_id,
@@ -620,18 +628,53 @@ def watchlist_view(state: DashboardState) -> dict[str, Any]:
                 "last_updated": item.last_updated,
                 "approval_id": item.approval_id,
                 "sleeve": item.sleeve,
+                "sleeve_label": friendly_enum(item.sleeve),
                 "catalysts": list(item.catalysts or []),
                 "invalidation": list(item.invalidating_conditions or []),
                 "reason_for_watch": item.reason_for_watch,
                 "research_id": item.research_id,
                 "thesis_id": item.thesis_id,
+                "last_state_change": last.get("reason"),
+                "last_state_from": last.get("from_status"),
+                "last_state_to": last.get("to_status") or last.get("to_status"),
+                "last_state_at": last.get("logged_at"),
+                "operational_error": bool(last.get("operational_failure")),
             }
         )
+    terminal = {"REJECTED", "EXPIRED", "INVALIDATED"}
+    active_rows = [row for row in items if row["status"] not in terminal]
+    sleeve_order = [key for key in ALLOCATION_ORDER if key != "CASH"]
+    groups = []
+    for key in sleeve_order:
+        rows = [row for row in active_rows if row.get("sleeve") == key]
+        groups.append(
+            {
+                "id": key,
+                "label": SLEEVE_LABELS.get(key, friendly_enum(key)),
+                "rows": rows,
+                "count": len(rows),
+                "active": len(rows),
+            }
+        )
+    unassigned = [row for row in active_rows if not row.get("sleeve") or row.get("sleeve") not in sleeve_order]
+    if unassigned:
+        groups.append({"id": "UNASSIGNED", "label": "Unassigned", "rows": unassigned, "count": len(unassigned), "active": len(unassigned)})
+    groups.append(
+        {
+            "id": "ALL",
+            "label": "All Watches",
+            "rows": items,
+            "count": len(items),
+            "active": len(active_rows),
+        }
+    )
     return {
         "rows": items,
+        "groups": groups,
         "count": len(items),
-        "active": sum(1 for row in items if row["status"] not in {"REJECTED", "EXPIRED", "INVALIDATED"}),
-        "live_order_placement_enabled": live_placement_enabled(),
+        "active": len(active_rows),
+        "by_sleeve": {g["id"]: g["count"] for g in groups if g["id"] not in {"ALL", "UNASSIGNED"}},
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
     }
 
 
@@ -683,7 +726,14 @@ def agent_runtime_view(state: DashboardState) -> dict[str, Any]:
         "live_error_code": err.get("code"),
         "live_error_message": err.get("message"),
         "job_skips": err.get("job_skips") or [],
-        "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
+        "LIVE_ORDER_PLACEMENT": bool(health.get("LIVE_ORDER_PLACEMENT"))
+        if health.get("execution_mode")
+        else live_execution_authority().LIVE_ORDER_PLACEMENT,
+        "execution_mode": health.get("execution_mode") or live_execution_authority().execution_mode,
+        "live_trade_actions_allowed": bool(health.get("live_trade_actions_allowed"))
+        if health.get("execution_mode")
+        else live_execution_authority().live_trade_actions_allowed,
+        "auto_execution": False,
     }
 
 
@@ -709,11 +759,11 @@ def list_approvals(state: DashboardState) -> dict[str, Any]:
         "all": live_rows + packets,
         "pending_count": len(pending),
         "live_pending_count": sum(1 for p in live_rows if p["pending"]),
-        "approved_does_not_place_order": True,
+        "approved_does_not_place_order": not live_execution_authority().LIVE_ORDER_PLACEMENT,
         "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "runtime_mode": env,
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
         "allow_paper_packet_decisions": flags["allow_paper_packet_decisions"] and env != RuntimeMode.LIVE.value,
         "allow_demo_packet_decisions": flags["allow_demo_packet_decisions"] and env != RuntimeMode.LIVE.value,
         "allow_stale_packet_decisions": flags["allow_stale_packet_decisions"],
@@ -837,6 +887,9 @@ def _live_research_rows(state: DashboardState) -> list[dict[str, Any]]:
         seen.add(rid)
         full = state.research.get(rid)
         full_data = to_dict(full) if full is not None else {}
+        poison = looks_like_schema_failure_report(row) or looks_like_schema_failure_report(full) or looks_like_schema_failure_report(full_data)
+        if poison:
+            continue
         built = {
             "research_id": row.get("research_id"),
             "symbol": ticker,
@@ -884,6 +937,8 @@ def _live_research_rows(state: DashboardState) -> list[dict[str, Any]]:
         seen.add(report.research_id)
         data = to_dict(report)
         ticker = str(data.get("symbol") or "").upper()
+        if looks_like_schema_failure_report(report) or looks_like_schema_failure_report(data):
+            continue
         key = f"{ticker}:{(data.get('evidence_fingerprint') or data.get('research_id'))}"
         prior = latest_by_key.get(key)
         if prior is None or str(data.get("completed_at") or "") > str(prior.get("completed_at") or ""):
@@ -918,7 +973,8 @@ def research_view(state: DashboardState) -> dict[str, Any]:
         "queued": sum(1 for q in queue if q.get("status") == "QUEUED"),
         "researching": sum(1 for q in queue if q.get("status") in {"RESEARCHING", "IN_PROGRESS"}),
         "completed": sum(1 for q in queue if q.get("status") == "COMPLETED"),
-        "rejected": sum(1 for q in queue if q.get("status") in {"REJECTED", "NEED_MORE_DATA", "INCONCLUSIVE", "EXPIRED", "DROPPED"}),
+        "rejected": sum(1 for q in queue if q.get("status") in {"REJECTED", "EXPIRED", "DROPPED"}),
+        "need_more_data": sum(1 for q in queue if q.get("status") in {"NEED_MORE_DATA", "INCONCLUSIVE"}),
     }
     return {
         "candidates": candidates,
@@ -930,7 +986,7 @@ def research_view(state: DashboardState) -> dict[str, Any]:
         "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "runtime_mode": env,
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
         "pipeline": pipeline_status(state),
     }
 
@@ -1033,7 +1089,7 @@ def orders_view(state: DashboardState) -> dict[str, Any]:
         "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "runtime_mode": env,
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
     }
 
 
@@ -1103,7 +1159,7 @@ def journal_view(state: DashboardState, *, limit: int = 250) -> dict[str, Any]:
         "book_label": flags["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "runtime_mode": env,
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
     }
 
 
@@ -1276,11 +1332,11 @@ def health_status(state: DashboardState) -> list[dict[str, Any]]:
         },
         {
             "id": "live_placement",
-            "name": "live placement disabled",
+            "name": "live placement enabled" if flags["live_order_placement_enabled"] else "live placement disabled",
             "ok": True,
-            "status": "disabled",
+            "status": "enabled" if flags["live_order_placement_enabled"] else "disabled",
             "detail": ui["no_live_placement_banner"],
-            "live_order_placement_enabled": live_placement_enabled(),
+            "live_order_placement_enabled": flags["live_order_placement_enabled"],
             "autonomous_trading_disabled": flags["autonomous_trading_disabled"],
         },
     ]
@@ -1439,7 +1495,7 @@ def system_view(state: DashboardState) -> dict[str, Any]:
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "active_book_label": ui["active_book_label"],
         "book_kind": ui["book_kind"],
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
         "pipeline_stop": pipeline.get("hard_stop_after"),
         "policy_version": policy.get("version"),
         "daily_halt_threshold": (policy.get("daily_risk_halt") or {}).get("threshold_fraction_of_start_of_day_nav"),
@@ -1671,7 +1727,7 @@ def discovery_view(state: DashboardState) -> dict[str, Any]:
         "count": len(rows),
         "book_label": ui["active_book_label"],
         "live_account_label": LIVE_ACCOUNT_LABEL,
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
         "environment": env,
         "runtime_mode": env,
         "note": "Read from stored discovery results. This page does not run discovery. PAPER candidates are never reused as LIVE.",
@@ -1751,7 +1807,7 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
         "risk_state_label": risk_label,
         "live_account_status": ui["live_account_status"],
         "paper_book_status": ui["paper_book_status"],
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
         "live_data_unavailable": unavailable,
         "live_error_code": live_error_state(state).get("code") if unavailable else None,
         "live_error_message": live_error_state(state).get("message") if unavailable else None,
@@ -1874,13 +1930,15 @@ def pipeline_status(state: DashboardState) -> dict[str, Any]:
             "queued": sum(1 for q in queue if q.status.value == "QUEUED"),
             "researching": sum(1 for q in queue if q.status.value in {"RESEARCHING", "IN_PROGRESS"}),
             "completed": sum(1 for q in queue if q.status.value == "COMPLETED"),
-            "rejected": sum(1 for q in queue if q.status.value in {"REJECTED", "NEED_MORE_DATA", "INCONCLUSIVE", "EXPIRED", "DROPPED"}),
+            "rejected": sum(1 for q in queue if q.status.value in {"REJECTED", "EXPIRED", "DROPPED"}),
+            "need_more_data": sum(1 for q in queue if q.status.value in {"NEED_MORE_DATA", "INCONCLUSIVE"}),
             "current_symbol": current,
             "reports": len(reports),
         },
         "watchlist": {
             "active": watches.get("active") or 0,
             "count": watches.get("count") or 0,
+            "by_sleeve": watches.get("by_sleeve") or {},
         },
         "theses": {
             "count": len(_merge_theses(state, flags)),
@@ -1893,9 +1951,9 @@ def pipeline_status(state: DashboardState) -> dict[str, Any]:
             "phase": (agent.get("market") or {}).get("phase") if agent else None,
             "alive": agent.get("alive") if agent else False,
             "cycles": agent.get("cycles") if agent else 0,
-            "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
+            "LIVE_ORDER_PLACEMENT": live_execution_authority().LIVE_ORDER_PLACEMENT,
         },
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
         "orders": _broker_order_summary(state),
         "positions": _live_position_count(state),
         "lifecycle": ["Discovery", "Research", "Thesis/Decision", "Approval", "Order", "Position"],
@@ -1920,7 +1978,7 @@ def _ai_budget_status(state: DashboardState):
 def ai_summary(state: DashboardState, ui: dict[str, Any] | None = None) -> dict[str, Any]:
     from agentic_portfolio.ai.config import load_ai_config
     from agentic_portfolio.ai.gateway import default_providers
-    from agentic_portfolio.ai.safety import LIVE_AI_ALLOWED, LIVE_ORDER_PLACEMENT, LIVE_PROPOSALS_ALLOWED
+    from agentic_portfolio.ai.safety import LIVE_AI_ALLOWED, LIVE_PROPOSALS_ALLOWED
 
     flags = ui or resolve_ui_flags()
     mode = flags["environment"]
@@ -1937,7 +1995,7 @@ def ai_summary(state: DashboardState, ui: dict[str, Any] | None = None) -> dict[
         "runtime_mode": mode,
         "LIVE_AI_ALLOWED": LIVE_AI_ALLOWED,
         "LIVE_PROPOSALS_ALLOWED": LIVE_PROPOSALS_ALLOWED,
-        "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
+        "LIVE_ORDER_PLACEMENT": live_execution_authority().LIVE_ORDER_PLACEMENT,
         "roles": roles,
         "providers": availability,
         "budget_mode": status.mode.value,
@@ -1972,7 +2030,7 @@ def ai_view(state: DashboardState) -> dict[str, Any]:
         "live_account_label": LIVE_ACCOUNT_LABEL,
         "active_book_label": ui["active_book_label"],
         "book_kind": ui["book_kind"],
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
         "note": "AI is advisory. Risk Gate is deterministic. Broker is the account source of truth. Cursor is the development agent; the Raspberry Pi runs this runtime.",
     }
 
@@ -2024,7 +2082,7 @@ def ai_activity_view(state: DashboardState) -> dict[str, Any]:
         "active_book_label": ui["active_book_label"],
         "paper_book_label": PAPER_BOOK_LABEL,
         "live_account_label": LIVE_ACCOUNT_LABEL,
-        "live_order_placement_enabled": live_placement_enabled(),
+        "live_order_placement_enabled": live_execution_authority().LIVE_ORDER_PLACEMENT,
         "scans": scans[-10:],
         "rows": rows,
         "proposals": proposals,

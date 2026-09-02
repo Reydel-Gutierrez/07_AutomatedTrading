@@ -8,6 +8,7 @@ from typing import Any
 
 from agentic_portfolio.journal import append_jsonl, read_jsonl
 from agentic_portfolio.paths import project_root
+from agentic_portfolio.runtime import live_placement_enabled
 
 
 ACTIVITY_KINDS = (
@@ -36,7 +37,7 @@ def activity_path(root: Path | None = None) -> Path:
 
 
 def log_activity(root: Path | None, kind: str, **fields: Any) -> None:
-    payload = {"type": kind, **fields, "placement_attempted": False, "LIVE_ORDER_PLACEMENT": False}
+    payload = {"type": kind, **fields, "placement_attempted": False, "LIVE_ORDER_PLACEMENT": live_placement_enabled()}
     payload.setdefault("logged_at", datetime.now(timezone.utc).isoformat())
     append_jsonl(payload, activity_path(root))
 

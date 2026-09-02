@@ -134,6 +134,11 @@ class ResearchStore:
             return None
         return sorted(reports, key=lambda r: r.started_at, reverse=True)[0]
 
+    def latest_valid_for_symbol(self, symbol: str) -> ResearchReport | None:
+        from agentic_portfolio.research.operational import last_valid_investment_report
+
+        return last_valid_investment_report(self.by_symbol(symbol))
+
     def all_ids(self) -> list[str]:
         return list(self._index.get("by_id") or {})
 

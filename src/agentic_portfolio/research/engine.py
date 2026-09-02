@@ -166,16 +166,22 @@ def run_research(
         report.stale_after = (now + freshness_horizon(candidate.provisional_sleeve, cfg)).isoformat()
         report = _finalize_status(report, packet)
     except ResearchValidationError as exc:
-        report.research_status = ResearchStatus.RESEARCH_INCONCLUSIVE
-        report.research_conclusion = ResearchConclusion.NEED_MORE_DATA
-        report.validation_errors = [str(exc)]
-        report.completed_at = now.isoformat()
-        report.observed_at = payload.observed_at
-        report.facts = list(packet.facts)
-        report.derived_metrics = list(packet.derived_metrics)
-        report.executive_summary = "Reasoner output failed schema validation."
-        report.recommended_next_step = "NEED_MORE_DATA"
-        apply_research_provenance(report, reasoner, raw if isinstance(raw, dict) else None)
+        _journal(
+            {
+                "type": "RESEARCH_ERROR",
+                "research_id": research_id,
+                "candidate_id": candidate.candidate_id,
+                "symbol": candidate.symbol,
+                "reason": str(exc),
+                "retry_required": True,
+                "investment_conclusion": None,
+                "research_source": report.research_source,
+                "provider": report.provider,
+                "model": report.model,
+            },
+            journal,
+            persist=persist,
+        )
         _journal(
             {
                 "type": "RESEARCH_FAILED",
@@ -366,13 +372,25 @@ def apply_research_provenance(
 
 
 def evidence_fingerprint(candidate: Candidate, *, payload: ResearchPayload | None = None, packet: ResearchEvidencePacket | None = None) -> str:
-    """Stable evidence-generation key. Unchanged evidence must not spawn a new report."""
+    """Stable evidence-generation key. Unchanged evidence must not spawn a new report.
+
+    Quote-like ticks are excluded so a same-day bid/ask change does not burn Terra.
+    Fundamental/identity fact *values* are included so a filing or quality change
+    is not treated as the same packet as a poisoned earlier run.
+    """
+    from agentic_portfolio.research.operational import QUOTE_LIKE_FACTS
+
     sources = []
-    facts: list[str] = []
+    facts: list[tuple[str, str]] = []
     observed = ""
     if packet is not None:
         sources = list(packet.sources_observed or [])
-        facts = [e.name for e in (packet.facts or [])]
+        for item in packet.facts or []:
+            name = str(item.name)
+            if name in QUOTE_LIKE_FACTS:
+                facts.append((name, ""))
+            else:
+                facts.append((name, json.dumps(item.value, sort_keys=True, default=str)[:240]))
         observed = packet.assembled_at or ""
     elif payload is not None:
         sources = list(payload.sources_observed or payload.sources_attempted or [])
@@ -383,7 +401,7 @@ def evidence_fingerprint(candidate: Candidate, *, payload: ResearchPayload | Non
             "candidate_id": candidate.candidate_id,
             "day": observed[:10],
             "sources": sorted(str(s) for s in sources),
-            "facts": sorted(str(f) for f in facts),
+            "facts": sorted(facts),
         },
         sort_keys=True,
     )

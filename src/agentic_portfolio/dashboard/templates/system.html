@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}System · Agentic Portfolio{% endblock %}
 {% block content %}
-<div class="halt-banner">AUTONOMOUS TRADING DISABLED</div>
+<div class="halt-banner">{% if view.live_order_placement_enabled %}HUMAN APPROVAL REQUIRED · LIVE ORDER PLACEMENT ON{% else %}AUTONOMOUS TRADING DISABLED{% endif %}</div>
 {% if view.live_data_unavailable %}
 <div class="halt-banner">LIVE DATA UNAVAILABLE{% if view.live_error_code %} · {{ view.live_error_code }}{% endif %}</div>
 {% endif %}
@@ -13,7 +13,7 @@
     <dt>Runtime mode</dt><dd>{{ view.agent.runtime_mode if view.agent else view.active_runtime }}</dd>
     <dt>Market / session</dt><dd>{{ (view.agent.market.phase if view.agent else None) or '—' }} · {{ (view.agent.market.reason if view.agent else '') }}</dd>
     <dt>Last successful cycle</dt><dd>{{ (view.agent.last_cycle.at if view.agent and view.agent.last_cycle else None) or '—' }}</dd>
-    <dt>Robinhood</dt><dd>{{ 'CONNECTED' if view.agent and view.agent.robinhood.connected else 'FAIL CLOSED / OFFLINE' }}</dd>
+    <dt>Robinhood</dt><dd>{{ 'CONNECTED' if view.agent and view.agent.robinhood.connected else 'FAIL CLOSED / OFFLINE' }}{% if view.agent and view.agent.robinhood.execution_mode %} · observation {{ view.agent.robinhood.observation_mode or 'READ_ONLY' }} · execution {{ view.agent.robinhood.execution_mode }}{% endif %}</dd>
     <dt>OpenAI</dt><dd>{{ view.agent.openai.state if view.agent else '—' }}</dd>
     <dt>AI monthly budget</dt><dd>{{ view.agent.ai_budget.mode if view.agent else '—' }} · ${{ '%.2f'|format((view.agent.ai_budget.spent if view.agent else 0) or 0) }} / $10</dd>
   </dl>
@@ -57,7 +57,7 @@
       <dt>auto_execution</dt><dd>{{ view.execution.auto_execution }}</dd>
       <dt>live_trade_actions_allowed</dt><dd>{{ view.execution.live_trade_actions_allowed }}</dd>
       <dt>require_human_approval</dt><dd>{{ view.execution.require_human_approval }}</dd>
-      <dt>Approved places order?</dt><dd>no</dd>
+      <dt>Approved places order?</dt><dd>{{ 'yes, after Risk Gate and human APPROVE' if view.live_order_placement_enabled else 'no' }}</dd>
     </dl>
   </article>
   <article class="card">

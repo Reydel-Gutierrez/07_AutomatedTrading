@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
@@ -17,6 +18,7 @@ from agentic_portfolio.journal import append_jsonl
 from agentic_portfolio.policy import load_agent_config, load_research_config
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode
 from agentic_portfolio.watch.store import WatchStore
+from agentic_portfolio.lifecycle import log_lifecycle
 from agentic_portfolio.watch.types import (
     ACTIVE_WATCH,
     TERMINAL_WATCH,
@@ -24,6 +26,7 @@ from agentic_portfolio.watch.types import (
     ReassessTrigger,
     WatchItem,
     WatchStatus,
+    approaching_next_session,
     parse_iso,
 )
 
@@ -77,6 +80,7 @@ class WatchEngine:
         self.cond_cfg = dict(self.config.get("conditions") or {})
         self.journal = journal
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
+        self.reconcile_research_watch_semantics()
         self.reconcile_waiting_for_open_schedules()
 
     def now(self) -> datetime:
@@ -144,17 +148,23 @@ class WatchEngine:
             existing.proposed_notional = proposed_notional
         if desired_allocation_pct is not None:
             existing.desired_allocation_pct = desired_allocation_pct
+        prior_status = existing.status
         if existing.status in {WatchStatus.REJECTED, WatchStatus.EXPIRED, WatchStatus.INVALIDATED}:
             existing.status = status
         elif existing.status == WatchStatus.DISCOVERED:
             existing.status = status
-        ttl_hours = int(self.watch_cfg.get("thesis_ttl_hours") or 168)
-        existing.expiration = existing.expiration or (stamp + timedelta(hours=ttl_hours)).isoformat()
-        make_plan = prepare_conditional_plan if prepare_conditional_plan is not None else off_hours
-        if off_hours:
+        if existing.expiration is None:
+            existing.expiration = self._expiration_iso(existing.sleeve, stamp)
+        make_plan = bool(prepare_conditional_plan)
+        want_open = (
+            status is WatchStatus.WAITING_FOR_OPEN
+            or make_plan
+            or (existing.conditional_plan is not None and off_hours)
+            or approaching_next_session(existing)
+        )
+        if want_open and (off_hours or status is WatchStatus.WAITING_FOR_OPEN or make_plan):
             existing.required_market_confirmation = True
-            existing.status = WatchStatus.WAITING_FOR_OPEN if existing.status in ACTIVE_WATCH or status in ACTIVE_WATCH else existing.status
-            if make_plan:
+            if make_plan or (off_hours and existing.proposed_notional is not None):
                 existing.conditional_plan = existing.conditional_plan or self.default_plan(
                     last_price=last_price,
                     prepared_session_id=session_id,
@@ -163,12 +173,28 @@ class WatchEngine:
                     desired_allocation_pct=existing.desired_allocation_pct,
                 )
             self._copy_sizing_onto_plan(existing)
-            self.schedule_review(existing, waiting_for_open=True, sleeve=existing.sleeve)
+            if existing.conditional_plan is not None or status is WatchStatus.WAITING_FOR_OPEN or approaching_next_session(existing):
+                if existing.status in ACTIVE_WATCH or status in ACTIVE_WATCH:
+                    existing.status = WatchStatus.WAITING_FOR_OPEN
+                self.schedule_review(existing, waiting_for_open=True, sleeve=existing.sleeve)
+            else:
+                existing.status = status
+                existing.required_market_confirmation = False
+                if status is WatchStatus.WATCH:
+                    self.schedule_review(existing, waiting_for_open=False, sleeve=existing.sleeve)
         else:
             existing.status = status
+            existing.required_market_confirmation = bool(existing.conditional_plan is not None)
             self._copy_sizing_onto_plan(existing)
             if status is WatchStatus.WATCH:
                 self.schedule_review(existing, waiting_for_open=False, sleeve=existing.sleeve)
+        if prior_status is not existing.status:
+            self._lifecycle(
+                existing,
+                from_status=prior_status.value,
+                to_status=existing.status.value,
+                reason="watch_upserted",
+            )
         hashed = context_hash(context or {"ticker": existing.ticker, "thesis": existing.research_thesis, "price": existing.last_price})
         existing.last_context_hash = hashed
         existing.last_updated = stamp.isoformat()
@@ -312,6 +338,54 @@ class WatchEngine:
             migrated.append(item)
         return migrated
 
+    def reconcile_research_watch_semantics(self) -> list[WatchItem]:
+        """KEEP_WATCHING items must not sit in WAITING_FOR_OPEN without a trade plan.
+
+        Thesis, sleeve, score, and evidence are left alone. A status correction is
+        not a Terra event and does not place an order.
+        """
+        assert_execution_disabled()
+        migrated: list[WatchItem] = []
+        for item in self.store.active():
+            if item.status is not WatchStatus.WAITING_FOR_OPEN:
+                continue
+            if approaching_next_session(item):
+                continue
+            item.required_market_confirmation = False
+            self.set_status(item, WatchStatus.WATCH, reason="research_watch_not_next_session")
+            migrated.append(item)
+        return migrated
+
+    def _expiration_iso(self, sleeve: str | None, stamp: datetime) -> str:
+        hours = float(self.watch_cfg.get("thesis_ttl_hours") or 168)
+        try:
+            from agentic_portfolio.research.freshness import freshness_horizon
+            from agentic_portfolio.schemas import Sleeve
+
+            sl = Sleeve(sleeve) if sleeve else Sleeve.CORE_GROWTH
+            hours = freshness_horizon(sl).total_seconds() / 3600.0
+        except Exception:  # noqa: BLE001
+            pass
+        return (stamp + timedelta(hours=hours)).isoformat()
+
+    def _lifecycle(self, item: WatchItem, *, from_status: str | None, to_status: str | None, reason: str) -> None:
+        root = None
+        if self.journal is not None:
+            journal_path = Path(self.journal)
+            root = journal_path.parent.parent if journal_path.parent.name == "logs" else None
+        try:
+            log_lifecycle(
+                symbol=item.ticker,
+                source="watch",
+                reason=reason,
+                from_status=from_status,
+                to_status=to_status,
+                extra={"watch_id": item.watch_id, "sleeve": item.sleeve, "status": item.status.value},
+                root=root,
+            )
+        except Exception:  # noqa: BLE001 — observability must not break the watch engine
+            pass
+
     def promote_waiting_for_open(self, *, regular_hours_open: bool) -> list[WatchItem]:
         """At the open, KEEP_WATCHING items become WATCH. Conditional buy plans stay until evaluated."""
         if not regular_hours_open:
@@ -407,6 +481,7 @@ class WatchEngine:
         return item
 
     def set_status(self, item: WatchItem, status: WatchStatus, *, reason: str | None = None) -> WatchItem:
+        prior = item.status
         item.status = status
         item.last_updated = self.now().isoformat()
         if reason:
@@ -415,13 +490,26 @@ class WatchEngine:
             self.schedule_review(item, sleeve=item.sleeve)
         else:
             self.store.save(item)
-        self._log("WATCH_STATUS", item, extra={"reason": reason})
+        self._log("WATCH_STATUS", item, extra={"reason": reason, "from_status": prior.value if prior else None})
+        if prior is not status:
+            self._lifecycle(item, from_status=prior.value if prior else None, to_status=status.value, reason=reason or "status_change")
         return item
 
-    def expire_stale(self) -> list[WatchItem]:
+    def expire_stale(self, *, fresh_until: Mapping[str, datetime] | None = None) -> list[WatchItem]:
         expired: list[WatchItem] = []
         now = self.now()
+        until_map = {str(k).upper(): v for k, v in dict(fresh_until or {}).items()}
         for item in self.store.active():
+            keep_until = until_map.get(item.ticker.upper())
+            if keep_until is not None:
+                if keep_until.tzinfo is None:
+                    keep_until = keep_until.replace(tzinfo=timezone.utc)
+                if now < keep_until:
+                    if item.expiration is None or (parse_iso(item.expiration) or now) < keep_until:
+                        item.expiration = keep_until.isoformat()
+                        item.last_updated = now.isoformat()
+                        self.store.save(item)
+                    continue
             exp = parse_iso(item.expiration)
             if exp is not None and now >= exp:
                 expired.append(self.set_status(item, WatchStatus.EXPIRED, reason="thesis_expiration"))

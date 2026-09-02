@@ -580,3 +580,101 @@ def test_earnings_calendar_cannot_crowd_out_core_liquid():
     assert "AAPL" in universe.unique_symbols or "MSFT" in universe.unique_symbols
     assert "SPY" in universe.unique_symbols or "QQQ" in universe.unique_symbols
     assert universe.unique_universe_size <= 18
+
+
+def test_placement_env_without_write_transport_cannot_display_on(monkeypatch):
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    monkeypatch.setenv("DASHBOARD_ENVIRONMENT", "LIVE")
+    monkeypatch.setenv("AGENTIC_LIVE_ORDER_PLACEMENT", "true")
+    from agentic_portfolio.dashboard.queries import execution_flags
+    from agentic_portfolio.dashboard.settings import resolve_ui_flags
+    from agentic_portfolio.live_execution.broker import write_transport_is_ready
+    from agentic_portfolio.runtime import live_execution_authority, live_placement_enabled
+
+    assert live_placement_enabled() is True
+    assert write_transport_is_ready() is False
+    auth = live_execution_authority()
+    assert auth.placement_requested is True
+    assert auth.LIVE_ORDER_PLACEMENT is False
+    assert auth.live_trade_actions_allowed is False
+    assert auth.auto_execution is False
+    assert auth.require_human_approval is True
+    assert auth.observation_mode == "READ_ONLY"
+    assert auth.execution_mode == "UNAVAILABLE"
+    flags = execution_flags()
+    assert flags["live_order_placement_enabled"] is False
+    assert flags["live_trade_actions_allowed"] is False
+    assert flags["auto_execution"] is False
+    ui = resolve_ui_flags()
+    assert ui["live_order_placement_enabled"] is False
+    assert "OFF" in ui["no_live_placement_banner"]
+
+
+def test_write_transport_bound_is_the_single_live_execution_truth(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    monkeypatch.setenv("DASHBOARD_ENVIRONMENT", "LIVE")
+    monkeypatch.setenv("AGENTIC_LIVE_ORDER_PLACEMENT", "true")
+    from agentic_portfolio.agent.heartbeat import write_health
+    from agentic_portfolio.agent.session import classify_market_phase
+    from agentic_portfolio.dashboard.queries import execution_flags
+    from agentic_portfolio.dashboard.settings import resolve_ui_flags
+    from agentic_portfolio.live_execution import bind_live_write_broker, write_transport_is_ready
+    from agentic_portfolio.runtime import live_execution_authority
+
+    def transport(tool, **kwargs):
+        del kwargs
+        return {"data": {"ok": True, "tool": tool}}
+
+    adapter = bind_live_write_broker(account_number="549688554", transport=transport)
+    assert adapter is not None
+    assert write_transport_is_ready() is True
+    auth = live_execution_authority()
+    assert auth.LIVE_ORDER_PLACEMENT is True
+    assert auth.live_trade_actions_allowed is True
+    assert auth.auto_execution is False
+    assert auth.require_human_approval is True
+    assert auth.observation_mode == "READ_ONLY"
+    assert auth.execution_mode == "LIVE_WRITE"
+    flags = execution_flags()
+    assert flags["live_trade_actions_allowed"] is True
+    assert flags["live_order_placement_enabled"] is True
+    assert flags["auto_execution"] is False
+    assert flags["require_human_approval"] is True
+    ui = resolve_ui_flags()
+    assert ui["live_order_placement_enabled"] is True
+    assert "ON" in ui["no_live_placement_banner"]
+    health = write_health(
+        tmp_path,
+        started_at=NOW.isoformat(),
+        session=classify_market_phase(NOW),
+        last_cycle=None,
+        next_jobs=[],
+        broker={"connected": True, "bound": True, "mode": "READ_ONLY"},
+        openai={"state": "READY"},
+        budget={"mode": "NORMAL", "cap": 10.0, "spent": 0.0},
+        cycles=1,
+        runtime_mode="LIVE",
+        write_transport_ready=True,
+    )
+    assert health["LIVE_ORDER_PLACEMENT"] is True
+    assert health["live_trade_actions_allowed"] is True
+    assert health["auto_execution"] is False
+    assert health["robinhood"]["mode"] == "READ_ONLY"
+    assert health["robinhood"]["observation_mode"] == "READ_ONLY"
+    assert health["robinhood"]["execution_mode"] == "LIVE_WRITE"
+    assert health["robinhood"]["LIVE_ORDER_PLACEMENT"] is True
+    broker = FakeBroker(quotes={"QUAL": QUOTE})
+    _store, _executor, engine, _ = _stack(tmp_path, broker)
+    item = engine.create(
+        ticker="QUAL",
+        proposed_action="BUY",
+        proposed_dollar_amount=25,
+        proposed_allocation_pct=5,
+        current_quote=QUOTE,
+        risk_gate_result={"verdict": "PASS"},
+        portfolio_impact={"nav": 500, "cash": 500, "buying_power": 500},
+    )
+    rejected = engine.record_decision(item.approval_id, LiveApprovalStatus.REJECTED, note="no")
+    assert rejected.status is LiveApprovalStatus.REJECTED
+    assert rejected.placed_order is False
+    assert broker.place_calls == []

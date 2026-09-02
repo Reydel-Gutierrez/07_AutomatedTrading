@@ -24,8 +24,8 @@ from agentic_portfolio.live_approval.sizing import (
     snapshot_execution_flags,
 )
 from agentic_portfolio.notify import NotificationEngine, NotificationKind
-from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, LIVE_SOURCE_OF_TRUTH, RuntimeMode, live_placement_enabled
-from agentic_portfolio.watch import ReassessTrigger, WatchEngine, WatchStatus, WatchStore, context_hash
+from agentic_portfolio.runtime import LIVE_SOURCE_OF_TRUTH, RuntimeMode, live_placement_enabled
+from agentic_portfolio.watch import ReassessTrigger, WatchEngine, WatchStatus, WatchStore, approaching_next_session, context_hash
 
 
 @dataclass
@@ -71,7 +71,7 @@ def _session(ctx: Mapping[str, Any]) -> SessionSnapshot:
 
 
 def _ok(job: str, **extra: Any) -> dict[str, Any]:
-    payload = {"job": job, "status": "OK", "placement_attempted": False, "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT}
+    payload = {"job": job, "status": "OK", "placement_attempted": False, "LIVE_ORDER_PLACEMENT": live_placement_enabled()}
     payload.update(extra)
     return payload
 
@@ -84,7 +84,7 @@ def _skipped(services: AgentServices, job: str, reason: str, **extra: Any) -> di
         "status": "SKIPPED",
         "skipped": reason,
         "placement_attempted": False,
-        "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+        "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
     }
     payload.update(extra)
     return payload
@@ -96,7 +96,7 @@ def _skipped_no_work(job: str, **extra: Any) -> dict[str, Any]:
         "status": "SKIPPED_NO_WORK",
         "skipped": extra.get("skipped") or "no_work",
         "placement_attempted": False,
-        "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+        "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
     }
     payload.update(extra)
     return payload
@@ -108,7 +108,7 @@ def _blocked(job: str, reason: str, **extra: Any) -> dict[str, Any]:
         "status": "BLOCKED",
         "skipped": reason,
         "placement_attempted": False,
-        "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+        "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
         "ai_calls": 0,
     }
     payload.update(extra)
@@ -170,7 +170,7 @@ def _research_queue(services: AgentServices, ctx: dict[str, Any]) -> dict[str, A
             "skipped": "no_ai_gateway",
             "ai_calls": 0,
             "placement_attempted": False,
-            "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
+            "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
         }
     session = ctx.get("session")
     phase = getattr(session, "phase", None)
@@ -276,7 +276,9 @@ def _expire_approvals(services: AgentServices, ctx: dict[str, Any]) -> dict[str,
 
 
 def _watch_cleanup(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
-    expired = services.watch.expire_stale()
+    worker = _pipeline_worker(services)
+    fresh_until = worker._watch_fresh_until() if hasattr(worker, "_watch_fresh_until") else {}
+    expired = services.watch.expire_stale(fresh_until=fresh_until)
     return _ok(ctx.get("job") or "WATCH_STALE_CLEANUP", expired=len(expired))
 
 
@@ -402,7 +404,8 @@ def _legacy_watch_discover(services: AgentServices, ctx: dict[str, Any], job: st
             last_price=raw.get("price") or raw.get("last_price"),
             session_id=session.latest_completed_session,
             next_session_id=session.next_session_id,
-            off_hours=session.phase is not MarketPhase.MARKET_OPEN,
+            off_hours=False,
+            prepare_conditional_plan=False,
             status=WatchStatus.DISCOVERED if not raw.get("thesis") else WatchStatus.WATCH,
             context={"ticker": ticker, "score": raw.get("score"), "thesis": raw.get("thesis")},
         )
@@ -455,27 +458,14 @@ def _session_analysis(services: AgentServices, ctx: dict[str, Any], job: str) ->
     session = _session(ctx)
     discovered = _discover(services, ctx)
     created = int(discovered.get("created") or 0)
-    for item in services.watch_store.active():
-        if item.conditional_plan is None:
-            services.watch.upsert_from_candidate(
-                ticker=item.ticker,
-                score=item.source_candidate_score,
-                thesis=item.research_thesis,
-                last_price=item.last_price,
-                session_id=session.latest_completed_session,
-                next_session_id=session.next_session_id,
-                off_hours=True,
-                status=WatchStatus.WAITING_FOR_OPEN,
-            )
-            log_activity(services.root, "THESIS_UPDATED", ticker=item.ticker, watch_id=item.watch_id)
     return _ok(job, created=created, latest_completed_session=session.latest_completed_session, executable_liquidity=False)
 
 
 def _prepare_plans(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
     session = _session(ctx)
-    items = list(services.watch_store.active())
+    items = [item for item in services.watch_store.active() if approaching_next_session(item)]
     if not items:
-        return _skipped_no_work(ctx.get("job") or "NEXT_SESSION_PLANS", prepared=0, watch_items=0, skipped="no_watch_items")
+        return _skipped_no_work(ctx.get("job") or "NEXT_SESSION_PLANS", prepared=0, watch_items=0, skipped="no_next_session_watches")
     prepared = 0
     for item in items:
         services.watch.upsert_from_candidate(
@@ -486,7 +476,11 @@ def _prepare_plans(services: AgentServices, ctx: dict[str, Any]) -> dict[str, An
             session_id=session.latest_completed_session,
             next_session_id=session.next_session_id,
             off_hours=True,
+            prepare_conditional_plan=True,
             status=WatchStatus.WAITING_FOR_OPEN,
+            sleeve=item.sleeve,
+            proposed_notional=item.proposed_notional,
+            desired_allocation_pct=item.desired_allocation_pct,
         )
         prepared += 1
     return _ok(ctx.get("job") or "NEXT_SESSION_PLANS", prepared=prepared, watch_items=len(items), executable_liquidity=False)
@@ -496,7 +490,7 @@ def _offhours_maintain(services: AgentServices, ctx: dict[str, Any], job: str) -
     extra = _pipeline_worker(services).revalidate_watches(job=job, allow_ai=False)
     extra.setdefault("executable_liquidity", False)
     extra.setdefault("placement_attempted", False)
-    extra.setdefault("LIVE_ORDER_PLACEMENT", LIVE_ORDER_PLACEMENT)
+    extra.setdefault("LIVE_ORDER_PLACEMENT", live_placement_enabled())
     return extra
 
 
@@ -581,7 +575,9 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
     nav = _current_nav(services)
     placement = live_placement_enabled()
     for item in services.watch_store.active():
-        if item.conditional_plan is None and item.status not in {WatchStatus.WAITING_FOR_OPEN, WatchStatus.READY_FOR_RISK_GATE, WatchStatus.WATCH}:
+        if not approaching_next_session(item) and item.conditional_plan is None:
+            continue
+        if item.conditional_plan is None and item.status not in {WatchStatus.WAITING_FOR_OPEN, WatchStatus.READY_FOR_RISK_GATE}:
             continue
         if not services.watch.due_for_condition_monitor(item):
             continue

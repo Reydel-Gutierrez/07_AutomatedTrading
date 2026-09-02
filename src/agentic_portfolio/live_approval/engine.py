@@ -17,7 +17,7 @@ from agentic_portfolio.live_approval.types import (
 )
 from agentic_portfolio.live_approval.sizing import snapshot_execution_flags
 from agentic_portfolio.policy import load_account_rules, load_agent_config
-from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode, live_placement_enabled
+from agentic_portfolio.runtime import RuntimeMode, live_placement_enabled
 
 
 APPROVED_HOLD = LiveApprovalStatus.APPROVED_EXECUTION_DISABLED

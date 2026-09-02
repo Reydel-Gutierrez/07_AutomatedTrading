@@ -42,11 +42,13 @@ class ResearchTruncationProvider:
         screen: dict | None = None,
         fail_times: int = 0,
         other_malformed: str | None = None,
+        schema_fail_first: bool = False,
     ) -> None:
         self.report = report
         self.screen = screen or {**SCREEN, "ticker": report.get("ticker") or "CVX"}
         self.fail_times = fail_times
         self.other_malformed = other_malformed
+        self.schema_fail_first = schema_fail_first
         self.calls: list = []
         self.research_attempts = 0
 
@@ -61,9 +63,12 @@ class ResearchTruncationProvider:
             self.research_attempts += 1
             if self.other_malformed and self.research_attempts == 1:
                 raise MalformedResponse(self.other_malformed)
-            if self.research_attempts <= self.fail_times:
+            if self.schema_fail_first and self.research_attempts == 1:
+                payload = {**self.report, "bull_case": None, "base_case": None, "bear_case": None}
+            elif self.research_attempts <= self.fail_times:
                 raise MalformedResponse("OpenAI response incomplete (max_output_tokens)")
-            payload = self.report
+            else:
+                payload = self.report
         else:
             raise KeyError(f"unexpected schema {request.schema_name}")
         return ProviderResponse(
@@ -124,7 +129,7 @@ def test_research_reasoner_instructions_require_concise_output():
     assert "TEMPORARY_PRICE_DISLOCATION" in text
     assert "invalidation" in text.lower()
     assert CONCISE_RETRY_INSTRUCTION
-    assert "incomplete (max_output_tokens)" in CONCISE_RETRY_INSTRUCTION
+    assert "schema validation" in CONCISE_RETRY_INSTRUCTION.lower() or "incomplete" in CONCISE_RETRY_INSTRUCTION.lower()
 
 
 def test_research_token_ceiling_and_budget_cap_unchanged():
@@ -171,6 +176,19 @@ def test_second_incomplete_fails_closed_without_third_call(tmp_path):
         reasoner.reason(_request())
     assert provider.research_attempts == 2
     assert reasoner.last_result is None
+
+
+def test_schema_invalid_keep_watching_retries_once(tmp_path):
+    provider = ResearchTruncationProvider(
+        report=_ai("NVDA", conclusion="KEEP_WATCHING"),
+        schema_fail_first=True,
+    )
+    reasoner = GatewayResearchReasoner(_gw(tmp_path, provider))
+    payload = reasoner.reason(_request())
+    assert provider.research_attempts == 2
+    assert payload["research_conclusion"] == "KEEP_WATCHING"
+    assert payload.get("bull_case")
+    assert reasoner.truncation_retry_used is True
 
 
 def test_other_malformed_response_does_not_retry(tmp_path):

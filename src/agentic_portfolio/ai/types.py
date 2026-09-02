@@ -98,6 +98,7 @@ class ScreeningResult:
     screening_id: str | None = None
     runtime_mode: str = RuntimeMode.PAPER.value
     rejection_reason: str | None = None
+    operational_failure: bool = False
 
 
 @dataclass
@@ -119,6 +120,7 @@ class DeepResearchResult:
     research_id: str | None = None
     runtime_mode: str = RuntimeMode.PAPER.value
     rejection_reason: str | None = None
+    operational_failure: bool = False
 
 
 @dataclass
@@ -138,6 +140,7 @@ class PortfolioDecisionResult:
     decision_id: str | None = None
     runtime_mode: str = RuntimeMode.PAPER.value
     rejection_reason: str | None = None
+    operational_failure: bool = False
 
 
 @dataclass

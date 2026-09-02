@@ -11,7 +11,7 @@ from agentic_portfolio.agent.persist import atomic_write_json, read_json
 from agentic_portfolio.agent.session import SessionSnapshot
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.policy import load_agent_config
-from agentic_portfolio.runtime import live_placement_enabled
+from agentic_portfolio.runtime import live_execution_authority
 
 
 def health_path(root: Path | None = None, *, config: dict[str, Any] | None = None) -> Path:
@@ -60,12 +60,19 @@ def write_health(
     config: dict[str, Any] | None = None,
     live_error: dict[str, Any] | None = None,
     job_skips: list[dict[str, Any]] | None = None,
+    write_transport_ready: bool | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
     uptime = max(0, int((now - started).total_seconds()))
+    auth = live_execution_authority(write_transport_ready=write_transport_ready)
+    robinhood = dict(broker or {})
+    robinhood["mode"] = auth.observation_mode
+    robinhood["observation_mode"] = auth.observation_mode
+    robinhood["execution_mode"] = auth.execution_mode
+    robinhood["LIVE_ORDER_PLACEMENT"] = auth.LIVE_ORDER_PLACEMENT
     payload = {
         "agent": "ONLINE",
         "alive": True,
@@ -77,13 +84,18 @@ def write_health(
         "market": session.to_dict(),
         "last_cycle": last_cycle,
         "next_jobs": next_jobs,
-        "robinhood": broker,
+        "robinhood": robinhood,
         "openai": openai,
         "ai_budget": budget,
         "cycles": cycles,
-        "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
+        "LIVE_ORDER_PLACEMENT": auth.LIVE_ORDER_PLACEMENT,
         "auto_execution": False,
-        "live_trade_actions_allowed": False,
+        "live_trade_actions_allowed": auth.live_trade_actions_allowed,
+        "require_human_approval": True,
+        "execution_mode": auth.execution_mode,
+        "observation_mode": auth.observation_mode,
+        "placement_requested": auth.placement_requested,
+        "write_transport_ready": auth.write_transport_ready,
         "live_error": live_error,
         "job_skips": list(job_skips or []),
     }

@@ -31,7 +31,7 @@ Hard rules:
 - CASH is a valid alternative. Unused sleeve capacity is not a mandate to buy.
 - action must be REJECT, WATCH, BUY_CANDIDATE, HOLD, REDUCE, or EXIT.
 - BUY_CANDIDATE is a candidate for Risk Gate, not an order.
-- For a $500 account keep sizes tiny. Prefer WATCH/REJECT when unsure.
+- Prefer WATCH/REJECT when evidence is thin. Do not invent a size just because cash exists.
 """
 
 
@@ -49,6 +49,7 @@ def _blocked(ctx: AIContext, reason: str) -> PortfolioDecisionResult:
         decision_id=str(uuid4()),
         runtime_mode=ctx.runtime_mode,
         rejection_reason=reason,
+        operational_failure=True,
     )
 
 
@@ -98,7 +99,7 @@ def decide_candidate(
     if row.ticker != ctx.ticker:
         row.ticker = ctx.ticker
         row.rejection_reason = "ticker_mismatch_overlaid"
-    if persist is not None:
+    if persist is not None and not row.operational_failure:
         persist.save_decision(
             row.decision_id,
             {**row.__dict__, "created_at": stamp.isoformat(), "research_id": research.research_id},

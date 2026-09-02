@@ -113,6 +113,7 @@
     "require_broker_facts": true,
     "skip_ai_when_budget_exhausted": true,
     "continue_without_ai": true,
+    "screening_ttl_hours": 48,
     "fact_freshness": {
       "quote_seconds": 3600,
       "quote_market_hours_seconds": 900,
