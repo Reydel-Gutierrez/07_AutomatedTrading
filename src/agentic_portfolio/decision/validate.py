@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agentic_portfolio.decision.compact import expand_compact_committee_payload, is_compact_committee_payload
 from agentic_portfolio.decision.types import CASH_SYMBOL, RISK_UP, SPY_SYMBOL
 from agentic_portfolio.research.sufficiency import is_etf_class
 from agentic_portfolio.research.types import ResearchConclusion, ResearchReport, ResearchStatus
@@ -83,6 +84,11 @@ def validate_payload(
 ) -> tuple[dict[str, Any], list[str], list[str]]:
     if not isinstance(payload, dict):
         raise DecisionValidationError("AI output is not an object")
+    if is_compact_committee_payload(payload):
+        try:
+            payload = expand_compact_committee_payload(payload)
+        except (TypeError, ValueError) as exc:
+            raise DecisionValidationError(f"malformed compact committee payload: {exc}") from exc
     missing = [k for k in ("decisions", "comparison") if k not in payload]
     if missing:
         raise DecisionValidationError(f"malformed AI response missing keys: {missing}")

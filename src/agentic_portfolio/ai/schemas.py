@@ -255,12 +255,104 @@ THESIS_DECISION_SCHEMA = _object(
     ["decisions", "comparison"],
 )
 
+_COMMITTEE_RANKING = _object(
+    {
+        "symbol": {"type": "string"},
+        "rank": {"type": "number"},
+        "action": {"type": "string"},
+        "score": {"type": ["number", "null"]},
+        "confidence": {"type": "string", "enum": _CONF},
+        "concise_reason": {"type": "string"},
+        "why_lost": {"type": ["string", "null"]},
+        "lost_to": {"type": "array", "items": {"type": "string"}},
+        "valuation_condition": {"type": ["string", "null"]},
+        "thesis_condition": {"type": ["string", "null"]},
+        "required_evidence_improvement": {"type": ["string", "null"]},
+        "next_review_reason": {"type": ["string", "null"]},
+        "next_review_at": {"type": ["string", "null"]},
+    },
+    ["symbol", "rank", "action", "concise_reason"],
+)
+
+_COMMITTEE_SELECTED = _object(
+    {
+        "symbol": {"type": "string"},
+        "action": {"type": "string"},
+        "target_weight": {"type": ["number", "null"]},
+        "starter_position": {"type": ["boolean", "null"]},
+        "rationale": {"type": "string"},
+        "why_vs_cash": {"type": "string"},
+        "why_vs_spy": {"type": ["string", "null"]},
+        "why_vs_alternatives": {"type": "string"},
+        "research_id": {"type": ["string", "null"]},
+        "sleeve": {"type": ["string", "null"]},
+        "thesis_summary": {"type": "string"},
+        "bull_case": {"type": "string"},
+        "base_case": {"type": "string"},
+        "bear_case": {"type": "string"},
+        "catalysts": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "thesis_drivers": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "risks": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "horizon": {"type": "string"},
+        "invalidation_conditions": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "review_triggers": {"type": "array", "items": {"type": "string"}, "maxItems": 5},
+        "why_position_should_exist": {"type": "string"},
+        "confidence": {"type": "string", "enum": _CONF},
+        "exit_policy": _EXIT,
+    },
+    [
+        "symbol",
+        "action",
+        "target_weight",
+        "rationale",
+        "why_vs_cash",
+        "why_vs_alternatives",
+        "thesis_summary",
+        "bull_case",
+        "base_case",
+        "bear_case",
+        "risks",
+        "horizon",
+        "invalidation_conditions",
+        "review_triggers",
+        "why_position_should_exist",
+        "confidence",
+        "exit_policy",
+    ],
+)
+
+COMMITTEE_DECISION_SCHEMA = _object(
+    {
+        "portfolio_action": {"type": "string", "enum": ["ALLOCATE", "HOLD_CASH"]},
+        "rankings": {"type": "array", "items": _COMMITTEE_RANKING, "maxItems": 24},
+        "selected_allocations": {"type": "array", "items": _COMMITTEE_SELECTED, "maxItems": 4},
+        "cash": _object(
+            {
+                "target_weight": {"type": ["number", "null"]},
+                "rationale": {"type": "string"},
+                "action": {"type": ["string", "null"]},
+            },
+            ["rationale"],
+        ),
+        "comparison": _object(
+            {
+                "vs_cash": {"type": "string"},
+                "vs_spy": {"type": "string"},
+                "notes": {"type": ["string", "null"]},
+            },
+            ["vs_cash", "vs_spy"],
+        ),
+    },
+    ["portfolio_action", "rankings", "selected_allocations", "cash", "comparison"],
+)
+
 SCHEMAS = {
     "screening": SCREENING_SCHEMA,
     "deep_research": DEEP_RESEARCH_SCHEMA,
     "portfolio_decision": PORTFOLIO_DECISION_SCHEMA,
     "research_report": RESEARCH_REPORT_SCHEMA,
     "thesis_decision": THESIS_DECISION_SCHEMA,
+    "committee_decision": COMMITTEE_DECISION_SCHEMA,
 }
 
 

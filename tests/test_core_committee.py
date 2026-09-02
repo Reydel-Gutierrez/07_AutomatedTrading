@@ -572,3 +572,15 @@ def test_committee_observability_events(tmp_path):
     assert "CORE_COMMITTEE_NO_ACTION" in kinds
     activity = {row.get("type") for row in read_activity(tmp_path, limit=50)}
     assert "CORE_COMMITTEE_STARTED" in activity
+
+
+def test_committee_instructions_stay_multi_name_and_compact():
+    from agentic_portfolio.decision.reasoner import COMMITTEE_REASONER_INSTRUCTIONS, REASONER_INSTRUCTIONS
+
+    text = COMMITTEE_REASONER_INSTRUCTIONS
+    assert "several qualified CORE alternatives" in text
+    assert "selected_allocations" in text
+    assert "rankings" in text
+    assert "Do not independently mint several correlated starter BUYs" in text
+    assert REASONER_INSTRUCTIONS not in text or "Return JSON only:" in text
+    assert "Every ADVANCE_TO_THESIS researched symbol in this packet still needs exactly one decisions[] row" not in text

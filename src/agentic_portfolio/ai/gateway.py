@@ -91,6 +91,7 @@ class AIGateway:
         allow_fallback: bool = True,
         estimated_input_tokens: int | None = None,
         estimated_output_tokens: int | None = None,
+        max_output_tokens: int | None = None,
     ) -> GatewayResult:
         role_name = role.value if isinstance(role, ModelRole) else str(role)
         spec = role_spec(self.config, role_name)
@@ -101,7 +102,9 @@ class AIGateway:
         provider_name, model = self._route(role_name, spec, status.mode, allow_fallback=allow_fallback, critical=critical)
         prompt_text = "\n".join(m.get("content") or "" for m in messages)
         in_tok = estimated_input_tokens if estimated_input_tokens is not None else estimate_tokens(prompt_text)
-        out_tok = estimated_output_tokens if estimated_output_tokens is not None else int(spec.get("default_max_output_tokens") or 400)
+        role_max = int(spec.get("default_max_output_tokens") or 800)
+        request_max = int(max_output_tokens) if max_output_tokens is not None else role_max
+        out_tok = estimated_output_tokens if estimated_output_tokens is not None else request_max
         estimated = estimate_cost(model=model, input_tokens=in_tok, output_tokens=out_tok, config=self.config)
         fingerprint = _fingerprint(role_name, schema_name, ticker, messages)
         cached = self.seen.get(fingerprint)
@@ -122,7 +125,7 @@ class AIGateway:
             messages=messages,
             schema_name=schema_name,
             schema=schema_body,
-            max_output_tokens=int(spec.get("default_max_output_tokens") or 800),
+            max_output_tokens=request_max,
             timeout_seconds=float(((self.config.get("providers") or {}).get(provider_name) or {}).get("timeout_seconds") or 90),
             purpose=purpose,
             ticker=ticker,

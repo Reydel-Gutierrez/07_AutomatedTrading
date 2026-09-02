@@ -52,6 +52,7 @@ COMMITTEE_EVENTS = (
     "CORE_COMMITTEE_BLOCKED_BY_RISK",
     "CORE_COMMITTEE_SKIPPED_UNCHANGED",
     "CORE_COMMITTEE_REEVALUATION",
+    "CORE_COMMITTEE_OUTPUT_TRUNCATED_RETRY",
 )
 
 
@@ -639,14 +640,39 @@ def run_core_committee(
     except DecisionValidationError as exc:
         result.status = "DEGRADED"
         result.reason = str(exc)
-        result.ai_calls = 1
+        result.ai_calls = int(getattr(reasoner, "call_count", 1) or 1)
         result.ai_stages_called = ["portfolio_decision"]
         result.ai_role, result.ai_model = _committee_meta(reasoner)
+        if getattr(reasoner, "truncation_retry_used", False):
+            _event(
+                root,
+                "CORE_COMMITTEE_OUTPUT_TRUNCATED_RETRY",
+                persist=persist,
+                journal=journal,
+                reason=str(exc),
+                retried=True,
+                succeeded=False,
+                ai_calls=result.ai_calls,
+                candidate_symbols=result.eligible_symbols,
+            )
         return result
 
-    result.ai_calls = 1
+    result.ai_calls = int(getattr(reasoner, "call_count", 1) or 1)
     result.ai_stages_called = ["portfolio_decision"]
     result.ai_role, result.ai_model = _committee_meta(reasoner)
+    if getattr(reasoner, "truncation_retry_used", False):
+        failed = bool(decided.validation_errors)
+        _event(
+            root,
+            "CORE_COMMITTEE_OUTPUT_TRUNCATED_RETRY",
+            persist=persist,
+            journal=journal,
+            reason="; ".join(str(item) for item in decided.validation_errors) if failed else "max_output_tokens",
+            retried=True,
+            succeeded=not failed,
+            ai_calls=result.ai_calls,
+            candidate_symbols=result.eligible_symbols,
+        )
     result.batch_id = decided.batch_id
     if decided.validation_errors:
         result.status = "DEGRADED"

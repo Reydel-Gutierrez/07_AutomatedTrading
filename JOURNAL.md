@@ -511,6 +511,18 @@ Committed defaults unchanged: `auto_execution=false`, `require_human_approval=tr
 
 ---
 
+## 2026-09-02 — CORE committee compact output + bounded truncation retry
+
+**Type:** `decision` / `config_change`
+
+LIVE CORE committee constructed a 9-name packet (ANET, BAC, CRM, LLY, MA, MSFT, SOFI, SPGI, SYK plus CASH/SPY) but `portfolio_decision` on `gpt-5.6-terra` hit `max_output_tokens` at the research-role 4000 ceiling. Root cause: one committee call still required a full thesis/decision object for every candidate, and reasoning tokens share that ceiling. Incomplete JSON is not a decision. Fix: keep one multi-name committee call and the $10/month cap; emit compact rankings for WATCH/REJECT names and full thesis material only for selected BUY/ADD; raise committee-only output to 8000 with one budget-gated retry at 12000; fail closed on a second incomplete. Screening/research/singleton thesis_decision stay on role defaults. Does not change BUY thresholds, Risk Gate, human approval, `never_force_deployment`, or auto_execution.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Committed defaults unchanged: `auto_execution=false`, `require_human_approval=true`, `LIVE_ORDER_PLACEMENT=false`.
+
+---
+
 ## Template
 
 ```

@@ -35,3 +35,13 @@ def monthly_cap(config: dict[str, Any] | None = None) -> Decimal:
 def pipeline_limits(config: dict[str, Any] | None = None) -> dict[str, Any]:
     cfg = config or load_ai_config()
     return dict(cfg.get("pipeline") or {})
+
+
+def committee_output_token_limits(config: dict[str, Any] | None = None) -> tuple[int, int]:
+    """Committee-only output ceilings. Research/screening/singleton decision stay on role defaults."""
+    limits = pipeline_limits(config)
+    first = int(limits.get("committee_max_output_tokens") or 8000)
+    retry = int(limits.get("committee_retry_max_output_tokens") or 12000)
+    if retry < first:
+        retry = first
+    return first, retry
