@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from agentic_portfolio.decision.engine import run_portfolio_decision, run_thesis_and_decision
+from agentic_portfolio.decision.engine import build_packet, run_portfolio_decision, run_thesis_and_decision
 from agentic_portfolio.decision.reasoner import ScriptedDecisionReasoner
 from agentic_portfolio.decision.safety import (
     DECISION_FORBIDDEN_TOOLS,
@@ -12,6 +12,8 @@ from agentic_portfolio.decision.safety import (
     inspect_decision_module_for_forbidden_tools,
 )
 from agentic_portfolio.decision.store import DecisionStore
+from agentic_portfolio.policy import load_decision_config
+from agentic_portfolio.research.packet import freeze_portfolio
 from agentic_portfolio.research.store import ResearchStore
 from agentic_portfolio.research.types import (
     EvidenceItem,
@@ -29,6 +31,7 @@ from agentic_portfolio.schemas import (
     SecurityClass,
     Sleeve,
     SleeveAssignmentStatus,
+    SpyBenchmark,
     ThesisStatus,
 )
 from agentic_portfolio.sleeve_registry import SleeveRegistry
@@ -481,6 +484,12 @@ def test_cash_opportunity_cost_is_in_packet():
     cash_alt = packet.policy_context.get("cash_alternative") or {}
     assert cash_alt.get("may_win") is True
     assert cash_alt.get("not_a_free_no_risk_default") is True
+    assert cash_alt.get("current_yield") == pytest.approx(0.04)
+    assert cash_alt.get("yield_known") is True
+    assert cash_alt.get("yield_source") == "configured_risk_free_proxy"
+    assert cash_alt.get("yield_as_of") == "2026-09-02"
+    assert cash_alt.get("yield_status") == "known"
+    assert cash_alt.get("yield_unit") == "annualized_decimal"
     assert packet.policy_context.get("never_force_deployment") is True
     starter = packet.policy_context.get("starter_position") or {}
     assert starter.get("allowed") is True
@@ -590,4 +599,142 @@ def test_committee_flag_compares_multiple_core_names():
     assert ma.reconsideration is not None
     assert ma.reconsideration["not_an_auto_execution_condition"] is True
     assert "MSFT" in ma.reconsideration["lost_to"]
+
+
+def test_spy_live_snapshot_survives_freeze_portfolio():
+    context = ctx(10_000, spy=SpyBenchmark(price=640.12, period_return=0.0042))
+    frozen = freeze_portfolio(context)
+    assert frozen.spy is not None
+    assert frozen.spy["symbol"] == "SPY"
+    assert frozen.spy["price"] == pytest.approx(640.12)
+    assert frozen.spy["period_return"] == pytest.approx(0.0042)
+
+
+def test_unavailable_cash_yield_is_explicitly_unknown():
+    packet = build_packet(
+        [_report()],
+        ctx(10_000),
+        None,
+        load_decision_config(),
+        now=NOW,
+        policy={"cash": {"consider_cash_yield_and_opportunity_cost": True, "never_force_deployment": True}},
+    )
+    cash_alt = packet.policy_context["cash_alternative"]
+    assert cash_alt["current_yield"] is None
+    assert cash_alt["yield_known"] is False
+    assert cash_alt["yield_source"] is None
+    assert cash_alt["yield_as_of"] is None
+    assert cash_alt["yield_status"] == "unavailable"
+    assert packet.policy_context["never_force_deployment"] is True
+
+
+def test_stale_cash_yield_is_present_but_not_known():
+    packet = build_packet(
+        [_report()],
+        ctx(10_000),
+        None,
+        load_decision_config(),
+        now=NOW,
+        policy={
+            "cash": {
+                "current_yield": 0.051,
+                "yield_source": "configured_risk_free_proxy",
+                "yield_as_of": "2025-01-01",
+                "yield_max_age_days": 30,
+                "never_force_deployment": True,
+            }
+        },
+    )
+    cash_alt = packet.policy_context["cash_alternative"]
+    assert cash_alt["current_yield"] == pytest.approx(0.051)
+    assert cash_alt["yield_known"] is False
+    assert cash_alt["yield_source"] == "configured_risk_free_proxy"
+    assert cash_alt["yield_as_of"] == "2025-01-01"
+    assert cash_alt["yield_status"] == "stale"
+
+
+def test_spy_snapshot_reaches_packet_from_live_quote():
+    context = ctx(10_000, spy=SpyBenchmark(price=640.12, period_return=0.0042))
+    packet = build_packet([_report("MSFT")], context, None, load_decision_config(), now=NOW, committee=True)
+    residual = packet.policy_context["broad_market_residual"]
+    assert packet.policy_context["spy_included"] is True
+    assert residual is packet.policy_context["spy_alternative"]
+    assert residual["symbol"] == "SPY"
+    assert residual["current_price"] == pytest.approx(640.12)
+    assert residual["return_1d"] == pytest.approx(0.0042)
+    assert residual["return_21d"] is None
+    assert residual["usable_for_comparison"] is True
+    assert residual["comparison_only"] is True
+    assert residual["insufficient_for_purchase"] is True
+    assert residual["does_not_authorize_buy"] is True
+    assert packet.portfolio_facts.spy["price"] == pytest.approx(640.12)
+    assert "SPY" not in {r["symbol"] for r in packet.reports}
+
+
+def test_operational_spy_report_enriches_snapshot_without_entering_packet_reports():
+    spy_report = _report(
+        "SPY",
+        sc=SecurityClass.BROAD_MARKET_INDEX_ETF,
+        sector="UNKNOWN",
+        conclusion=ResearchConclusion.NEED_MORE_DATA,
+        price=639.0,
+    )
+    spy_report.research_status = ResearchStatus.RESEARCH_INCONCLUSIVE
+    spy_report.missing_information = ["financials.revenue"]
+    spy_report.sources_unavailable = ["get_financials"]
+    spy_report.facts = [_fact("market_price", 639.0), _fact("fund_pe_ratio", 26.2)]
+    spy_report.derived_metrics = [
+        _fact("return_21d", 0.021),
+        _fact("sma_alignment", "up"),
+    ]
+    packet = build_packet(
+        [_report("MSFT")],
+        ctx(10_000, spy=SpyBenchmark(price=640.12, period_return=0.0042)),
+        None,
+        load_decision_config(),
+        now=NOW,
+        committee=True,
+        market_evidence_reports=[spy_report],
+    )
+    assert "SPY" not in {r["symbol"] for r in packet.reports}
+    residual = packet.policy_context["broad_market_residual"]
+    assert residual["current_price"] == pytest.approx(640.12)
+    assert residual["return_1d"] == pytest.approx(0.0042)
+    assert residual["return_21d"] == pytest.approx(0.021)
+    assert residual["trend"] == "up"
+    assert residual["fund_pe"] == pytest.approx(26.2)
+    assert residual["usable_for_comparison"] is True
+    assert residual["does_not_authorize_buy"] is True
+
+
+def test_spy_buy_without_research_report_is_rejected():
+    payload = _payload("SPY", decision="BUY", alloc=8.0)
+    payload["comparison"]["ranking"] = ["SPY", "CASH", "MSFT"]
+    payload["comparison"]["vs_spy"] = "Snapshot is not a purchase ticket."
+    payload["decisions"][0]["why_preferable_to_spy"] = ""
+    payload["theses"][0]["catalysts"] = []
+    payload["theses"][0]["thesis_drivers"] = ["diversified market exposure"]
+    payload["decisions"].append(
+        {
+            "symbol": "MSFT",
+            "decision": "WATCH",
+            "desired_allocation_pct": 0,
+            "rationale": "Not selected.",
+            "reconsideration": {
+                "why_lost": "Cash retained.",
+                "lost_to": ["CASH"],
+                "valuation_condition": "n/a",
+                "thesis_condition": "n/a",
+                "required_evidence_improvement": "n/a",
+                "next_review_reason": "committee_residual",
+                "next_review_at": "2026-09-09T16:00:00+00:00",
+            },
+        }
+    )
+    out = _run(reports=[_report("MSFT")], payload=payload, nav=10_000)
+    assert out.gated_actions == []
+    joined = " ".join(out.validation_errors)
+    assert "buy_add_requires_research:SPY" in joined
+    assert out.execution_attempted is False
+
 

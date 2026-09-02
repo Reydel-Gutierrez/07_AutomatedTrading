@@ -115,6 +115,13 @@ class ResearchPayload:
 
 
 def freeze_portfolio(context: PortfolioContext) -> FrozenPortfolioFacts:
+    spy_payload = None
+    if context.spy is not None:
+        spy_payload = to_dict(context.spy)
+        if isinstance(spy_payload, dict):
+            spy_payload["symbol"] = "SPY"
+        else:
+            spy_payload = {"symbol": "SPY"}
     return FrozenPortfolioFacts(
         current_nav=context.current_nav,
         cash=context.cash,
@@ -129,6 +136,7 @@ def freeze_portfolio(context: PortfolioContext) -> FrozenPortfolioFacts:
         current_drawdown=context.current_drawdown,
         daily_risk_halt=bool(context.daily_risk_halt),
         existing_thesis_ids=[p.thesis_id for p in context.positions if p.thesis_id],
+        spy=spy_payload,
     )
 
 

@@ -137,6 +137,7 @@ class FrozenPortfolioFacts:
     current_drawdown: float | None = None
     daily_risk_halt: bool = False
     existing_thesis_ids: list[str] = field(default_factory=list)
+    spy: dict[str, Any] | None = None
 
 
 @dataclass

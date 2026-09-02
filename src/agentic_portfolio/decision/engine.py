@@ -12,6 +12,7 @@ from typing import Any
 from uuid import uuid4
 
 from agentic_portfolio.decision.reasoner import COMMITTEE_REASONER_INSTRUCTIONS, REASONER_INSTRUCTIONS, DecisionReasoner
+from agentic_portfolio.decision.residuals import build_broad_market_residual, resolve_cash_yield, spy_snapshot_usable
 from agentic_portfolio.decision.safety import assert_draft, assert_no_forbidden_tools
 from agentic_portfolio.decision.store import DecisionStore
 from agentic_portfolio.decision.types import (
@@ -76,6 +77,8 @@ def run_portfolio_decision(
     config: dict | None = None,
     journal: Path | None = None,
     committee: bool = False,
+    policy: dict | None = None,
+    market_evidence_reports: list[ResearchReport] | None = None,
 ) -> DecisionResult:
     """Form DRAFT theses, decide, convert to ProposedAction, send to Risk Gate."""
     if not reports:
@@ -87,7 +90,16 @@ def run_portfolio_decision(
     theses = theses or (ThesisRegistry() if persist else None)
     sleeves = sleeves or (SleeveRegistry() if persist else None)
 
-    packet = build_packet(reports, context, theses, cfg, now=now, committee=committee)
+    packet = build_packet(
+        reports,
+        context,
+        theses,
+        cfg,
+        now=now,
+        committee=committee,
+        policy=policy,
+        market_evidence_reports=market_evidence_reports,
+    )
     request = DecisionReasoningRequest(
         packet=to_dict(packet),
         reports=list(packet.reports),
@@ -185,6 +197,16 @@ def run_portfolio_decision(
     return result
 
 
+def _spy_evidence_report(
+    reports: list[ResearchReport],
+    extra: list[ResearchReport] | None,
+) -> ResearchReport | None:
+    candidates = [r for r in list(reports) + list(extra or []) if str(r.symbol or "").upper() == SPY_SYMBOL]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda r: r.started_at or "", reverse=True)[0]
+
+
 def build_packet(
     reports: list[ResearchReport],
     context: PortfolioContext,
@@ -193,9 +215,11 @@ def build_packet(
     *,
     now: datetime | None = None,
     committee: bool = False,
+    policy: dict | None = None,
+    market_evidence_reports: list[ResearchReport] | None = None,
 ) -> DecisionPacket:
     now = now or datetime.now(timezone.utc)
-    policy = load_policy()
+    pol = policy if policy is not None else load_policy()
     alternatives = list(config.get("alternatives") or [CASH_SYMBOL, SPY_SYMBOL])
     for report in reports:
         if report.symbol.upper() not in alternatives:
@@ -205,17 +229,21 @@ def build_packet(
     if SPY_SYMBOL not in alternatives:
         alternatives.insert(1, SPY_SYMBOL)
     existing = [to_dict(t) for t in theses.all_records()] if theses is not None else []
-    cash_pol = dict(policy.get("cash") or {})
-    cash_yield = getattr(context, "cash_yield", None)
-    if cash_yield is None:
-        cash_yield = cash_pol.get("current_yield")
+    cash_pol = dict(pol.get("cash") or {})
+    cash_alt = resolve_cash_yield(cash_pol, now=now, context=context)
+    residual = build_broad_market_residual(
+        context,
+        spy_report=_spy_evidence_report(reports, market_evidence_reports),
+        now=now,
+    )
+    spy_included = spy_snapshot_usable(residual)
     core_alloc = (context.sleeve_allocation_pct or {}).get("CORE_GROWTH")
     return DecisionPacket(
         packet_id=str(uuid4()),
         assembled_at=now.isoformat(),
         reports=[_report_brief(r) for r in reports],
         portfolio_facts=freeze_portfolio(context),
-        risk_limits=freeze_risk_limits(policy),
+        risk_limits=freeze_risk_limits(pol),
         existing_theses=existing,
         existing_holdings=[to_dict(p) for p in context.positions],
         alternatives=alternatives,
@@ -223,6 +251,7 @@ def build_packet(
         policy_context={
             "cash_is_valid_alternative": True,
             "spy_is_valid_alternative": True,
+            "spy_included": spy_included,
             "no_action_always_valid": True,
             "unused_sleeve_capacity_is_not_a_mandate": True,
             "never_force_deployment": bool(cash_pol.get("never_force_deployment", True)),
@@ -235,12 +264,18 @@ def build_packet(
                 "never_force_deployment": True,
                 "not_a_free_no_risk_default": True,
                 "may_win": True,
-                "current_yield": cash_yield,
-                "yield_known": cash_yield is not None,
+                "current_yield": cash_alt["current_yield"],
+                "yield_known": cash_alt["yield_known"],
+                "yield_source": cash_alt["yield_source"],
+                "yield_as_of": cash_alt["yield_as_of"],
+                "yield_status": cash_alt["yield_status"],
+                "yield_unit": cash_alt["yield_unit"],
                 "optionality": True,
                 "inflation_and_opportunity_cost": True,
                 "evaluate_expected_return_foregone": True,
             },
+            "broad_market_residual": residual,
+            "spy_alternative": residual,
             "starter_position": {
                 "allowed": True,
                 "not_mandatory": True,
@@ -250,8 +285,8 @@ def build_packet(
             },
             "committee": committee,
             "residual_allocation_question": committee,
-            "concentration": policy.get("concentration"),
-            "sleeves": {k: {"target_percent_of_nav": v.get("target_percent_of_nav")} for k, v in (policy.get("sleeves") or {}).items()},
+            "concentration": pol.get("concentration"),
+            "sleeves": {k: {"target_percent_of_nav": v.get("target_percent_of_nav")} for k, v in (pol.get("sleeves") or {}).items()},
             "core_allocation_pct": core_alloc,
             "sector_exposure": dict(context.sector_allocation_pct or {}),
             "risk_state": context.risk_state.value if context.risk_state else None,

@@ -121,6 +121,8 @@ Hard rules:
 - Broad-market ETFs/index funds are vehicles for diversified market exposure. Do not invent company-style catalysts or 10-K/earnings theses for them.
 - Do not require SPY (or the same broad-market residual) to explain why it is preferable to SPY. Compare SPY to cash and to individual names.
 - Cash has yield (if known), optionality, inflation/opportunity cost, and expected return foregone. It is not a free/no-risk default winner. Cash may still win.
+- Use policy_context.cash_alternative.current_yield only when yield_known is true. If yield_known is false (unavailable or stale), treat the cash rate as unknown; do not invent a yield. Unknown yield is not a reason to abort the committee.
+- SPY comparison evidence is policy_context.broad_market_residual / spy_alternative (and portfolio_facts.spy). Missing optional fields are unknown, not zero. That snapshot is for comparison only. BUY/ADD SPY still requires a valid ADVANCE_TO_THESIS research report and thesis. Do not buy SPY from the snapshot alone.
 
 Exit policy (no broker stop orders) applies only to selected BUY/ADD names:
 - CORE_GROWTH: thesis-based; mandatory_fixed_stop_loss must be false.

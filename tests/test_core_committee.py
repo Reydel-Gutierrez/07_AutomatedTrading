@@ -5,12 +5,14 @@ Does not force BUYs. Does not bypass Risk Gate, human approval, or live executio
 
 from __future__ import annotations
 
+from decimal import Decimal
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 from agentic_portfolio.agent.activity import read_activity
+from agentic_portfolio.ai.config import monthly_cap
 from agentic_portfolio.decision.committee import (
     collect_committee_input,
     reevaluate_live_core_committee,
@@ -21,14 +23,14 @@ from agentic_portfolio.discovery.store import CandidateStore
 from agentic_portfolio.journal import read_jsonl
 from agentic_portfolio.live_approval import LiveApprovalStatus
 from agentic_portfolio.research.store import ResearchStore
-from agentic_portfolio.research.types import ResearchConclusion
+from agentic_portfolio.research.types import ResearchConclusion, ResearchConfidence, ResearchReport, ResearchStatus
 from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode, discovery_state_dir
-from agentic_portfolio.schemas import CandidateStatus, ResearchQueueStatus, SecurityClass, Sleeve
+from agentic_portfolio.schemas import CandidateStatus, ResearchQueueStatus, SecurityClass, Sleeve, SpyBenchmark
 from agentic_portfolio.watch.store import WatchStore
 from agentic_portfolio.watch.types import WatchItem, WatchStatus
 from tests.conftest import ctx
 from tests.test_candidate_lifecycle import _put_candidate, _put_queue, _stores
-from tests.test_decision import _payload, _report, _thesis
+from tests.test_decision import _payload, _report, _thesis, _fact
 from tests.test_production_pipeline import _seed, _services, _worker
 from tests.test_research import _ai
 from agentic_portfolio.research.reasoner import ScriptedResearchReasoner
@@ -207,6 +209,11 @@ def test_c_production_committee_sends_multiple_alternatives(tmp_path):
         captured["committee"] = (request.packet or {}).get("committee") or (request.policy_context or {}).get("committee")
         assert "CASH" in request.alternatives
         assert request.policy_context.get("consider_cash_yield_and_opportunity_cost") is True
+        cash_alt = request.policy_context.get("cash_alternative") or {}
+        assert cash_alt.get("yield_known") is True
+        assert cash_alt.get("current_yield") == pytest.approx(0.04)
+        assert cash_alt.get("yield_source") == "configured_risk_free_proxy"
+        assert cash_alt.get("yield_as_of") == "2026-09-02"
         return _committee_payload(captured["symbols"], buy="MSFT")
 
     worker = _worker(
@@ -582,5 +589,203 @@ def test_committee_instructions_stay_multi_name_and_compact():
     assert "selected_allocations" in text
     assert "rankings" in text
     assert "Do not independently mint several correlated starter BUYs" in text
+    assert "yield_known" in text
+    assert "broad_market_residual" in text
+    assert "Do not buy SPY from the snapshot alone" in text
     assert REASONER_INSTRUCTIONS not in text or "Return JSON only:" in text
     assert "Every ADVANCE_TO_THESIS researched symbol in this packet still needs exactly one decisions[] row" not in text
+
+
+def _spy_ctx(nav: float = 500):
+    return ctx(nav, spy=SpyBenchmark(price=640.12, period_return=0.0042))
+
+
+def _operational_spy_report(candidate_id: str, *, with_extras: bool = True):
+    facts = [_fact("market_price", 640.12)]
+    derived = []
+    if with_extras:
+        facts.extend(
+            [
+                _fact("pe_ratio", 26.2),
+                _fact("fund_pe_ratio", 26.2),
+            ]
+        )
+        derived.extend(
+            [
+                _fact("return_21d", 0.021),
+                _fact("return_63d", 0.055),
+                _fact("return_252d", 0.18),
+                _fact("drawdown_from_52w_high", 0.03),
+                _fact("sma_alignment", "up"),
+            ]
+        )
+    return ResearchReport(
+        research_id="pre-fix-spy",
+        candidate_id=candidate_id,
+        symbol="SPY",
+        started_at=(NOW - timedelta(days=1)).isoformat(),
+        completed_at=(NOW - timedelta(days=1)).isoformat(),
+        provisional_sleeve=Sleeve.CORE_GROWTH,
+        security_class=SecurityClass.BROAD_MARKET_INDEX_ETF,
+        market_price=640.12,
+        research_status=ResearchStatus.RESEARCH_INCONCLUSIVE,
+        subject_kind=_report("MSFT").subject_kind,
+        executive_summary="Paid research skipped: core evidence is missing (fundamentals_or_financials).",
+        missing_information=["financials.revenue", "source_unavailable:get_financials"],
+        sources_observed=["get_equity_quotes"],
+        sources_unavailable=["get_financials", "get_equity_news", "get_sec_filing_index"],
+        confidence=ResearchConfidence.LOW,
+        research_conclusion=ResearchConclusion.NEED_MORE_DATA,
+        recommended_next_step="NEED_MORE_DATA",
+        research_source="deterministic",
+        facts=facts,
+        derived_metrics=derived,
+    )
+
+
+def test_spy_snapshot_reaches_committee_when_research_is_operational_failure(tmp_path):
+    _seed_core_universe(tmp_path, ["MSFT"])
+    cstore, _, _ = _stores(tmp_path)
+    cand = _put_candidate(cstore, "SPY", CandidateStatus.RESEARCH_INCONCLUSIVE)
+    ResearchStore(tmp_path).save(_operational_spy_report(cand.candidate_id))
+    captured: dict = {}
+
+    def responder(request):
+        captured["report_symbols"] = [row["symbol"] for row in request.reports]
+        captured["alternatives"] = list(request.alternatives)
+        captured["spy_included"] = request.policy_context.get("spy_included")
+        captured["residual"] = request.policy_context.get("broad_market_residual")
+        captured["cash"] = request.policy_context.get("cash_alternative")
+        return _committee_payload(["MSFT"], buy=None)
+
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    result = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(responder),
+        context_fn=_spy_ctx,
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+        payload_fn=None,
+        research_reasoner=None,
+        fetcher=None,
+    )
+    assert "SPY" not in captured["report_symbols"]
+    assert "MSFT" in captured["report_symbols"]
+    assert "SPY" in captured["alternatives"]
+    assert captured["spy_included"] is True
+    residual = captured["residual"]
+    assert residual["current_price"] == pytest.approx(640.12)
+    assert residual["return_1d"] == pytest.approx(0.0042)
+    assert residual["return_21d"] == pytest.approx(0.021)
+    assert residual["return_63d"] == pytest.approx(0.055)
+    assert residual["return_252d"] == pytest.approx(0.18)
+    assert residual["trend"] == "up"
+    assert residual["drawdown_from_52w_high"] == pytest.approx(0.03)
+    assert residual["fund_pe"] == pytest.approx(26.2)
+    assert residual["usable_for_comparison"] is True
+    assert residual["does_not_authorize_buy"] is True
+    assert captured["cash"]["yield_known"] is True
+    assert captured["cash"]["current_yield"] == pytest.approx(0.04)
+    assert captured["cash"]["yield_source"] == "configured_risk_free_proxy"
+    assert captured["cash"]["yield_as_of"] == "2026-09-02"
+    assert captured["cash"]["yield_unit"] == "annualized_decimal"
+    assert result.spy_included is True
+    assert result.status == "NO_ACTION"
+    assert result.proposals_created == 0
+    assert result.forced_buy is False
+    assert result.research_called is False
+    assert result.terra_called is False
+    assert result.paper_state_touched is False
+    assert result.as_dict()["placement_attempted"] is False
+    assert LIVE_ORDER_PLACEMENT is False
+    assert monthly_cap() == Decimal("10")
+    cash_pct = result.target_allocations.get("CASH")
+    assert cash_pct == pytest.approx(100.0)
+    assert result.target_allocations.get("SPY") in {None, 0, 0.0} or result.decisions.get("SPY") in {"NO_ACTION", "WATCH", None}
+
+
+def test_spy_ranked_from_snapshot_without_company_research(tmp_path):
+    _seed_core_universe(tmp_path, ["MSFT"])
+    captured: dict = {}
+
+    def responder(request):
+        captured["spy_included"] = request.policy_context.get("spy_included")
+        residual = request.policy_context.get("broad_market_residual") or {}
+        captured["usable"] = residual.get("usable_for_comparison")
+        assert "SPY" not in {row["symbol"] for row in request.reports}
+        payload = _committee_payload(["MSFT"], buy=None)
+        payload["comparison"]["ranking"] = ["CASH", "SPY", "MSFT"]
+        payload["comparison"]["vs_spy"] = "Cash beats generic beta at unknown opportunity cost no longer; yield is known."
+        return payload
+
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    result = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(responder),
+        context_fn=_spy_ctx,
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert captured["spy_included"] is True
+    assert captured["usable"] is True
+    assert result.status == "NO_ACTION"
+    assert result.proposals_created == 0
+    assert result.forced_buy is False
+    assert result.target_allocations.get("CASH") == pytest.approx(100.0)
+
+
+def test_committee_spy_buy_from_snapshot_still_requires_research(tmp_path):
+    _seed_core_universe(tmp_path, ["MSFT"])
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    result = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(_committee_payload(["MSFT"], buy="SPY", alloc=8.0, etf=True)),
+        context_fn=_spy_ctx,
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert result.proposals_created == 0
+    assert approvals.store.pending() == []
+    assert result.status == "DEGRADED"
+    assert "buy_add_requires_research:SPY" in (result.reason or "")
+    assert result.as_dict()["placement_attempted"] is False
+    assert LIVE_ORDER_PLACEMENT is False
+
+
+def test_spy_included_is_false_without_snapshot_evidence(tmp_path):
+    _seed_core_universe(tmp_path, ["MSFT"])
+    captured: dict = {}
+
+    def responder(request):
+        captured["spy_included"] = request.policy_context.get("spy_included")
+        captured["usable"] = (request.policy_context.get("broad_market_residual") or {}).get("usable_for_comparison")
+        captured["alternatives"] = list(request.alternatives)
+        return _committee_payload(["MSFT"], buy=None)
+
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    result = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(responder),
+        context_fn=lambda: ctx(500),
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert "SPY" in captured["alternatives"]
+    assert captured["spy_included"] is False
+    assert captured["usable"] is False
+    assert result.spy_included is False
+    assert result.status == "NO_ACTION"
+    assert result.proposals_created == 0
+

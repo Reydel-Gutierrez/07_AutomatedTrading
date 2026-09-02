@@ -25,7 +25,13 @@
     "valid_position": true,
     "never_force_deployment": true,
     "targets_are_not_mandates": true,
-    "consider_cash_yield_and_opportunity_cost": true
+    "consider_cash_yield_and_opportunity_cost": true,
+    "current_yield": 0.04,
+    "yield_source": "configured_risk_free_proxy",
+    "yield_as_of": "2026-09-02",
+    "yield_max_age_days": 90,
+    "yield_unit": "annualized_decimal",
+    "yield_notes": "Operator-configured annualized cash/risk-free proxy (4.0%). Not a live broker sweep observation. Not estimated at runtime. Refresh yield_as_of when the proxy is updated."
   },
   "position_count": {
     "hard_maximum": null,

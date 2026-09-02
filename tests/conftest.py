@@ -47,6 +47,7 @@ def ctx(
     external_capital_flow: float = 0.0,
     cash: float | None = None,
     buying_power: float | None = None,
+    spy=None,
 ):
     positions = positions or []
     invested = sum(p.market_value for p in positions)
@@ -63,6 +64,7 @@ def ctx(
         prior_nav=prior_nav if prior_nav is not None else (nav if external_capital_flow == 0 else None),
         prior_hwm=prior_hwm if prior_hwm is not None else nav,
         external_capital_flow=external_capital_flow,
+        spy=spy,
     )
 
 

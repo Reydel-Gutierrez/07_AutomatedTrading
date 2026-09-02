@@ -25,7 +25,7 @@ from agentic_portfolio.decision.types import CASH_SYMBOL, GatedAction, RISK_UP, 
 from agentic_portfolio.decision.validate import DecisionValidationError
 from agentic_portfolio.discovery.store import CandidateStore
 from agentic_portfolio.journal import append_jsonl
-from agentic_portfolio.policy import load_decision_config
+from agentic_portfolio.policy import load_decision_config, load_policy
 from agentic_portfolio.research.operational import looks_like_operational_failure_report, report_is_still_fresh
 from agentic_portfolio.research.store import ResearchStore
 from agentic_portfolio.research.types import ResearchConclusion, ResearchReport, ResearchStatus
@@ -73,7 +73,8 @@ class CommitteeInput:
     eligible: list[EligibleAlternative] = field(default_factory=list)
     skipped: list[dict[str, Any]] = field(default_factory=list)
     cash_included: bool = True
-    spy_included: bool = True
+    spy_included: bool = False
+    spy_evidence_report: ResearchReport | None = None
 
     @property
     def symbols(self) -> list[str]:
@@ -112,6 +113,7 @@ class CommitteeResult:
     paper_state_touched: bool = False
     LIVE_ORDER_PLACEMENT: bool = False
     reevaluation: bool = False
+    spy_included: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -145,6 +147,7 @@ class CommitteeResult:
             "paper_state_touched": self.paper_state_touched,
             "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
             "reevaluation": self.reevaluation,
+            "spy_included": self.spy_included,
             "placement_attempted": False,
         }
 
@@ -306,13 +309,17 @@ def collect_committee_input(
     eligible = sorted(by_symbol.values(), key=lambda item: item.symbol)
     reports = [item.report for item in eligible]
     alternatives = [CASH_SYMBOL, SPY_SYMBOL] + [item.symbol for item in eligible if item.symbol not in {CASH_SYMBOL, SPY_SYMBOL}]
+    spy_evidence = by_symbol[SPY_SYMBOL].report if SPY_SYMBOL in by_symbol else None
+    if spy_evidence is None and hasattr(research_store, "latest_for_symbol"):
+        spy_evidence = research_store.latest_for_symbol(SPY_SYMBOL)
     return CommitteeInput(
         reports=reports,
         alternatives=alternatives,
         eligible=eligible,
         skipped=skipped,
         cash_included=True,
-        spy_included=True,
+        spy_included=False,
+        spy_evidence_report=spy_evidence,
     )
 
 
@@ -331,6 +338,7 @@ def _latest_fresh_core_report(store: ResearchStore, symbol: str, *, now: datetim
 
 
 def committee_fingerprint(committee_input: CommitteeInput, context: PortfolioContext) -> str:
+    cash_pol = dict(load_policy().get("cash") or {})
     payload = {
         "research_ids": sorted(r.research_id for r in committee_input.reports),
         "symbols": sorted(committee_input.symbols),
@@ -338,6 +346,14 @@ def committee_fingerprint(committee_input: CommitteeInput, context: PortfolioCon
         "cash_pct": round(float(context.cash_allocation_pct or 0.0), 2),
         "risk_state": context.risk_state.value if context.risk_state else None,
         "daily_risk_halt": bool(context.daily_risk_halt),
+        # Schema/config identity only — not live SPY ticks — so this packet
+        # change reevaluates once without burning the $10 cap on every quote.
+        "packet_schema": "cash_yield_and_spy_residual_v1",
+        "cash_yield": {
+            "current_yield": cash_pol.get("current_yield"),
+            "yield_source": cash_pol.get("yield_source"),
+            "yield_as_of": cash_pol.get("yield_as_of"),
+        },
     }
     blob = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
@@ -557,6 +573,7 @@ def run_core_committee(
     result.alternatives_considered = list(committee_input.alternatives)
     result.reports_in_packet = len(committee_input.reports)
     result.fingerprint = committee_fingerprint(committee_input, context) if committee_input.reports else None
+    result.spy_included = False
 
     _event(
         root,
@@ -636,6 +653,9 @@ def run_core_committee(
             now=now,
             journal=root / "logs" / "thesis_decision.jsonl",
             committee=True,
+            market_evidence_reports=[committee_input.spy_evidence_report]
+            if committee_input.spy_evidence_report is not None
+            else None,
         )
     except DecisionValidationError as exc:
         result.status = "DEGRADED"
@@ -660,6 +680,12 @@ def run_core_committee(
     result.ai_calls = int(getattr(reasoner, "call_count", 1) or 1)
     result.ai_stages_called = ["portfolio_decision"]
     result.ai_role, result.ai_model = _committee_meta(reasoner)
+    residual = ((getattr(decided.packet, "policy_context", None) or {}).get("broad_market_residual") or {})
+    result.spy_included = bool(
+        (getattr(decided.packet, "policy_context", None) or {}).get("spy_included")
+        or residual.get("usable_for_comparison")
+    )
+    committee_input.spy_included = result.spy_included
     if getattr(reasoner, "truncation_retry_used", False):
         failed = bool(decided.validation_errors)
         _event(
