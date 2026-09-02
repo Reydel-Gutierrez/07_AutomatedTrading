@@ -211,8 +211,8 @@ def test_c_production_committee_sends_multiple_alternatives(tmp_path):
         assert request.policy_context.get("consider_cash_yield_and_opportunity_cost") is True
         cash_alt = request.policy_context.get("cash_alternative") or {}
         assert cash_alt.get("yield_known") is True
-        assert cash_alt.get("current_yield") == pytest.approx(0.04)
-        assert cash_alt.get("yield_source") == "configured_risk_free_proxy"
+        assert cash_alt.get("current_yield") == pytest.approx(0.0)
+        assert cash_alt.get("yield_source") == "configured_actual_account_cash_yield"
         assert cash_alt.get("yield_as_of") == "2026-09-02"
         return _committee_payload(captured["symbols"], buy="MSFT")
 
@@ -590,6 +590,7 @@ def test_committee_instructions_stay_multi_name_and_compact():
     assert "rankings" in text
     assert "Do not independently mint several correlated starter BUYs" in text
     assert "yield_known" in text
+    assert "not a Treasury" in text
     assert "broad_market_residual" in text
     assert "Do not buy SPY from the snapshot alone" in text
     assert REASONER_INSTRUCTIONS not in text or "Return JSON only:" in text
@@ -688,8 +689,8 @@ def test_spy_snapshot_reaches_committee_when_research_is_operational_failure(tmp
     assert residual["usable_for_comparison"] is True
     assert residual["does_not_authorize_buy"] is True
     assert captured["cash"]["yield_known"] is True
-    assert captured["cash"]["current_yield"] == pytest.approx(0.04)
-    assert captured["cash"]["yield_source"] == "configured_risk_free_proxy"
+    assert captured["cash"]["current_yield"] == pytest.approx(0.0)
+    assert captured["cash"]["yield_source"] == "configured_actual_account_cash_yield"
     assert captured["cash"]["yield_as_of"] == "2026-09-02"
     assert captured["cash"]["yield_unit"] == "annualized_decimal"
     assert result.spy_included is True

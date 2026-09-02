@@ -16,7 +16,7 @@ YIELD_UNAVAILABLE = "unavailable"
 YIELD_KNOWN = "known"
 YIELD_STALE = "stale"
 DEFAULT_YIELD_MAX_AGE_DAYS = 90
-CONFIGURED_YIELD_SOURCE = "configured_risk_free_proxy"
+CONFIGURED_YIELD_SOURCE = "configured_actual_account_cash_yield"
 
 
 def _as_float(value: Any) -> float | None:

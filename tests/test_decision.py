@@ -484,9 +484,9 @@ def test_cash_opportunity_cost_is_in_packet():
     cash_alt = packet.policy_context.get("cash_alternative") or {}
     assert cash_alt.get("may_win") is True
     assert cash_alt.get("not_a_free_no_risk_default") is True
-    assert cash_alt.get("current_yield") == pytest.approx(0.04)
+    assert cash_alt.get("current_yield") == pytest.approx(0.0)
     assert cash_alt.get("yield_known") is True
-    assert cash_alt.get("yield_source") == "configured_risk_free_proxy"
+    assert cash_alt.get("yield_source") == "configured_actual_account_cash_yield"
     assert cash_alt.get("yield_as_of") == "2026-09-02"
     assert cash_alt.get("yield_status") == "known"
     assert cash_alt.get("yield_unit") == "annualized_decimal"
@@ -495,6 +495,21 @@ def test_cash_opportunity_cost_is_in_packet():
     assert starter.get("allowed") is True
     assert starter.get("not_mandatory") is True
     assert starter.get("empty_book_does_not_require_deployment") is True
+
+
+def test_cash_alternative_current_yield_is_known_zero():
+    packet = _run().packet
+    cash_alt = packet.policy_context.get("cash_alternative") or {}
+    assert cash_alt.get("current_yield") == pytest.approx(0.0)
+    assert cash_alt.get("yield_known") is True
+    assert cash_alt.get("yield_status") == "known"
+    assert cash_alt.get("yield_source") == "configured_actual_account_cash_yield"
+    assert cash_alt.get("yield_as_of") == "2026-09-02"
+    assert cash_alt.get("yield_unit") == "annualized_decimal"
+    assert cash_alt.get("risk_free_yield") is None
+    assert cash_alt.get("treasury_yield") is None
+    assert "risk_free" not in str(cash_alt.get("yield_source") or "").lower()
+    assert packet.policy_context.get("never_force_deployment") is True
 
 
 def test_etf_buy_does_not_require_company_catalysts():

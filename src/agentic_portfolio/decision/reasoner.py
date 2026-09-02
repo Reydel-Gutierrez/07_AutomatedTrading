@@ -120,8 +120,8 @@ Hard rules:
 - CORE_GROWTH ownership reasons (quality, durability, valuation, compounding) are thesis drivers, not a requirement for a dramatic near-term event catalyst.
 - Broad-market ETFs/index funds are vehicles for diversified market exposure. Do not invent company-style catalysts or 10-K/earnings theses for them.
 - Do not require SPY (or the same broad-market residual) to explain why it is preferable to SPY. Compare SPY to cash and to individual names.
-- Cash has yield (if known), optionality, inflation/opportunity cost, and expected return foregone. It is not a free/no-risk default winner. Cash may still win.
-- Use policy_context.cash_alternative.current_yield only when yield_known is true. If yield_known is false (unavailable or stale), treat the cash rate as unknown; do not invent a yield. Unknown yield is not a reason to abort the committee.
+- Cash has yield (if known), optionality, inflation/opportunity cost, and expected return foregone. It is not a free/no-risk default winner. Cash may still win 100%.
+- policy_context.cash_alternative.current_yield is the brokerage CASH position yield, not a Treasury or risk-free proxy. 0% is a known yield when yield_known is true (liquid/optional, earns nothing). Use current_yield only when yield_known is true. If yield_known is false (unavailable or stale), treat the cash rate as unknown; do not invent a yield. Unknown yield is not a reason to abort the committee. Do not treat 0% cash as a mandate to deploy.
 - SPY comparison evidence is policy_context.broad_market_residual / spy_alternative (and portfolio_facts.spy). Missing optional fields are unknown, not zero. That snapshot is for comparison only. BUY/ADD SPY still requires a valid ADVANCE_TO_THESIS research report and thesis. Do not buy SPY from the snapshot alone.
 
 Exit policy (no broker stop orders) applies only to selected BUY/ADD names:
