@@ -10,10 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from agentic_portfolio.agent.persist import atomic_write_json
+from agentic_portfolio.discovery.repair import repair_promoted_candidate_consistency
 from agentic_portfolio.discovery.store import CandidateStore, ResearchQueue
 from agentic_portfolio.research.store import ResearchStore
 from agentic_portfolio.runtime import RuntimeMode, discovery_state_dir
-from agentic_portfolio.schemas import CandidateStatus, ResearchQueueStatus
+from agentic_portfolio.schemas import ResearchQueueStatus
+from agentic_portfolio.watch.store import WatchStore
 
 
 def classify_non_production_artifacts(root: Path, *, runtime_mode: RuntimeMode | str = RuntimeMode.LIVE) -> dict[str, Any]:
@@ -49,13 +51,28 @@ def classify_non_production_artifacts(root: Path, *, runtime_mode: RuntimeMode |
         if entry.status is ResearchQueueStatus.RESEARCHING and not entry.claimed_at:
             live_queue.set_status(entry.queue_id, ResearchQueueStatus.QUEUED, skipped_reason="stale_researching_unclaimed")
             rows.append({"kind": "queue", "id": entry.queue_id, "symbol": entry.symbol, "classification": "reclaimed_stuck_researching", "production": True})
-    for cand in live_candidates.all():
-        if cand.status is CandidateStatus.PROMOTED_TO_RESEARCH:
-            active = live_queue.active_entry(symbol=cand.symbol, candidate_id=cand.candidate_id)
-            latest = live_queue.latest_for_symbol(cand.symbol, candidate_id=cand.candidate_id)
-            if active is None and latest is not None and latest.status is ResearchQueueStatus.COMPLETED:
-                live_candidates.set_status(cand.candidate_id, CandidateStatus.WATCHING, reason="stale_promoted_after_complete")
-                rows.append({"kind": "candidate", "id": cand.candidate_id, "symbol": cand.symbol, "classification": "stale_promoted_reclassified_watching", "production": True})
+    if mode is RuntimeMode.LIVE:
+        repaired = repair_promoted_candidate_consistency(
+            root=base,
+            candidates=live_candidates,
+            queue=live_queue,
+            runtime_mode=mode,
+            research_store=reports,
+            watch_store=WatchStore(base, runtime_mode=mode),
+            persist=True,
+        )
+        for item in repaired.details:
+            rows.append(
+                {
+                    "kind": "candidate",
+                    "id": item.get("candidate_id"),
+                    "symbol": item.get("symbol"),
+                    "classification": "stale_promoted_reclassified",
+                    "to_status": item.get("to_status"),
+                    "reason": item.get("reason"),
+                    "production": True,
+                }
+            )
     for report in reports.all_reports():
         scripted = str(report.research_source or "").lower() == "scripted"
         paper = str(getattr(report, "runtime_mode", None) or "").upper() == RuntimeMode.PAPER.value

@@ -401,6 +401,7 @@ class ResearchQueueWorker:
             if luna.get("outcome") == "reject":
                 result["rejected"] += 1
                 self.queue.set_status(entry.queue_id, ResearchQueueStatus.REJECTED, skipped_reason="luna_screen_rejected")
+                self.candidates.set_status(candidate.candidate_id, CandidateStatus.REJECTED, reason="luna_screen_rejected")
         return result
 
     def _budget_blocked(self) -> tuple[bool, str]:

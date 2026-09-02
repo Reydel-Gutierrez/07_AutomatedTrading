@@ -44,6 +44,12 @@ STABLE_CANDIDATE_STATUSES = {
     CandidateStatus.EXPIRED,
 }
 
+DISCOVERY_STAGE_STATUSES = {
+    CandidateStatus.DISCOVERED,
+    CandidateStatus.SHORTLISTED,
+    CandidateStatus.PROMOTED_TO_RESEARCH,
+}
+
 LIVE_CANDIDATE_STATUSES = {
     CandidateStatus.DISCOVERED,
     CandidateStatus.SHORTLISTED,
@@ -173,12 +179,56 @@ class CandidateStore:
         self._ensure_current_index()
         return [_candidate_from_dict(r) for r in (self._data.get("current") or {}).values() if isinstance(r, dict)]
 
-    def upsert(self, candidate: Candidate) -> Candidate:
+    def _disk_current_row(self, symbol: str) -> dict[str, Any] | None:
+        """Re-read the on-disk current row so a stale in-memory PROMOTED cannot clobber WATCHING."""
+        if not self.path.exists():
+            return None
+        try:
+            loaded = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(loaded, dict):
+            return None
+        raw = (loaded.get("current") or {}).get(symbol.upper())
+        return raw if isinstance(raw, dict) else None
+
+    def _protected_status(self, symbol: str, existing_raw: dict[str, Any] | None) -> CandidateStatus | None:
+        """Stable downstream status wins over a discovery-stage in-memory or on-disk row."""
+        found: list[CandidateStatus] = []
+        for row in (existing_raw, self._disk_current_row(symbol)):
+            status = _as_candidate_status((row or {}).get("status") if row else None)
+            if status is None:
+                continue
+            if status in STABLE_CANDIDATE_STATUSES:
+                return status
+            found.append(status)
+        return found[0] if found else None
+
+    def upsert(self, candidate: Candidate, *, allow_status_transition: bool = False) -> Candidate:
+        """Refresh metadata. Do not regress a stable status to an earlier discovery stage.
+
+        Status changes that reopen research must go through set_status / reopen_for_research.
+        """
         self._ensure_current_index()
         symbol = candidate.symbol.upper()
         existing_raw = (self._data.get("current") or {}).get(symbol)
         if existing_raw and existing_raw.get("candidate_id"):
             candidate.candidate_id = str(existing_raw["candidate_id"])
+            if existing_raw.get("discovered_at"):
+                candidate.discovered_at = str(existing_raw["discovered_at"])
+            protected = self._protected_status(symbol, existing_raw)
+            incoming = candidate.status
+            if (
+                not allow_status_transition
+                and protected in STABLE_CANDIDATE_STATUSES
+                and incoming in DISCOVERY_STAGE_STATUSES
+            ):
+                candidate.status = protected
+                if protected is CandidateStatus.REJECTED:
+                    if not candidate.rejection_reason:
+                        candidate.rejection_reason = existing_raw.get("rejection_reason")
+                    if not candidate.rejection_evidence:
+                        candidate.rejection_evidence = list(existing_raw.get("rejection_evidence") or [])
             if str(existing_raw.get("status") or "") != candidate.status.value:
                 self._archive(existing_raw)
         data = self._stamp(candidate)
@@ -198,6 +248,7 @@ class CandidateStore:
         return candidate
 
     def set_status(self, candidate_id: str, status: CandidateStatus, *, reason: str | None = None) -> Candidate:
+        """Explicit lifecycle transition. May reopen a stable candidate for research."""
         rec = self.get(candidate_id)
         if rec is None:
             raise KeyError(candidate_id)
@@ -206,8 +257,20 @@ class CandidateStore:
             rec.rejection_reason = reason
         if status == CandidateStatus.EXPIRED:
             rec.freshness = Freshness.EXPIRED
-        self.upsert(rec)
+        self.upsert(rec, allow_status_transition=True)
         return rec
+
+    def reopen_for_research(self, candidate_id: str, *, reason: str | None = None) -> Candidate:
+        """Explicit reopen. Call only after an ACTIVE queue entry exists or is created."""
+        rec = self.get(candidate_id)
+        if rec is None:
+            raise KeyError(candidate_id)
+        rec.status = CandidateStatus.PROMOTED_TO_RESEARCH
+        if reason and not rec.reasons:
+            rec.reasons = [reason]
+        elif reason and reason not in rec.reasons:
+            rec.reasons = list(rec.reasons) + [reason]
+        return self.upsert(rec, allow_status_transition=True)
 
 
 class ResearchQueue:
@@ -250,6 +313,16 @@ class ResearchQueue:
         for entry in self.all():
             same = entry.symbol.upper() == want or (candidate_id and entry.candidate_id == candidate_id)
             if not same:
+                continue
+            if found is None or (entry.enqueued_at or "") > (found.enqueued_at or ""):
+                found = entry
+        return found
+
+    def latest_for_candidate_id(self, candidate_id: str) -> ResearchQueueEntry | None:
+        """Latest queue row for this exact candidate_id. Does not match other ids of the same symbol."""
+        found: ResearchQueueEntry | None = None
+        for entry in self.all():
+            if entry.candidate_id != candidate_id:
                 continue
             if found is None or (entry.enqueued_at or "") > (found.enqueued_at or ""):
                 found = entry
@@ -355,6 +428,17 @@ class DiscoveryRunStore:
         self._data.setdefault("records", {})[run.run_id] = data
         self.save()
         return run
+
+
+def _as_candidate_status(raw: Any) -> CandidateStatus | None:
+    if raw is None:
+        return None
+    if isinstance(raw, CandidateStatus):
+        return raw
+    try:
+        return CandidateStatus(str(raw))
+    except ValueError:
+        return None
 
 
 def _candidate_from_dict(raw: dict[str, Any]) -> Candidate:

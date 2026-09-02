@@ -101,6 +101,20 @@ def run_live_discovery(
         persist=persist,
         promote_shortlist=True,
     )
+    if persist and mode is RuntimeMode.LIVE and candidate_store is not None and queue_store is not None:
+        from agentic_portfolio.discovery.repair import repair_promoted_candidate_consistency
+        from agentic_portfolio.research.store import ResearchStore
+        from agentic_portfolio.watch.store import WatchStore
+
+        repair_promoted_candidate_consistency(
+            root=Path(root),
+            candidates=candidate_store,
+            queue=queue_store,
+            runtime_mode=mode,
+            research_store=ResearchStore(Path(root)),
+            watch_store=WatchStore(Path(root), runtime_mode=mode),
+            persist=True,
+        )
     run = result.run
     extra = universe.as_dict()
     run.sources_queried = sources_queried

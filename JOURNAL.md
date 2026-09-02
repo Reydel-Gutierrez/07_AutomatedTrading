@@ -469,6 +469,20 @@ Authoritative runtime snapshot is now `live_execution_authority()`: placement ON
 
 ---
 
+## 2026-09-01 — Candidate status must not regress on rediscovery
+
+**Type:** `discovery` / `lifecycle`
+
+`CandidateStore.upsert()` kept a symbol's `candidate_id` but allowed a later discovery object to overwrite a terminal/stable status (`WATCHING` / `RESEARCH_COMPLETE` / `RESEARCH_INCONCLUSIVE` / `REJECTED` / `EXPIRED`) with `PROMOTED_TO_RESEARCH`. Research had already finished; the LIVE queue stayed `COMPLETED` / `REJECTED` / `NEED_MORE_DATA`; CURRENT candidates looked as if they were still in research.
+
+Fix: upsert is monotonic for those stable states (metadata/prices/scores still refresh). `set_status` / `reopen_for_research` remain the explicit reopen path, and promotion now writes `PROMOTED_TO_RESEARCH` only after an ACTIVE live queue row exists. LIVE repair restores stuck promoted rows from the exact `candidate_id` queue result plus canonical research/watch artifacts. It never reads `state/research_queue.json`. Research history is not deleted.
+
+**MCP NOT called:** review/place/cancel, option/crypto trading, transfers.
+
+Committed defaults unchanged: `auto_execution=false`, `require_human_approval=true`.
+
+---
+
 ## Template
 
 ```

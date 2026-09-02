@@ -18,7 +18,13 @@ from agentic_portfolio.discovery.safety import DISCOVERY_FORBIDDEN_TOOLS, assert
 from agentic_portfolio.discovery.scoring import score_signals
 from agentic_portfolio.discovery.signals import merge_signals
 from agentic_portfolio.discovery.snapshot import SecuritySnapshot
-from agentic_portfolio.discovery.store import CandidateStore, DiscoveryRunStore, ResearchQueue
+from agentic_portfolio.discovery.store import (
+    ACTIVE_QUEUE_STATUSES,
+    STABLE_CANDIDATE_STATUSES,
+    CandidateStore,
+    DiscoveryRunStore,
+    ResearchQueue,
+)
 from agentic_portfolio.policy import load_discovery_config
 from agentic_portfolio.schemas import (
     Candidate,
@@ -115,58 +121,44 @@ def run_discovery(
 
     created = _apply_overlap_priority(created, cfg)
 
+    cstore = candidate_store
+    qstore = queue_store
     if persist:
         cstore = candidate_store or CandidateStore()
+        if queue_store is not None:
+            qstore = queue_store
+        elif candidate_store is None:
+            qstore = ResearchQueue()
+        else:
+            qstore = ResearchQueue(Path(cstore.path).parent / "research_queue.json", runtime_mode=cstore.runtime_mode)
         for c in created + rejected:
             existing = cstore.current_for_symbol(c.symbol)
             if existing is not None:
                 c.candidate_id = existing.candidate_id
-                if (
-                    existing.status
-                    in {
-                        CandidateStatus.PROMOTED_TO_RESEARCH,
-                        CandidateStatus.WATCHING,
-                        CandidateStatus.RESEARCH_COMPLETE,
-                    }
-                    and c.status != CandidateStatus.REJECTED
-                ):
-                    # One current row per symbol. Do not reset a finished
-                    # research outcome just because discovery re-scored it.
-                    # RESEARCH_INCONCLUSIVE stays as this cycle's score so
-                    # NEED_MORE_DATA can re-promote after cooldown.
-                    c.status = existing.status
+            # upsert refreshes scores/prices/signals and refuses to regress
+            # WATCHING / RESEARCH_* / REJECTED / EXPIRED to a discovery stage.
             cstore.upsert(c)
 
     queue_entries: list[ResearchQueueEntry] = []
     promoted_ids: list[str] = []
     if promote_shortlist:
-        qstore = queue_store if persist else None
         for c in created:
+            if persist and qstore is not None and cstore is not None:
+                promoted = _promote_persisted(c, cstore, qstore, cfg, now)
+                if promoted is not None:
+                    promoted_ids.append(c.candidate_id)
+                    queue_entries.append(promoted)
+                continue
             if c.status != CandidateStatus.SHORTLISTED:
                 continue
             # Overlap may notch priority to LOW; that defers research order,
             # it does not discard a shortlisted candidate from the queue.
             if c.priority in {DiscoveryPriority.LOW} and not c.deferred_due_to_overlap:
                 continue
-            prior = qstore.latest_for_symbol(c.symbol, candidate_id=c.candidate_id) if persist and qstore is not None else None
-            if persist and qstore is not None:
-                blocked = qstore.active_entry(symbol=c.symbol, candidate_id=c.candidate_id)
-                if blocked is not None:
-                    continue
-                allowed, _why = may_reopen_research(c, prior, now=now, config=cfg)
-                if not allowed:
-                    c.status = _stable_status_for(prior)
-                    cstore.upsert(c)
-                    continue
             entry = _queue_entry(c, cfg, now=now)
-            if prior is not None:
-                entry.research_generation = int(prior.research_generation or 1) + 1
             c.status = CandidateStatus.PROMOTED_TO_RESEARCH
             promoted_ids.append(c.candidate_id)
             queue_entries.append(entry)
-            if persist:
-                (qstore or ResearchQueue()).enqueue(entry)
-                (candidate_store or CandidateStore()).upsert(c)
 
     conclusion = "NO_HIGH_QUALITY_CANDIDATES"
     if any(c.status in {CandidateStatus.SHORTLISTED, CandidateStatus.PROMOTED_TO_RESEARCH} for c in created):
@@ -567,16 +559,65 @@ def _apply_overlap_priority(candidates: list[Candidate], cfg: dict) -> list[Cand
     return candidates
 
 
-def _stable_status_for(prior: ResearchQueueEntry | None) -> CandidateStatus:
+def _promote_persisted(
+    candidate: Candidate,
+    cstore: CandidateStore,
+    qstore: ResearchQueue,
+    cfg: dict,
+    now: datetime,
+) -> ResearchQueueEntry | None:
+    """Mark PROMOTED_TO_RESEARCH only after an ACTIVE queue row exists or is created."""
+    blocked = qstore.active_entry(symbol=candidate.symbol, candidate_id=candidate.candidate_id)
+    if blocked is not None:
+        if candidate.status is not CandidateStatus.PROMOTED_TO_RESEARCH:
+            cstore.reopen_for_research(candidate.candidate_id, reason="active_queue")
+            candidate.status = CandidateStatus.PROMOTED_TO_RESEARCH
+        return None
+    if candidate.status is CandidateStatus.DISCOVERED:
+        return None
+    if (
+        candidate.status is CandidateStatus.SHORTLISTED
+        and candidate.priority is DiscoveryPriority.LOW
+        and not candidate.deferred_due_to_overlap
+    ):
+        return None
+    prior = qstore.latest_for_candidate_id(candidate.candidate_id) or qstore.latest_for_symbol(
+        candidate.symbol, candidate_id=candidate.candidate_id
+    )
+    allowed, why = may_reopen_research(candidate, prior, now=now, config=cfg)
+    if candidate.status in STABLE_CANDIDATE_STATUSES:
+        # Rediscovery alone is not a reopen. Stable rows need a prior cycle plus
+        # may_reopen_research (freshness / material evidence / cooldown).
+        if prior is None or not allowed:
+            return None
+    if not allowed:
+        restored = _status_when_reopen_blocked(prior)
+        if restored is not None:
+            cstore.set_status(candidate.candidate_id, restored, reason=f"reopen_blocked:{why}")
+            candidate.status = restored
+        return None
+    entry = _queue_entry(candidate, cfg, now=now)
+    if prior is not None:
+        entry.research_generation = int(prior.research_generation or 1) + 1
+    stored = qstore.enqueue(entry)
+    if stored.status not in ACTIVE_QUEUE_STATUSES:
+        return None
+    cstore.reopen_for_research(candidate.candidate_id, reason="discovery_promote")
+    candidate.status = CandidateStatus.PROMOTED_TO_RESEARCH
+    return stored
+
+
+def _status_when_reopen_blocked(prior: ResearchQueueEntry | None) -> CandidateStatus | None:
+    """Restore a non-PROMOTED status from a terminal queue row. Do not guess WATCHING from COMPLETED."""
     if prior is None:
-        return CandidateStatus.DISCOVERED
+        return None
     if prior.status is ResearchQueueStatus.REJECTED:
         return CandidateStatus.REJECTED
     if prior.status in {ResearchQueueStatus.NEED_MORE_DATA, ResearchQueueStatus.INCONCLUSIVE}:
         return CandidateStatus.RESEARCH_INCONCLUSIVE
-    if prior.status is ResearchQueueStatus.COMPLETED:
-        return CandidateStatus.WATCHING
-    return CandidateStatus.DISCOVERED
+    if prior.status is ResearchQueueStatus.EXPIRED:
+        return CandidateStatus.EXPIRED
+    return None
 
 
 def may_reopen_research(

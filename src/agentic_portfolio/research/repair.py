@@ -56,6 +56,7 @@ class RepairResult:
     watches_restored: int = 0
     schema_failures: int = 0
     queue_duplicates_dropped: int = 0
+    candidate_status_repaired: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -70,6 +71,7 @@ class RepairResult:
             "watches_restored": self.watches_restored,
             "schema_failures": self.schema_failures,
             "queue_duplicates_dropped": self.queue_duplicates_dropped,
+            "candidate_status_repaired": self.candidate_status_repaired,
             "forced_buy": False,
             "risk_gate_bypassed": False,
         }
@@ -335,6 +337,24 @@ def repair_operational_research_state(
                     },
                     journal or (Path(root) / "logs" / "research.jsonl"),
                 )
+
+    from agentic_portfolio.discovery.repair import repair_promoted_candidate_consistency
+
+    watch_store = getattr(watch, "store", None)
+    lifecycle = repair_promoted_candidate_consistency(
+        root=root,
+        candidates=candidates,
+        queue=queue,
+        runtime_mode=runtime_mode,
+        research_store=research_store,
+        watch_store=watch_store,
+        persist=persist,
+    )
+    result.candidate_status_repaired = lifecycle.repaired
+    result.inspected += lifecycle.inspected
+    for symbol in lifecycle.symbols:
+        if symbol not in result.symbols:
+            result.symbols.append(symbol)
 
     if persist:
         ledger["requeued_research_ids"] = sorted(already)
