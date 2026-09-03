@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping
@@ -21,7 +21,15 @@ from agentic_portfolio.adapters.portfolio_facts import (
     parse_spy,
 )
 from agentic_portfolio.calendar import EASTERN, NyseEquityCalendar, REGULAR_OPEN
-from agentic_portfolio.cash_flow import TradeFill, observation_from_facts, observation_from_context_dict, reconcile_external_flow
+from agentic_portfolio.cash_flow import (
+    FLOW_EPS,
+    TradeFill,
+    observation_from_context_dict,
+    observation_from_facts,
+    reconcile_external_flow,
+    reconstruct_session_external_flow,
+    select_session_external_flow,
+)
 from agentic_portfolio.context import build_context, portfolio_context_from_dict
 from agentic_portfolio.journal import append_jsonl
 from agentic_portfolio.live.isolation import assert_live_isolated, detect_paper_contamination
@@ -30,9 +38,9 @@ from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.paper_fill.store import PaperFillStore
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.policy import load_account_rules
-from agentic_portfolio.runtime import LIVE_SOURCE_OF_TRUTH, RuntimeMode, resolve_runtime_mode
+from agentic_portfolio.runtime import LIVE_SOURCE_OF_TRUTH, RuntimeMode, live_placement_enabled, resolve_runtime_mode
 from agentic_portfolio.schemas import PortfolioContext, RiskState, to_dict
-from agentic_portfolio.session import load_session_state, observe_nav_for_session
+from agentic_portfolio.session import SessionNavState, load_session_state, observe_nav_for_session, save_session_state
 from agentic_portfolio.sleeve_registry import SleeveRegistry
 from agentic_portfolio.state_store import load_hwm_state, save_hwm_state
 from agentic_portfolio.thesis_registry import ThesisRegistry
@@ -131,6 +139,43 @@ def _prior_hwm(
     return None, None
 
 
+def _recover_session_capital_flow(
+    *,
+    store: LivePortfolioStore,
+    session: SessionNavState,
+    session_prior: SessionNavState | None,
+    current_obs,
+    persist: bool,
+) -> tuple[SessionNavState, float]:
+    """Rebuild same-session external flow from LIVE snapshots when legacy state missed it.
+
+    Does not mutate historical snapshot files. Returns the recovered delta versus
+    persisted session flow (0 when accounted state is already correct).
+    """
+    persisted = float(session_prior.session_external_capital_flow or 0.0) if session_prior else 0.0
+    if session.fail_safe or not session.session_id:
+        return session, 0.0
+    if session_prior and session_prior.session_id and session.session_id != session_prior.session_id:
+        return session, 0.0
+    reconstructed = reconstruct_session_external_flow(
+        store.list_snapshot_records(),
+        session_id=session.session_id,
+        current=current_obs,
+    )
+    accounted = float(session.session_external_capital_flow or 0.0)
+    chosen = select_session_external_flow(
+        accounted=accounted,
+        reconstructed=reconstructed,
+        sod_nav=session.sod_nav,
+    )
+    if abs(chosen - accounted) <= FLOW_EPS:
+        return session, 0.0
+    session.session_external_capital_flow = chosen
+    if persist:
+        save_session_state(session, store.session_path())
+    return session, chosen - persisted
+
+
 def refresh_live_portfolio(
     fetcher: PortfolioFetcher,
     *,
@@ -147,6 +192,7 @@ def refresh_live_portfolio(
     """Fetch Agentic Robinhood facts, build LIVE context, persist snapshot. Never places."""
     rules = account_rules or load_account_rules()
     exe = dict(rules.get("execution") or {})
+    placement_enabled = bool(live_placement_enabled())
     assert_placement_disabled(
         live_trade_actions_allowed=bool(exe.get("live_trade_actions_allowed")),
         auto_execution=bool(exe.get("auto_execution")),
@@ -268,7 +314,21 @@ def refresh_live_portfolio(
         incremental_external_flow=recon.external_capital_flow,
         current_cash=book["cash"],
     )
+    session, recovered_delta = _recover_session_capital_flow(
+        store=store,
+        session=session,
+        session_prior=session_prior,
+        current_obs=current_obs,
+        persist=persist,
+    )
     prior_nav, prior_hwm = _prior_hwm(store=store, account_number=expected, paper_ctx=paper_ctx)
+    hwm_flow = recon.external_capital_flow
+    if (
+        abs(recovered_delta) > FLOW_EPS
+        and prior_nav is not None
+        and abs((float(book["current_nav"]) - float(prior_nav)) - recovered_delta) <= FLOW_EPS
+    ):
+        hwm_flow = recovered_delta
 
     context = build_context(
         account_number=expected,
@@ -280,13 +340,15 @@ def refresh_live_portfolio(
         start_of_day_nav=session.sod_nav,
         prior_nav=prior_nav,
         prior_hwm=prior_hwm,
-        external_capital_flow=recon.external_capital_flow,
+        external_capital_flow=hwm_flow,
         session_external_capital_flow=float(session.session_external_capital_flow or 0.0),
         spy=spy,
         timestamp=stamp.isoformat(),
         trading_session_id=session.session_id,
         session_fail_safe=session.fail_safe,
     )
+    if abs(recovered_delta) > FLOW_EPS and abs(hwm_flow - recovered_delta) > FLOW_EPS:
+        context = replace(context, external_capital_flow=recovered_delta)
 
     snapshot_id = str(uuid4())
     snapshot = {
@@ -295,7 +357,7 @@ def refresh_live_portfolio(
         "runtime_mode": RuntimeMode.LIVE.value,
         "source_of_truth": LIVE_SOURCE_OF_TRUTH,
         "paper_environment": False,
-        "live_order_placement_enabled": False,
+        "live_order_placement_enabled": placement_enabled,
         "account": {
             "account_number": expected,
             "nickname": account.get("nickname"),
@@ -345,7 +407,7 @@ def refresh_live_portfolio(
                     "session_external_capital_flow": context.session_external_capital_flow,
                     "daily_portfolio_return": context.daily_portfolio_return,
                     "source_of_truth": LIVE_SOURCE_OF_TRUTH,
-                    "live_order_placement_enabled": False,
+                    "live_order_placement_enabled": placement_enabled,
                     "mcp_tools_used": snapshot["mcp_tools_used"],
                     "mcp_not_called": snapshot["mcp_not_called"],
                 },

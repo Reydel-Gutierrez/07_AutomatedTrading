@@ -75,6 +75,33 @@ class LivePortfolioStore:
             return None
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def list_snapshot_records(self) -> list[dict[str, Any]]:
+        """Read persisted LIVE snapshots. Does not mutate files."""
+        records: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        snap_dir = self.root / "snapshots"
+        if snap_dir.is_dir():
+            for path in snap_dir.glob("*.json"):
+                try:
+                    data = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if not isinstance(data, dict):
+                    continue
+                sid = str(data.get("snapshot_id") or path.stem)
+                if sid in seen:
+                    continue
+                seen.add(sid)
+                records.append(data)
+        current = self.current_book()
+        if isinstance(current, dict):
+            sid = str(current.get("snapshot_id") or "")
+            if sid and sid not in seen:
+                records.append(current)
+            elif not sid:
+                records.append(current)
+        return records
+
     def save_snapshot(self, snapshot_id: str, record: dict[str, Any]) -> Path:
         payload = to_dict(record)
         snap_path = self.root / "snapshots" / f"{snapshot_id}.json"

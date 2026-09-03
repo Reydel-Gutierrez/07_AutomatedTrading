@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,17 +15,25 @@ from agentic_portfolio.cash_flow import (
     cash_flow_adjusted_total_return,
     observation_from_facts,
     reconcile_external_flow,
+    reconstruct_session_external_flow,
+    select_session_external_flow,
 )
 from agentic_portfolio.context import portfolio_context_from_dict
 from agentic_portfolio.dashboard.history import total_return
 from agentic_portfolio.dashboard.queries import dashboard_state, dashboard_view
 from agentic_portfolio.live.engine import refresh_live_portfolio
+from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.schemas import RiskState
+from agentic_portfolio.session import SessionNavState, save_session_state
 from tests.conftest import ACCOUNT, ctx
 from tests.test_live_mode import _accounts, _fetcher, _portfolio, _positions, _quotes
 
 OPEN = datetime(2026, 9, 3, 18, 30, tzinfo=timezone.utc)
 AFTER_CLOSE = datetime(2026, 9, 3, 21, 30, tzinfo=timezone.utc)
+LEGACY_0930 = datetime(2026, 9, 3, 13, 30, tzinfo=timezone.utc)  # 09:30 ET
+LEGACY_1700 = datetime(2026, 9, 3, 21, 0, tzinfo=timezone.utc)  # 17:00 ET
+LEGACY_1715 = datetime(2026, 9, 3, 21, 15, tzinfo=timezone.utc)  # 17:15 ET
+SESSION_ID = "2026-09-03"
 
 
 def _book(nav, cash, holdings=()):
@@ -48,6 +57,110 @@ def _refresh(tmp_path: Path, *, nav, cash, positions=None, quotes=None, orders=N
         orders=orders or {"data": {"orders": []}},
     )
     return refresh_live_portfolio(fetcher, now=now, root=tmp_path, persist=True)
+
+
+def _legacy_live_book(
+    tmp_path: Path,
+    points: list[tuple[datetime, float, float]],
+    *,
+    session_id: str = SESSION_ID,
+    sod: float = 500.0,
+    flow: float = 0.0,
+    extra_snapshots: list[tuple[str, datetime, float, float]] | None = None,
+):
+    """Seed old-code LIVE snapshots (flow=0) plus surviving session state."""
+    store = LivePortfolioStore(tmp_path)
+    for session, at, nav, cash in extra_snapshots or []:
+        _write_legacy_snapshot(store, f"legacy-{session}-{at.strftime('%H%M')}", at, nav, cash, session_id=session, sod=nav, flow=0.0)
+    for idx, (at, nav, cash) in enumerate(points):
+        _write_legacy_snapshot(
+            store,
+            f"legacy-{idx}-{at.strftime('%H%M')}",
+            at,
+            nav,
+            cash,
+            session_id=session_id,
+            sod=sod,
+            flow=flow,
+        )
+    last_at, last_nav, last_cash = points[-1]
+    first_at = points[0][0]
+    save_session_state(
+        SessionNavState(
+            session_id=session_id,
+            session_date=session_id,
+            timezone="America/New_York",
+            sod_nav=sod,
+            sod_anchored_at=first_at.isoformat(),
+            calendar_provider="nyse_builtin_v1",
+            calendar_available=True,
+            fail_safe=False,
+            fail_safe_reason=None,
+            last_observed_nav=last_nav,
+            last_observed_at=last_at.isoformat(),
+            last_observed_cash=last_cash,
+            session_external_capital_flow=flow,
+        ),
+        store.session_path(),
+    )
+    store.hwm_path().write_text(
+        json.dumps(
+            {
+                "account_number": ACCOUNT,
+                "nav": last_nav,
+                "cash_flow_adjusted_hwm": last_nav,
+                "drawdown": 0.0,
+                "risk_state": "NORMAL",
+            }
+        ),
+        encoding="utf-8",
+    )
+    return store
+
+
+def _write_legacy_snapshot(store: LivePortfolioStore, snap_id: str, at: datetime, nav: float, cash: float, *, session_id: str, sod: float, flow: float) -> None:
+    stamp = at.isoformat()
+    store.save_snapshot(
+        snap_id,
+        {
+            "snapshot_id": snap_id,
+            "created_at": stamp,
+            "runtime_mode": "LIVE",
+            "source_of_truth": "robinhood_agentic_account",
+            "paper_environment": False,
+            "live_order_placement_enabled": False,
+            "account": {"account_number": ACCOUNT},
+            "mcp_tools_used": ["get_accounts"],
+            "mcp_not_called": ["place_equity_order", "cancel_equity_order", "review_equity_order"],
+            "context": {
+                "timestamp": stamp,
+                "account_number": ACCOUNT,
+                "current_nav": nav,
+                "cash": cash,
+                "buying_power": cash,
+                "positions": [],
+                "holdings_count": 0,
+                "start_of_day_nav": sod,
+                "daily_portfolio_return": ((nav - sod - flow) / sod) if sod else 0.0,
+                "external_capital_flow": 0.0,
+                "session_external_capital_flow": flow,
+                "trading_session_id": session_id,
+                "high_water_mark": nav,
+                "cash_flow_adjusted_hwm": nav,
+                "current_drawdown": 0.0,
+                "risk_state": "NORMAL",
+            },
+            "session": {
+                "session_id": session_id,
+                "session_date": session_id,
+                "sod_nav": sod,
+                "session_external_capital_flow": flow,
+                "last_observed_nav": nav,
+                "last_observed_cash": cash,
+            },
+            "market": {"session_id": session_id, "session_date": session_id},
+        },
+    )
 
 
 def test_01_pure_deposit_cash_only():
@@ -258,3 +371,150 @@ def test_ambiguous_cash_only_identity_does_not_invent_flow():
     assert recon.external_capital_flow == pytest.approx(0)
     assert recon.confident is False
     assert recon.reason == "ambiguous_cash_only_identity"
+
+
+def test_reconstruct_session_flow_from_same_session_snapshots():
+    snaps = [
+        {
+            "created_at": LEGACY_0930.isoformat(),
+            "context": {
+                "timestamp": LEGACY_0930.isoformat(),
+                "current_nav": 500.0,
+                "cash": 500.0,
+                "positions": [],
+                "trading_session_id": SESSION_ID,
+            },
+        },
+        {
+            "created_at": LEGACY_1700.isoformat(),
+            "context": {
+                "timestamp": LEGACY_1700.isoformat(),
+                "current_nav": 1000.0,
+                "cash": 1000.0,
+                "positions": [],
+                "trading_session_id": SESSION_ID,
+            },
+        },
+        {
+            "created_at": "2026-09-02T21:00:00+00:00",
+            "context": {
+                "timestamp": "2026-09-02T21:00:00+00:00",
+                "current_nav": 400.0,
+                "cash": 400.0,
+                "positions": [],
+                "trading_session_id": "2026-09-02",
+            },
+        },
+    ]
+    rec = reconstruct_session_external_flow(snaps, session_id=SESSION_ID, current=_book(1000, 1000))
+    assert rec.confident is True
+    assert rec.session_external_capital_flow == pytest.approx(500)
+    assert rec.starting_nav == pytest.approx(500)
+    other = reconstruct_session_external_flow(snaps, session_id="2026-09-02")
+    assert other.confident is False
+    missing = reconstruct_session_external_flow(snaps, session_id=None, current=_book(1000, 1000))
+    assert missing.confident is False
+    accounted = select_session_external_flow(accounted=500, reconstructed=rec, sod_nav=500)
+    assert accounted == pytest.approx(500)
+    recovered = select_session_external_flow(accounted=0, reconstructed=rec, sod_nav=500)
+    assert recovered == pytest.approx(500)
+
+
+def test_legacy_deploy_recovers_same_session_deposit(tmp_path):
+    store = _legacy_live_book(
+        tmp_path,
+        [(LEGACY_0930, 500.0, 500.0), (LEGACY_1700, 1000.0, 1000.0)],
+        sod=500.0,
+        flow=0.0,
+    )
+    snap_dir = store.root / "snapshots"
+    before = {path.name: path.read_text(encoding="utf-8") for path in snap_dir.glob("*.json")}
+    later = _refresh(tmp_path, nav=1000, cash=1000, now=LEGACY_1715)
+    assert later.context.start_of_day_nav == pytest.approx(500)
+    assert later.context.session_external_capital_flow == pytest.approx(500)
+    assert later.context.external_capital_flow == pytest.approx(500)
+    assert later.context.daily_portfolio_return == pytest.approx(0)
+    assert later.context.current_nav == pytest.approx(1000)
+    assert later.context.current_drawdown == pytest.approx(0)
+    after = {path.name: path.read_text(encoding="utf-8") for path in snap_dir.glob("*.json") if path.name in before}
+    assert after == before
+
+
+def test_restart_after_correct_flow_does_not_double_count(tmp_path):
+    _refresh(tmp_path, nav=500, cash=500, now=OPEN)
+    accounted = _refresh(tmp_path, nav=1000, cash=1000, now=OPEN + timedelta(minutes=5))
+    assert accounted.context.session_external_capital_flow == pytest.approx(500)
+    restarted = _refresh(tmp_path, nav=1000, cash=1000, now=OPEN + timedelta(minutes=15))
+    assert restarted.context.session_external_capital_flow == pytest.approx(500)
+    assert restarted.context.daily_portfolio_return == pytest.approx(0)
+    assert restarted.context.external_capital_flow == pytest.approx(0)
+    assert restarted.context.current_drawdown == pytest.approx(0)
+
+
+def test_legacy_same_session_withdrawal_recovered_after_restart(tmp_path):
+    _legacy_live_book(
+        tmp_path,
+        [(LEGACY_0930, 1000.0, 1000.0), (LEGACY_1700, 600.0, 600.0)],
+        sod=1000.0,
+        flow=0.0,
+    )
+    later = _refresh(tmp_path, nav=600, cash=600, now=LEGACY_1715)
+    assert later.context.start_of_day_nav == pytest.approx(1000)
+    assert later.context.session_external_capital_flow == pytest.approx(-400)
+    assert later.context.daily_portfolio_return == pytest.approx(0)
+    assert later.context.current_drawdown == pytest.approx(0)
+    assert later.context.risk_state is RiskState.NORMAL
+
+
+def test_legacy_multiple_session_flows_recovered(tmp_path):
+    _legacy_live_book(
+        tmp_path,
+        [
+            (LEGACY_0930, 500.0, 500.0),
+            (LEGACY_0930 + timedelta(hours=2), 800.0, 800.0),
+            (LEGACY_1700, 1200.0, 1200.0),
+        ],
+        sod=500.0,
+        flow=0.0,
+    )
+    later = _refresh(tmp_path, nav=1200, cash=1200, now=LEGACY_1715)
+    assert later.context.session_external_capital_flow == pytest.approx(700)
+    assert later.context.daily_portfolio_return == pytest.approx(0)
+
+
+def test_recovery_does_not_cross_session_boundary(tmp_path):
+    _legacy_live_book(
+        tmp_path,
+        [(LEGACY_0930, 500.0, 500.0), (LEGACY_1700, 1000.0, 1000.0)],
+        sod=500.0,
+        flow=0.0,
+        extra_snapshots=[("2026-09-02", datetime(2026, 9, 2, 20, 0, tzinfo=timezone.utc), 400.0, 400.0)],
+    )
+    later = _refresh(tmp_path, nav=1000, cash=1000, now=LEGACY_1715)
+    assert later.context.session_external_capital_flow == pytest.approx(500)
+    assert later.context.daily_portfolio_return == pytest.approx(0)
+
+
+def test_recovery_fails_closed_on_ambiguous_snapshot_identity(tmp_path):
+    _legacy_live_book(
+        tmp_path,
+        [(LEGACY_0930, 500.0, 400.0), (LEGACY_1700, 1000.0, 700.0)],
+        sod=500.0,
+        flow=0.0,
+    )
+    later = _refresh(tmp_path, nav=1000, cash=700, now=LEGACY_1715)
+    assert later.context.session_external_capital_flow == pytest.approx(0)
+
+
+def test_legacy_deposit_dashboard_today_return_is_zero(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    _legacy_live_book(
+        tmp_path,
+        [(LEGACY_0930, 500.0, 500.0), (LEGACY_1700, 1000.0, 1000.0)],
+        sod=500.0,
+        flow=0.0,
+    )
+    _refresh(tmp_path, nav=1000, cash=1000, now=LEGACY_1715)
+    view = dashboard_view(dashboard_state(tmp_path))
+    assert view["kpis"]["today_pnl"]["value"] == pytest.approx(0)
+    assert view["kpis"]["total_return"]["value"] == pytest.approx(0)

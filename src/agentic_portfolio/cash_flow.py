@@ -20,6 +20,7 @@ investment P/L rather than invented deposits (fail-safe).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Iterable, Mapping, Sequence
 
 FLOW_EPS = 0.01
@@ -328,6 +329,145 @@ def reconcile_external_flow(
         reason="qty_change_without_fills_no_invented_flow",
         notes=notes,
     )
+
+
+@dataclass(frozen=True)
+class SessionFlowReconstruction:
+    """Read-only reconstruction of one trading session's external capital flow."""
+
+    session_external_capital_flow: float
+    confident: bool
+    reason: str
+    intervals: int = 0
+    starting_nav: float | None = None
+    notes: list[str] = field(default_factory=list)
+
+
+def snapshot_trading_session_id(record: Mapping[str, Any] | None) -> str | None:
+    if not isinstance(record, Mapping):
+        return None
+    ctx = record.get("context") if isinstance(record.get("context"), Mapping) else {}
+    sess = record.get("session") if isinstance(record.get("session"), Mapping) else {}
+    market = record.get("market") if isinstance(record.get("market"), Mapping) else {}
+    for raw in (ctx.get("trading_session_id"), sess.get("session_id"), market.get("session_id")):
+        text = str(raw or "").strip()
+        if text:
+            return text
+    return None
+
+
+def snapshot_observation(record: Mapping[str, Any] | None) -> BookObservation | None:
+    if not isinstance(record, Mapping):
+        return None
+    ctx = record.get("context") if isinstance(record.get("context"), Mapping) else record
+    return observation_from_context_dict(ctx)
+
+
+def snapshot_timestamp(record: Mapping[str, Any] | None) -> str:
+    if not isinstance(record, Mapping):
+        return ""
+    ctx = record.get("context") if isinstance(record.get("context"), Mapping) else {}
+    return str(ctx.get("timestamp") or record.get("created_at") or "")
+
+
+def _timestamp_sort_key(raw: str) -> tuple[int, datetime | str]:
+    try:
+        return (0, datetime.fromisoformat(str(raw).replace("Z", "+00:00")))
+    except ValueError:
+        return (1, str(raw or ""))
+
+
+def reconstruct_session_external_flow(
+    snapshots: Sequence[Mapping[str, Any] | None],
+    *,
+    session_id: str | None,
+    current: BookObservation | None = None,
+) -> SessionFlowReconstruction:
+    """Sum confident interval flows from ordered same-session snapshots.
+
+    Does not mutate snapshot records. Skips other sessions and records without
+    a session id. Fails closed when cash/holdings identity is ambiguous.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return SessionFlowReconstruction(0.0, False, "missing_session_id")
+
+    rows: list[tuple[str, BookObservation]] = []
+    for record in snapshots:
+        if not isinstance(record, Mapping):
+            continue
+        if snapshot_trading_session_id(record) != sid:
+            continue
+        obs = snapshot_observation(record)
+        if obs is None:
+            continue
+        rows.append((snapshot_timestamp(record), obs))
+    rows.sort(key=lambda item: _timestamp_sort_key(item[0]))
+
+    observations = [obs for _, obs in rows]
+    if current is not None:
+        observations.append(current)
+    if len(observations) < 2:
+        return SessionFlowReconstruction(
+            0.0,
+            False,
+            "insufficient_session_snapshots",
+            starting_nav=float(observations[0].nav) if observations else None,
+        )
+
+    total = 0.0
+    notes: list[str] = []
+    intervals = 0
+    for prior, nxt in zip(observations, observations[1:]):
+        recon = reconcile_external_flow(prior, nxt)
+        intervals += 1
+        if not recon.confident:
+            return SessionFlowReconstruction(
+                0.0,
+                False,
+                "insufficient_snapshot_identity",
+                intervals=intervals,
+                starting_nav=float(observations[0].nav),
+                notes=list(recon.notes) + [recon.reason],
+            )
+        total += float(recon.external_capital_flow or 0.0)
+        notes.extend(recon.notes)
+
+    ending = observations[-1]
+    return SessionFlowReconstruction(
+        session_external_capital_flow=_round_flow(total, nav=ending.nav),
+        confident=True,
+        reason="session_snapshot_chain",
+        intervals=len(observations) - 1,
+        starting_nav=float(observations[0].nav),
+        notes=notes,
+    )
+
+
+def select_session_external_flow(
+    *,
+    accounted: float,
+    reconstructed: SessionFlowReconstruction,
+    sod_nav: float | None = None,
+) -> float:
+    """Pick session flow without adding reconstructed totals on top of accounted.
+
+    accounted is persisted session flow plus this interval's incremental flow.
+    reconstructed is the full same-session snapshot chain. Prefer accounted when
+    the chain is incomplete or does not start at SOD.
+    """
+    acc = float(accounted or 0.0)
+    if not reconstructed.confident or reconstructed.intervals < 1:
+        return acc
+    rec = float(reconstructed.session_external_capital_flow or 0.0)
+    if abs(rec - acc) <= FLOW_EPS:
+        return acc
+    if sod_nav is not None and reconstructed.starting_nav is not None:
+        if abs(float(sod_nav) - float(reconstructed.starting_nav)) > _eps(float(sod_nav)):
+            return acc
+    if abs(acc) > abs(rec) + FLOW_EPS:
+        return acc
+    return rec
 
 
 def interval_return(prior_nav: float | None, investment_pnl: float) -> float | None:

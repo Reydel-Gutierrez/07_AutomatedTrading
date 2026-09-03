@@ -517,6 +517,66 @@ def test_live_modules_do_not_call_place():
     assert inspect_live_module_for_forbidden_calls() == []
 
 
+def test_snapshot_placement_flag_follows_env_true(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTIC_LIVE_ORDER_PLACEMENT", "true")
+    result = refresh_live_portfolio(_fetcher(), now=NOW, root=tmp_path, persist=True)
+    assert result.snapshot["live_order_placement_enabled"] is True
+    assert result.placement_disabled is True
+    stored = json.loads((tmp_path / "state" / "live_book" / "current.json").read_text(encoding="utf-8"))
+    assert stored["live_order_placement_enabled"] is True
+
+
+def test_snapshot_placement_flag_follows_live_order_placement_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("LIVE_ORDER_PLACEMENT", "true")
+    result = refresh_live_portfolio(_fetcher(), now=NOW, root=tmp_path, persist=True)
+    assert result.snapshot["live_order_placement_enabled"] is True
+    assert result.placement_disabled is True
+
+
+def test_snapshot_placement_flag_false_when_env_false(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTIC_LIVE_ORDER_PLACEMENT", "false")
+    result = refresh_live_portfolio(_fetcher(), now=NOW, root=tmp_path, persist=True)
+    assert result.snapshot["live_order_placement_enabled"] is False
+
+
+def test_snapshot_placement_flag_false_when_unset(tmp_path):
+    result = refresh_live_portfolio(_fetcher(), now=NOW, root=tmp_path, persist=True)
+    assert result.snapshot["live_order_placement_enabled"] is False
+
+
+def test_snapshot_placement_flag_follows_runtime_config_true(tmp_path, monkeypatch):
+    monkeypatch.delenv("AGENTIC_LIVE_ORDER_PLACEMENT", raising=False)
+    monkeypatch.delenv("LIVE_ORDER_PLACEMENT", raising=False)
+    monkeypatch.setattr(
+        "agentic_portfolio.runtime.load_runtime_config",
+        lambda: {"live_order_placement_enabled": True},
+    )
+    result = refresh_live_portfolio(_fetcher(), now=NOW, root=tmp_path, persist=True)
+    assert result.snapshot["live_order_placement_enabled"] is True
+    assert result.placement_disabled is True
+
+
+def test_executor_enforces_placement_independently_of_snapshot(tmp_path, monkeypatch):
+    from agentic_portfolio.live_approval.types import LiveApprovalStatus
+    from agentic_portfolio.live_execution import FakeBroker
+    from tests.test_live_rc1 import _approved_buy, _stack
+
+    monkeypatch.setenv("AGENTIC_LIVE_ORDER_PLACEMENT", "true")
+    result = refresh_live_portfolio(_fetcher(), now=NOW, root=tmp_path, persist=True)
+    assert result.snapshot["live_order_placement_enabled"] is True
+    monkeypatch.delenv("AGENTIC_LIVE_ORDER_PLACEMENT", raising=False)
+    monkeypatch.delenv("LIVE_ORDER_PLACEMENT", raising=False)
+    broker = FakeBroker()
+    _, executor, approvals, _ = _stack(tmp_path, broker)
+    item = _approved_buy(approvals)
+    if item.status is not LiveApprovalStatus.APPROVED:
+        item = approvals.store.get(item.approval_id)
+    outcome = executor.execute_approved(item)
+    assert outcome.placed is False
+    assert "LIVE_ORDER_PLACEMENT_false" in outcome.reasons
+    assert broker.place_calls == []
+
+
 def test_parse_positions_fail_closed_without_quotes():
     payload = _positions([{"symbol": "MSFT", "quantity": "2", "average_buy_price": "100"}])
     with pytest.raises(LiveDataUnavailable):
