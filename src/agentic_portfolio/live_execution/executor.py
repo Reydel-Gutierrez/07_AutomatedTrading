@@ -12,6 +12,12 @@ from agentic_portfolio.live_execution.audit import record_audit
 from agentic_portfolio.live_execution.broker import BrokerClient
 from agentic_portfolio.live_execution.revalidate import revalidate_for_send
 from agentic_portfolio.live_execution.safety import LiveExecutionSafetyError
+from agentic_portfolio.live_execution.sizing import (
+    ORDER_TOO_SMALL,
+    UNSIZED_SELL,
+    format_quantity,
+    resolve_live_sizing,
+)
 from agentic_portfolio.live_execution.store import ExecutionStore
 from agentic_portfolio.live_execution.types import (
     BrokerOrderRecord,
@@ -21,7 +27,7 @@ from agentic_portfolio.live_execution.types import (
 )
 from agentic_portfolio.notify import NotificationEngine, NotificationKind
 from agentic_portfolio.policy import load_account_rules, load_live_execution_config
-from agentic_portfolio.review.validate import parse_review_response, quantity_str
+from agentic_portfolio.review.validate import parse_review_response
 from agentic_portfolio.runtime import RuntimeMode, live_placement_enabled
 from agentic_portfolio.schemas import PortfolioContext
 
@@ -245,10 +251,19 @@ class LiveOrderExecutor:
         if codes:
             return self._block(intent, approval, codes, LiveApprovalStatus.REVALIDATION_REQUIRED)
 
-        payload = self._build_payload(approval, context, quote)
+        payload, size_reasons = self._build_payload(approval, context, quote)
         if payload is None:
-            return self._block(intent, approval, ["order_too_small_or_unsized"], LiveApprovalStatus.EXECUTION_FAILED)
+            return self._block(
+                intent,
+                approval,
+                size_reasons or [ORDER_TOO_SMALL],
+                LiveApprovalStatus.EXECUTION_FAILED,
+            )
 
+        intent.quantity = _f(payload.get("quantity"))
+        intent.notional = _f(payload.get("dollar_amount"))
+        if intent.notional is None and intent.quantity and quote:
+            intent.notional = float(intent.quantity) * float(quote)
         intent.status = ExecutionIntentStatus.REVIEWING
         self.store.save_intent(intent)
         try:
@@ -270,7 +285,7 @@ class LiveOrderExecutor:
             symbol=intent.symbol,
             side=intent.side,
             quantity=_f(payload.get("quantity")),
-            notional=_f(payload.get("dollar_amount")) or approval.proposed_dollar_amount,
+            notional=_f(payload.get("dollar_amount")) or intent.notional,
             order_type=payload.get("type") or "market",
             status=BrokerOrderStatus.PENDING_SUBMISSION,
             submitted_at=None,
@@ -452,49 +467,51 @@ class LiveOrderExecutor:
             tradable = None
         return quote, tradable
 
-    def _build_payload(self, approval: LiveApproval, context: PortfolioContext, quote: float | None) -> dict[str, Any] | None:
+    def _build_payload(
+        self,
+        approval: LiveApproval,
+        context: PortfolioContext,
+        quote: float | None,
+    ) -> tuple[dict[str, Any] | None, list[str]]:
+        """Build a broker payload from current live state.
+
+        BUY/ADD: dollar-based market orders when prefer_dollar_amount_for_buy is set.
+        SELL: full liquidation of the current live holding.
+        REDUCE: partial sell down to proposed_allocation_pct (target post-trade % of NAV).
+        HOLD/WATCH/NO_ACTION/REJECT: fail closed. Never construct an order.
+        """
         cfg = self.cfg
         decimals = int(cfg.get("quantity_decimal_places") or 6)
-        side = "sell" if str(approval.proposed_action).upper() in {"SELL", "REDUCE"} else "buy"
         order_type = str(cfg.get("default_order_type") or "market")
+        sized = resolve_live_sizing(
+            action=str(approval.proposed_action).upper(),
+            symbol=approval.ticker.upper(),
+            context=context,
+            quote=quote,
+            proposed_dollar_amount=approval.proposed_dollar_amount,
+            proposed_allocation_pct=approval.proposed_allocation_pct,
+            prefer_dollar_amount_for_buy=bool(cfg.get("prefer_dollar_amount_for_buy", True)),
+            order_type=order_type,
+            min_order_notional_usd=float(cfg.get("min_order_notional_usd") or 1.0),
+            quantity_decimal_places=decimals,
+        )
+        if not sized.ok:
+            return None, [sized.reason or UNSIZED_SELL]
         payload: dict[str, Any] = {
             "account_number": self.account_number,
             "symbol": approval.ticker.upper(),
-            "side": side,
+            "side": sized.side,
             "type": order_type,
             "time_in_force": str(cfg.get("default_time_in_force") or "gfd"),
             "market_hours": str(cfg.get("market_hours") or "regular_hours"),
         }
-        nav = float(context.current_nav or 0)
-        if side == "buy":
-            notional = _f(approval.proposed_dollar_amount) or 0.0
-            pct = _f(approval.proposed_allocation_pct)
-            if pct and nav:
-                from_pct = nav * (pct / 100.0)
-                notional = min(notional, from_pct) if notional else from_pct
-            notional = min(notional, float(context.cash or 0), float(context.buying_power or 0))
-            if notional < float(cfg.get("min_order_notional_usd") or 1.0):
-                return None
-            if cfg.get("prefer_dollar_amount_for_buy", True) and order_type == "market":
-                payload["dollar_amount"] = f"{notional:.2f}"
-            elif quote:
-                qty = notional / float(quote)
-                payload["quantity"] = quantity_str(qty, decimals=decimals)
-            else:
-                return None
+        if sized.use_dollar_amount and sized.notional is not None:
+            payload["dollar_amount"] = f"{float(sized.notional):.2f}"
+        elif sized.quantity is not None and sized.quantity > 0:
+            payload["quantity"] = format_quantity(sized.quantity, decimals=decimals)
         else:
-            held = 0.0
-            for pos in context.positions or []:
-                if str(getattr(pos, "symbol", "")).upper() == approval.ticker.upper():
-                    held = float(getattr(pos, "quantity", None) or 0)
-                    if not held:
-                        mv = float(getattr(pos, "market_value", None) or 0)
-                        if quote and mv:
-                            held = mv / float(quote)
-            if held <= 0:
-                return None
-            payload["quantity"] = quantity_str(held, decimals=decimals)
-        return payload
+            return None, [UNSIZED_SELL]
+        return payload, []
 
 
 def _parse_place(raw: Any) -> tuple[str | None, str | None, str | None]:

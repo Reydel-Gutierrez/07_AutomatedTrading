@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Mapping
 
 from agentic_portfolio.live_approval.types import LiveApproval, LiveApprovalStatus
+from agentic_portfolio.live_execution.sizing import held_quantity_from_context
 from agentic_portfolio.policy import load_live_execution_config
 from agentic_portfolio.schemas import PortfolioContext, ThesisStatus
 
@@ -66,30 +67,33 @@ def revalidate_for_send(
     if nav_at and nav_now:
         if abs(nav_now - nav_at) / max(abs(nav_at), 1e-9) > float(cfg.get("max_nav_change_pct") or 0.10):
             codes.append("NAV_CHANGED_MATERIALLY")
+    action = str(approval.proposed_action).upper()
     if bp_at is not None and context.buying_power is not None:
         if abs(float(context.buying_power) - bp_at) / max(abs(bp_at), 1e-9) > float(cfg.get("max_buying_power_change_pct") or 0.15):
             codes.append("BUYING_POWER_CHANGED")
-        if float(context.buying_power) + 1e-6 < _needed_notional(approval, nav_now):
+        # Selling does not consume buying power. proposed_allocation_pct is a
+        # target remaining allocation for REDUCE, not a buy notional.
+        if action in {"BUY", "ADD"} and float(context.buying_power) + 1e-6 < _needed_notional(approval, nav_now):
             codes.append("INSUFFICIENT_BUYING_POWER")
     if cash_at is not None and context.cash is not None:
         if abs(float(context.cash) - cash_at) / max(abs(cash_at), 1e-9) > float(cfg.get("max_cash_change_pct") or 0.15):
-            if str(approval.proposed_action).upper() in {"BUY", "ADD"}:
+            if action in {"BUY", "ADD"}:
                 codes.append("CASH_CHANGED_MATERIALLY")
     needed = _needed_notional(approval, nav_now)
-    if str(approval.proposed_action).upper() in {"BUY", "ADD"}:
+    if action in {"BUY", "ADD"}:
         if context.cash is not None and needed > float(context.cash) + 1e-6:
             codes.append("INSUFFICIENT_CASH")
         if context.buying_power is not None and needed > float(context.buying_power) + 1e-6:
             codes.append("INSUFFICIENT_BUYING_POWER")
-    if str(approval.proposed_action).upper() in {"SELL", "REDUCE"}:
-        held = _held_qty(context, approval.ticker)
+        approved_pct = approval.proposed_allocation_pct
+        if approved_pct and nav_now and needed:
+            resulting = (needed / nav_now) * 100.0
+            if abs(resulting - float(approved_pct)) > float(cfg.get("max_allocation_delta_pct_points") or 1.0):
+                codes.append("INTENDED_POSITION_PCT_CHANGED")
+    if action in {"SELL", "REDUCE"}:
+        held = held_quantity_from_context(context, approval.ticker, quote)
         if held <= 0:
             codes.append("POSITION_CHANGED")
-    approved_pct = approval.proposed_allocation_pct
-    if approved_pct and nav_now and needed:
-        resulting = (needed / nav_now) * 100.0
-        if abs(resulting - float(approved_pct)) > float(cfg.get("max_allocation_delta_pct_points") or 1.0):
-            codes.append("INTENDED_POSITION_PCT_CHANGED")
     if thesis_status and str(thesis_status).upper() in {ThesisStatus.INVALIDATED.value, ThesisStatus.REJECTED.value, ThesisStatus.CLOSED.value}:
         codes.append("THESIS_INVALIDATED")
     if cfg.get("reject_duplicate_open_order", True):
@@ -114,20 +118,6 @@ def _needed_notional(approval: LiveApproval, nav: float) -> float:
         from_pct = nav * (pct / 100.0)
         dollars = min(dollars, from_pct) if dollars else from_pct
     return float(dollars or 0.0)
-
-
-def _held_qty(context: PortfolioContext, symbol: str) -> float:
-    want = str(symbol).upper()
-    for pos in context.positions or []:
-        if str(getattr(pos, "symbol", "")).upper() == want:
-            qty = getattr(pos, "quantity", None)
-            if qty is not None:
-                return float(qty)
-            mv = getattr(pos, "market_value", None)
-            price = getattr(pos, "last_price", None) or getattr(pos, "price", None)
-            if mv and price:
-                return float(mv) / float(price)
-    return 0.0
 
 
 def _f(raw: Any) -> float | None:

@@ -1156,7 +1156,8 @@ class ResearchQueueWorker:
         action = gated.proposed_action
         nav = float(context.current_nav or 0)
         dollars = float(action.proposed_notional or 0)
-        pct = float(name.desired_allocation_pct or 0)
+        alloc_raw = name.desired_allocation_pct
+        pct = float(alloc_raw) if alloc_raw is not None else 0.0
         if pct and not dollars and nav:
             dollars = nav * (pct / 100.0)
         impact = {
@@ -1179,7 +1180,7 @@ class ResearchQueueWorker:
             ticker=report.symbol,
             proposed_action=action.decision.value,
             proposed_dollar_amount=dollars or None,
-            proposed_allocation_pct=pct or None,
+            proposed_allocation_pct=None if alloc_raw is None else pct,
             reason=name.rationale or report.executive_summary,
             ai_rationale=report.executive_summary,
             supporting_thesis=(thesis.thesis_summary if thesis else report.executive_summary),
