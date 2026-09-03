@@ -80,6 +80,7 @@ def run_position_monitor(
     config: dict | None = None,
     journal: Path | None = None,
     runtime_mode: str | None = None,
+    reassess_symbols: set[str] | None = None,
 ) -> MonitoringResult:
     """Monitor holdings. Meaningful triggers reassess thesis and may hit Risk Gate."""
     cfg = config or load_monitoring_config()
@@ -128,6 +129,7 @@ def run_position_monitor(
             now=now,
             config=cfg,
             journal=journal,
+            reassess_symbols=reassess_symbols,
         )
         packet_ids.append(row.facts.symbol)
         rows.append(row)
@@ -209,6 +211,7 @@ def _monitor_one(
     now: datetime,
     config: dict,
     journal: Path | None,
+    reassess_symbols: set[str] | None = None,
 ) -> MonitoredPosition:
     symbol = position.symbol.upper()
     thesis = theses.current_for_symbol(symbol) if theses is not None else None
@@ -274,7 +277,9 @@ def _monitor_one(
         recommended_action=Decision.NO_ACTION,
         research_refresh_requested=refresh_requested,
     )
-    if pre == MonitoringState.HEALTHY or reasoner is None:
+    selected = reassess_symbols is None or symbol in reassess_symbols
+    skip_reasoner = reasoner is None or not selected or (pre == MonitoringState.HEALTHY and reassess_symbols is None)
+    if skip_reasoner:
         if theses is not None and thesis is not None and facts.current_price is not None:
             theses.record_price_observation(thesis.thesis_id, facts.current_price, observed_at=now.isoformat())
         return row
@@ -346,8 +351,6 @@ def _route_action(
     action = reassessment.recommended_action
     if action not in DECISION_ACTIONS:
         return []
-    if action == Decision.ADD and decision_reasoner is None:
-        return []
     if decision_reasoner is not None and report is not None:
         result = run_portfolio_decision(
             [report],
@@ -359,9 +362,15 @@ def _route_action(
             now=now,
             journal=journal,
         )
-        if result.gated_actions or action == Decision.ADD:
+        if result.gated_actions:
+            if action == Decision.ADD:
+                for gated in result.gated_actions:
+                    gated.proposed_action.investment_thesis_review_complete = True
+                    gated.proposed_action.risk_review_complete = True
             return list(result.gated_actions)
     if report is None:
+        return []
+    if action == Decision.ADD and decision_reasoner is None:
         return []
     nd = NameDecision(
         symbol=reassessment.symbol,

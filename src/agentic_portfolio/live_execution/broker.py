@@ -298,6 +298,7 @@ class FakeBroker:
             "data": {
                 "total_value": str(self.nav),
                 "cash": str(self.cash),
+                "equity_value": str(max(0.0, float(self.nav) - float(self.cash))),
                 "buying_power": {"buying_power": f"{self.buying_power:.4f}", "display_currency": "USD"},
             }
         }

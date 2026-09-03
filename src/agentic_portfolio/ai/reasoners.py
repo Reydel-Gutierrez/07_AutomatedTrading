@@ -12,7 +12,7 @@ from typing import Any
 from agentic_portfolio.ai.config import committee_output_token_limits
 from agentic_portfolio.ai.errors import AIError, BudgetDenied, BudgetExhausted, MalformedResponse, SchemaViolation, is_incomplete_max_output_tokens
 from agentic_portfolio.ai.gateway import AIGateway
-from agentic_portfolio.ai.schemas import COMMITTEE_DECISION_SCHEMA, RESEARCH_REPORT_SCHEMA, THESIS_DECISION_SCHEMA
+from agentic_portfolio.ai.schemas import COMMITTEE_DECISION_SCHEMA, MONITORING_REASSESSMENT_SCHEMA, RESEARCH_REPORT_SCHEMA, THESIS_DECISION_SCHEMA
 from agentic_portfolio.ai.types import GatewayResult, ModelRole
 from agentic_portfolio.decision.reasoner import (
     COMMITTEE_CONCISE_RETRY_INSTRUCTION,
@@ -26,6 +26,8 @@ from agentic_portfolio.research.reasoner import CONCISE_RETRY_INSTRUCTION, Resea
 from agentic_portfolio.research.types import ResearchReasoningRequest
 from agentic_portfolio.decision.validate import DecisionValidationError
 from agentic_portfolio.research.validate import ResearchValidationError
+from agentic_portfolio.monitoring.reasoner import MonitoringReasoner, REASONER_INSTRUCTIONS, build_reasoning_prompt as build_monitoring_prompt
+from agentic_portfolio.monitoring.types import MonitoringReasoningRequest
 
 log = logging.getLogger(__name__)
 
@@ -172,10 +174,47 @@ class GatewayDecisionReasoner:
         )
 
 
+class GatewayMonitoringReasoner:
+    """MonitoringReasoner backed by the production AI Gateway. Budgeted; never places."""
+
+    def __init__(self, gateway: AIGateway, *, role: ModelRole | str = ModelRole.RESEARCH) -> None:
+        self.gateway = gateway
+        self.role = role
+        self.last_result = None
+
+    def reason(self, request: MonitoringReasoningRequest) -> dict[str, Any]:
+        prompt = build_monitoring_prompt(request)
+        ticker = str((request.facts or {}).get("symbol") or "") or None
+        system = request.instructions or REASONER_INSTRUCTIONS
+        try:
+            result = self.gateway.complete_structured(
+                role=self.role,
+                purpose="existing_position_monitor",
+                schema_name="monitoring_reassessment",
+                schema=MONITORING_REASSESSMENT_SCHEMA,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                ticker=ticker,
+                critical=True,
+            )
+        except (BudgetDenied, BudgetExhausted):
+            raise
+        self.last_result = result
+        payload = dict(result.payload)
+        payload.setdefault("broker_stop_orders_created", False)
+        return payload
+
+
 # Protocol satisfaction for type checkers.
 def _research_protocol(reasoner: GatewayResearchReasoner) -> ResearchReasoner:
     return reasoner
 
 
 def _decision_protocol(reasoner: GatewayDecisionReasoner) -> DecisionReasoner:
+    return reasoner
+
+
+def _monitoring_protocol(reasoner: GatewayMonitoringReasoner) -> MonitoringReasoner:
     return reasoner

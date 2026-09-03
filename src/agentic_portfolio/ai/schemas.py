@@ -321,6 +321,24 @@ _COMMITTEE_SELECTED = _object(
     ],
 )
 
+MONITORING_REASSESSMENT_SCHEMA = _object(
+    {
+        "symbol": {"type": "string"},
+        "thesis_status": {"type": "string"},
+        "monitoring_state": {"type": "string"},
+        "recommended_action": {"type": "string"},
+        "desired_allocation_pct": {"type": ["number", "null"]},
+        "rationale": {"type": "string"},
+        "opportunistic_verdict": {"type": ["string", "null"]},
+        "tactical_invalidation_detected": {"type": ["boolean", "null"]},
+        "speculative_invalidation_detected": {"type": ["boolean", "null"]},
+        "exit_condition_triggered": {"type": ["boolean", "null"]},
+        "research_refresh_needed": {"type": ["boolean", "null"]},
+        "broker_stop_orders_created": {"type": "boolean"},
+    },
+    ["symbol", "thesis_status", "monitoring_state", "recommended_action", "rationale", "broker_stop_orders_created"],
+)
+
 COMMITTEE_DECISION_SCHEMA = _object(
     {
         "portfolio_action": {"type": "string", "enum": ["ALLOCATE", "HOLD_CASH"]},

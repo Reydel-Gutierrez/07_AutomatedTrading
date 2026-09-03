@@ -17,7 +17,7 @@
     "sleeve_allocation_pct": "sleeve_market_value / current_NAV",
     "position_concentration_pct": "position_market_value / current_NAV",
     "cash_allocation_pct": "cash / current_NAV",
-    "daily_portfolio_return": "(current_NAV - start_of_day_NAV) / start_of_day_NAV",
+    "daily_portfolio_return": "(current_NAV - start_of_day_NAV - session_external_capital_flow) / start_of_day_NAV",
     "drawdown": "(current_NAV / cash_flow_adjusted_HWM) - 1",
     "cash_flow_adjusted_hwm": "See hwm.method. HWM is scaled by NAV_after/NAV_pre_flow so deposits/withdrawals are not treated as performance."
   },

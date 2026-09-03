@@ -39,6 +39,7 @@ def build_context(
     prior_nav: float | None = None,
     prior_hwm: float | None = None,
     external_capital_flow: float = 0.0,
+    session_external_capital_flow: float | None = None,
     spy: SpyBenchmark | None = None,
     timestamp: str | None = None,
     trading_session_id: str | None = None,
@@ -80,8 +81,10 @@ def build_context(
     daily_ret = None
     daily_halt = False
     thr = float(policy["daily_risk_halt"]["threshold_fraction_of_start_of_day_nav"])
+    session_flow = float(external_capital_flow if session_external_capital_flow is None else session_external_capital_flow)
     if start_of_day_nav and start_of_day_nav > 0:
-        daily_ret = (nav - start_of_day_nav) / start_of_day_nav
+        # Investment return: strip session external contributions/withdrawals.
+        daily_ret = (nav - float(start_of_day_nav) - session_flow) / float(start_of_day_nav)
         daily_halt = daily_ret <= -thr
 
     ts = timestamp or datetime.now(timezone.utc).isoformat()
@@ -107,6 +110,7 @@ def build_context(
         high_water_mark=hwm.cash_flow_adjusted_hwm,
         cash_flow_adjusted_hwm=hwm.cash_flow_adjusted_hwm,
         external_capital_flow=hwm.external_capital_flow,
+        session_external_capital_flow=session_flow,
         current_drawdown=hwm.drawdown,
         risk_state=hwm.risk_state,
         spy=spy,
@@ -196,6 +200,7 @@ def portfolio_context_from_dict(raw: Mapping[str, Any] | None) -> PortfolioConte
         high_water_mark=float(data.get("high_water_mark") or nav or 1.0),
         cash_flow_adjusted_hwm=float(data.get("cash_flow_adjusted_hwm") or data.get("high_water_mark") or nav or 1.0),
         external_capital_flow=float(data.get("external_capital_flow") or 0.0),
+        session_external_capital_flow=float(data.get("session_external_capital_flow") or data.get("external_capital_flow") or 0.0),
         current_drawdown=float(data.get("current_drawdown") or 0.0),
         risk_state=_enum(RiskState, risk, RiskState.NORMAL),
         spy=spy,

@@ -1892,6 +1892,9 @@ def dashboard_view(state: DashboardState) -> dict[str, Any]:
         spy=(ctx.get("spy") if isinstance(ctx.get("spy"), dict) else None),
         at=ctx.get("timestamp") or book.get("created_at"),
         mode=ui["environment"],
+        cash=ctx.get("cash"),
+        external_capital_flow=ctx.get("external_capital_flow"),
+        positions=ctx.get("positions"),
     )
     port_ret = total_return(history)
     spy_ret = spy_return(history)

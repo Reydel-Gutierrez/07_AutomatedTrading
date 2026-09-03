@@ -14,12 +14,14 @@ from agentic_portfolio.adapters.portfolio_facts import (
     LiveErrorCode,
     PortfolioFetcher,
     confirm_agentic_account,
+    parse_filled_orders,
     parse_open_orders,
     parse_portfolio,
     parse_positions,
     parse_spy,
 )
 from agentic_portfolio.calendar import EASTERN, NyseEquityCalendar, REGULAR_OPEN
+from agentic_portfolio.cash_flow import TradeFill, observation_from_facts, observation_from_context_dict, reconcile_external_flow
 from agentic_portfolio.context import build_context, portfolio_context_from_dict
 from agentic_portfolio.journal import append_jsonl
 from agentic_portfolio.live.isolation import assert_live_isolated, detect_paper_contamination
@@ -232,6 +234,7 @@ def refresh_live_portfolio(
     theses = theses or ThesisRegistry(base / "state" / "thesis_registry.json")
     try:
         positions = parse_positions(positions_payload, quotes=quotes_payload, sleeves=sleeves, theses=theses)
+        _overlay_live_position_links(positions, base)
     except LiveDataUnavailable as exc:
         if "market value unavailable" in str(exc).lower():
             raise LiveDataUnavailable(str(exc), code=LiveErrorCode.MCP_QUOTES_FAILED) from exc
@@ -248,11 +251,22 @@ def refresh_live_portfolio(
             open_orders = []
 
     session_prior = load_session_state(store.session_path())
+    prior_snapshot = store.current_book() if persist else None
+    prior_ctx = dict((prior_snapshot or {}).get("context") or {}) if prior_snapshot else {}
+    prior_obs = observation_from_context_dict(prior_ctx)
+    current_obs = observation_from_facts(nav=book["current_nav"], cash=book["cash"], positions=positions)
+    fills = [
+        TradeFill(symbol=str(row["symbol"]), side=str(row["side"]), quantity=float(row["quantity"]), price=float(row["price"]))
+        for row in parse_filled_orders(orders_payload, since=str(prior_ctx.get("timestamp") or "") or None)
+    ]
+    recon = reconcile_external_flow(prior_obs, current_obs, fills=fills)
     session = observe_nav_for_session(
         current_nav=book["current_nav"],
         now=stamp,
         prior=session_prior,
         persist_path=store.session_path() if persist else None,
+        incremental_external_flow=recon.external_capital_flow,
+        current_cash=book["cash"],
     )
     prior_nav, prior_hwm = _prior_hwm(store=store, account_number=expected, paper_ctx=paper_ctx)
 
@@ -266,6 +280,8 @@ def refresh_live_portfolio(
         start_of_day_nav=session.sod_nav,
         prior_nav=prior_nav,
         prior_hwm=prior_hwm,
+        external_capital_flow=recon.external_capital_flow,
+        session_external_capital_flow=float(session.session_external_capital_flow or 0.0),
         spy=spy,
         timestamp=stamp.isoformat(),
         trading_session_id=session.session_id,
@@ -325,6 +341,9 @@ def refresh_live_portfolio(
                     "buying_power": context.buying_power,
                     "holdings_count": context.holdings_count,
                     "risk_state": context.risk_state.value if isinstance(context.risk_state, RiskState) else context.risk_state,
+                    "external_capital_flow": context.external_capital_flow,
+                    "session_external_capital_flow": context.session_external_capital_flow,
+                    "daily_portfolio_return": context.daily_portfolio_return,
                     "source_of_truth": LIVE_SOURCE_OF_TRUTH,
                     "live_order_placement_enabled": False,
                     "mcp_tools_used": snapshot["mcp_tools_used"],
@@ -350,6 +369,36 @@ def refresh_live_portfolio(
         leaks=[],
         placement_disabled=True,
     )
+
+
+def _overlay_live_position_links(positions, root: Path) -> None:
+    """Preserve thesis/sleeve from filled-order links when the broker book has only a symbol."""
+    try:
+        from agentic_portfolio.live_execution.positions import load_links
+        from dataclasses import replace
+
+        links = load_links(root, mode=RuntimeMode.LIVE)
+    except Exception:  # noqa: BLE001 — missing links must not fail the refresh
+        return
+    if not links:
+        return
+    for idx, pos in enumerate(list(positions)):
+        link = links.get(pos.symbol.upper())
+        if link is None:
+            continue
+        updates: dict[str, Any] = {}
+        thesis_id = pos.thesis_id or link.thesis_id
+        if thesis_id and thesis_id != pos.thesis_id:
+            updates["thesis_id"] = thesis_id
+        if pos.sleeve is None and link.sleeve:
+            from agentic_portfolio.schemas import Sleeve
+
+            try:
+                updates["sleeve"] = Sleeve(str(link.sleeve).upper())
+            except ValueError:
+                pass
+        if updates:
+            positions[idx] = replace(pos, **updates)
 
 
 def load_live_context(root: Path | None = None) -> PortfolioContext:

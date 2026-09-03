@@ -57,6 +57,7 @@ class AgentServices:
     last_context: Any = None
     executor: Any = None
     discovery_fn: Callable[..., Any] | None = None
+    monitoring_reasoner: Any = None
 
 
 def _now(services: AgentServices) -> datetime:
@@ -228,7 +229,7 @@ def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any
         "APPROVAL_EXPIRY": wrap(lambda ctx: _expire_approvals(services, ctx)),
         "WATCH_STALE_CLEANUP": wrap(lambda ctx: _watch_cleanup(services, ctx)),
         "LIVE_ACCOUNT_REFRESH": wrap(lambda ctx: _refresh_account(services, ctx)),
-        "POSITION_MONITOR": wrap(lambda ctx: _refresh_account(services, ctx, job="POSITION_MONITOR")),
+        "POSITION_MONITOR": wrap(lambda ctx: _run_position_monitor(services, ctx)),
         "QUOTE_REFRESH": wrap(lambda ctx: _quotes(services, ctx)),
         "CANDIDATE_DISCOVERY": wrap(lambda ctx: _discover(services, ctx)),
         "POSTMARKET_EARNINGS_DISCOVERY": wrap(lambda ctx: _discover(services, ctx, job="POSTMARKET_EARNINGS_DISCOVERY", sources=["earnings_calendar", "account_positions"])),
@@ -299,6 +300,12 @@ def _watch_cleanup(services: AgentServices, ctx: dict[str, Any]) -> dict[str, An
     fresh_until = worker._watch_fresh_until() if hasattr(worker, "_watch_fresh_until") else {}
     expired = services.watch.expire_stale(fresh_until=fresh_until)
     return _ok(ctx.get("job") or "WATCH_STALE_CLEANUP", expired=len(expired))
+
+
+def _run_position_monitor(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:
+    from agentic_portfolio.monitoring.live import run_live_position_monitor
+
+    return run_live_position_monitor(services, ctx)
 
 
 def _refresh_account(services: AgentServices, ctx: dict[str, Any], job: str | None = None) -> dict[str, Any]:

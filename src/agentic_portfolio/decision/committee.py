@@ -362,7 +362,7 @@ def committee_fingerprint(committee_input: CommitteeInput, context: PortfolioCon
 def material_portfolio_change(context: PortfolioContext, ledger: dict[str, Any]) -> bool:
     last_holdings = {str(s).upper() for s in (ledger.get("last_holdings_symbols") or [])}
     now_holdings = {p.symbol.upper() for p in context.positions}
-    if ledger.get("last_fingerprint") and now_holdings != last_holdings:
+    if now_holdings != last_holdings:
         return True
     last_cash = ledger.get("last_cash_allocation_pct")
     if last_cash is None:
@@ -385,7 +385,8 @@ def should_run_committee(
         return False, "empty_eligible_set"
     fingerprint = committee_fingerprint(committee_input, context)
     if ledger.get("last_fingerprint") == fingerprint and not force:
-        return False, "unchanged_fingerprint"
+        if trigger != "material_thesis_change":
+            return False, "unchanged_fingerprint"
     if force:
         if ledger.get("last_fingerprint") == fingerprint:
             return False, "unchanged_fingerprint"

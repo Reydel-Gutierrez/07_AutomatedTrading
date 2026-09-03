@@ -42,6 +42,8 @@ class SessionNavState:
     fail_safe_reason: str | None
     last_observed_nav: float | None
     last_observed_at: str | None
+    last_observed_cash: float | None = None
+    session_external_capital_flow: float = 0.0
     note: str = (
         "SOD NAV is session-based (America/New_York). "
         "Do not reset daily-risk state on calendar midnight or weekends."
@@ -64,6 +66,8 @@ class SessionNavState:
             fail_safe_reason=data.get("fail_safe_reason"),
             last_observed_nav=data.get("last_observed_nav"),
             last_observed_at=data.get("last_observed_at"),
+            last_observed_cash=data.get("last_observed_cash"),
+            session_external_capital_flow=float(data.get("session_external_capital_flow") or 0.0),
             note=data.get("note", cls.__dataclass_fields__["note"].default),
         )
 
@@ -89,6 +93,8 @@ def observe_nav_for_session(
     prior: SessionNavState | None = None,
     calendar: MarketCalendar | None = None,
     persist_path: Path | None = None,
+    incremental_external_flow: float = 0.0,
+    current_cash: float | None = None,
 ) -> SessionNavState:
     """Update SOD using the official session calendar.
 
@@ -113,6 +119,8 @@ def observe_nav_for_session(
             fail_safe_reason="naive_datetime",
             last_observed_nav=current_nav,
             last_observed_at=None,
+            last_observed_cash=current_cash,
+            session_external_capital_flow=float(prior.session_external_capital_flow) if prior else 0.0,
         )
         if persist_path is not None:
             save_session_state(kept, persist_path)
@@ -136,6 +144,12 @@ def observe_nav_for_session(
             fail_safe_reason=reason or "calendar_unavailable",
             last_observed_nav=current_nav,
             last_observed_at=ts,
+            last_observed_cash=current_cash,
+            session_external_capital_flow=(
+                float(prior.session_external_capital_flow or 0.0) + float(incremental_external_flow or 0.0)
+                if prior
+                else 0.0
+            ),
         )
         if persist_path is not None:
             save_session_state(kept, persist_path)
@@ -168,6 +182,10 @@ def observe_nav_for_session(
         fail_safe_reason=fail_reason,
         last_observed_nav=current_nav,
         last_observed_at=ts,
+        last_observed_cash=current_cash,
+        session_external_capital_flow=0.0 if rolled or prior is None or prior.sod_nav is None else (
+            float(prior.session_external_capital_flow or 0.0) + float(incremental_external_flow or 0.0)
+        ),
     )
     # Preserve last trading session id on non-trading days so SOD does not reset.
     if reason == "non_trading_day" and prior and prior.sod_nav is not None:
@@ -183,6 +201,8 @@ def observe_nav_for_session(
             fail_safe_reason=reason,
             last_observed_nav=current_nav,
             last_observed_at=ts,
+            last_observed_cash=current_cash,
+            session_external_capital_flow=float(prior.session_external_capital_flow or 0.0) + float(incremental_external_flow or 0.0),
         )
 
     if persist_path is not None:

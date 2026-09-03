@@ -32,6 +32,7 @@ def save_hwm_state(ctx: PortfolioContext, path: Path | None = None) -> Path:
         "drawdown": ctx.current_drawdown,
         "risk_state": ctx.risk_state.value,
         "start_of_day_nav": ctx.start_of_day_nav,
+        "session_external_capital_flow": getattr(ctx, "session_external_capital_flow", 0.0),
         "trading_session_id": ctx.trading_session_id,
         "session_fail_safe": ctx.session_fail_safe,
         "note": "Human-only reset. Agent must not rewrite this to escape HALTED/drawdown.",
@@ -51,6 +52,8 @@ def save_hwm_state(ctx: PortfolioContext, path: Path | None = None) -> Path:
                 fail_safe_reason=None,
                 last_observed_nav=ctx.current_nav,
                 last_observed_at=ctx.timestamp,
+                last_observed_cash=ctx.cash,
+                session_external_capital_flow=float(getattr(ctx, "session_external_capital_flow", 0.0) or 0.0),
             ),
             p.parent / "session_state.json",
         )

@@ -360,6 +360,45 @@ def parse_open_orders(payload: Mapping[str, Any] | None) -> list[OpenOrder]:
     return out
 
 
+def parse_filled_orders(
+    payload: Mapping[str, Any] | None,
+    *,
+    since: str | None = None,
+) -> list[dict[str, Any]]:
+    """Filled/partial fills for cash-flow reconciliation. Not an execution path."""
+    data = _payload_data(payload)
+    rows = data.get("orders") if isinstance(data.get("orders"), list) else []
+    filled_states = {"filled", "partially_filled"}
+    out: list[dict[str, Any]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        state = str(item.get("state") or item.get("status") or "").strip().lower()
+        if state not in filled_states:
+            continue
+        stamp = str(item.get("updated_at") or item.get("last_transaction_at") or item.get("created_at") or "")
+        if since and stamp and stamp < since:
+            continue
+        symbol = str(item.get("symbol") or "").upper()
+        if not symbol:
+            continue
+        qty = _optional_float(item.get("filled_quantity") or item.get("quantity"))
+        price = _optional_float(item.get("average_fill_price") or item.get("price") or item.get("average_price"))
+        if not qty or not price:
+            continue
+        out.append(
+            {
+                "symbol": symbol,
+                "side": str(item.get("side") or ""),
+                "quantity": qty,
+                "price": price,
+                "state": state,
+                "updated_at": stamp or None,
+            }
+        )
+    return out
+
+
 def parse_positions(
     payload: Mapping[str, Any] | None,
     *,
@@ -438,6 +477,7 @@ def watch_quotes_from_payload(
         out[symbol] = {
             "price": price,
             "last": price,
+            "previous_close": _optional_float(merged.get("previous_close") or merged.get("adjusted_previous_close")),
             "spread_bps": spread_bps,
             "bid": bid,
             "ask": ask,

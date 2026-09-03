@@ -341,6 +341,7 @@ class PortfolioContext:
     current_drawdown: float
     risk_state: RiskState
     spy: SpyBenchmark | None
+    session_external_capital_flow: float = 0.0
     facts_note: str = "NAV, cash, BP, positions, orders are observed facts. Classification is deterministic. Sleeves are persisted assignments."
     trading_session_id: str | None = None
     session_fail_safe: bool = False
