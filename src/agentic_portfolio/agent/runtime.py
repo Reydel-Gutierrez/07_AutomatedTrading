@@ -19,7 +19,7 @@ from agentic_portfolio.agent.session import classify_market_phase
 from agentic_portfolio.live.engine import refresh_live_portfolio
 from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.live_approval import LiveApprovalEngine, LiveApprovalStore
-from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore
+from agentic_portfolio.notify import NotificationEngine, NotificationKind, NotificationStore, telegram_sink_from_env
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.policy import load_account_rules, load_agent_config
 from agentic_portfolio.runtime import RuntimeMode, get_active_runtime
@@ -86,7 +86,14 @@ class AgentRuntime:
             live_trade_actions_allowed=bool(exec_cfg.get("live_trade_actions_allowed")),
             auto_execution=bool(exec_cfg.get("auto_execution")),
         )
-        self.notify = NotificationEngine(NotificationStore(self.base), now_fn=self._now)
+        sinks = []
+        try:
+            telegram_sink = telegram_sink_from_env()
+            if telegram_sink is not None:
+                sinks.append(telegram_sink)
+        except Exception:  # noqa: BLE001 — Telegram is optional observability
+            pass
+        self.notify = NotificationEngine(NotificationStore(self.base), sinks=sinks, now_fn=self._now)
         self.connection = connection or ConnectionManager(notify=self.notify, root=self.base, now_fn=self._now)
         if services is None:
             watch_store = WatchStore(self.base, runtime_mode=self.runtime_mode)

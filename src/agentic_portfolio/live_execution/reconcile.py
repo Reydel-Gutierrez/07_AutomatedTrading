@@ -106,7 +106,11 @@ def reconcile_orders(
                     NotificationKind.ORDER_FILLED,
                     title=f"ORDER FILLED — {order.symbol}",
                     body=f"{order.symbol} filled.",
-                    payload={"broker_order_id": order.broker_order_id, "approval_id": order.approval_id},
+                    payload={
+                        "broker_order_id": order.broker_order_id,
+                        "approval_id": order.approval_id,
+                        "ticker": order.symbol,
+                    },
                 )
         elif mapped is BrokerOrderStatus.REJECTED and prior is not BrokerOrderStatus.REJECTED:
             rejected += 1
@@ -116,7 +120,7 @@ def reconcile_orders(
                     NotificationKind.ORDER_REJECTED,
                     title=f"Broker rejected {order.symbol}",
                     body=order.rejection_reason or "rejected",
-                    payload={"approval_id": order.approval_id},
+                    payload={"approval_id": order.approval_id, "ticker": order.symbol},
                 )
         elif mapped is BrokerOrderStatus.CANCELED and prior is not BrokerOrderStatus.CANCELED:
             record_audit("ORDER_CANCELED", root=root, now=stamp, approval_id=order.approval_id)

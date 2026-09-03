@@ -2,6 +2,7 @@
 
 from agentic_portfolio.notify.engine import NotificationEngine
 from agentic_portfolio.notify.store import NotificationStore
+from agentic_portfolio.notify.telegram import TelegramNotificationSink, telegram_sink_from_env
 from agentic_portfolio.notify.types import Notification, NotificationKind, NotificationSink
 
 __all__ = [
@@ -10,4 +11,6 @@ __all__ = [
     "NotificationKind",
     "NotificationSink",
     "NotificationStore",
+    "TelegramNotificationSink",
+    "telegram_sink_from_env",
 ]

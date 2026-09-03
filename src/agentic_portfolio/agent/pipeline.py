@@ -1073,13 +1073,23 @@ class ResearchQueueWorker:
         row["risk_verdict"] = verdict.value if hasattr(verdict, "value") else str(verdict)
         self.candidates.set_status(candidate.candidate_id, CandidateStatus.RESEARCH_COMPLETE)
         self._notify(
-            NotificationKind.TRADE_PROPOSAL,
+            NotificationKind.APPROVAL_REQUIRED,
             title=f"TRADE APPROVAL REQUIRED — {report.symbol}",
             body=(
                 f"{report.symbol} {name.decision.value} "
                 f"{name.desired_allocation_pct or 0:.2f}% NAV. Approving does not place an order."
             ),
-            payload={"symbol": report.symbol, "approval_id": approval.approval_id},
+            payload={
+                "symbol": report.symbol,
+                "ticker": report.symbol,
+                "approval_id": approval.approval_id,
+                "action": approval.proposed_action,
+                "proposed_dollar_amount": approval.proposed_dollar_amount,
+                "proposed_allocation_pct": approval.proposed_allocation_pct,
+                "sleeve": approval.sleeve,
+                "reason": approval.reason,
+                "expires_at": approval.expires_at,
+            },
         )
         return row
 

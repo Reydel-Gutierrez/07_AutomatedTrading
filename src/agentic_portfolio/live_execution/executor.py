@@ -325,10 +325,15 @@ class LiveOrderExecutor:
             record_audit("ORDER_REJECTED", root=self.root, now=self.now(), approval_id=approval.approval_id, reason=order.rejection_reason)
             if self.notify:
                 self.notify.emit(
-                    NotificationKind.SERVICE_ERROR,
+                    NotificationKind.ORDER_REJECTED,
                     title=f"Broker rejected {intent.symbol}",
                     body=order.rejection_reason or "rejected",
-                    payload={"approval_id": approval.approval_id, "broker_order_id": broker_id},
+                    payload={
+                        "approval_id": approval.approval_id,
+                        "broker_order_id": broker_id,
+                        "ticker": intent.symbol,
+                        "action": intent.action,
+                    },
                 )
             return ExecutionOutcome(intent=intent, order=order, placed=False, reasons=["broker_rejected"], review=parsed)
 
@@ -370,17 +375,27 @@ class LiveOrderExecutor:
                 pass
             if self.notify:
                 self.notify.emit(
-                    NotificationKind.TRADE_PROPOSAL,
+                    NotificationKind.ORDER_FILLED,
                     title=f"ORDER FILLED — {intent.symbol}",
                     body=f"{intent.symbol} filled.",
-                    payload={"broker_order_id": broker_id, "approval_id": approval.approval_id},
+                    payload={
+                        "broker_order_id": broker_id,
+                        "approval_id": approval.approval_id,
+                        "ticker": intent.symbol,
+                        "action": intent.action,
+                    },
                 )
         elif self.notify:
             self.notify.emit(
-                NotificationKind.TRADE_PROPOSAL,
+                NotificationKind.ORDER_SUBMITTED,
                 title=f"ORDER SUBMITTED — {intent.symbol}",
                 body=f"{intent.symbol} submitted to broker ({order.status.value}).",
-                payload={"broker_order_id": broker_id, "approval_id": approval.approval_id},
+                payload={
+                    "broker_order_id": broker_id,
+                    "approval_id": approval.approval_id,
+                    "ticker": intent.symbol,
+                    "action": intent.action,
+                },
             )
         return ExecutionOutcome(intent=intent, order=order, placed=True, review=parsed)
 

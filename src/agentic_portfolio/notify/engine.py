@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any, Iterable
 from uuid import uuid4
 
 from agentic_portfolio.notify.store import NotificationStore
 from agentic_portfolio.notify.types import Notification, NotificationKind, NotificationSink
+
+log = logging.getLogger(__name__)
 
 
 class NotificationEngine:
@@ -40,5 +43,12 @@ class NotificationEngine:
         self.store.add(item)
         self._last_kind[key] = body
         for sink in self.sinks:
-            sink.emit(item)
+            try:
+                sink.emit(item)
+            except Exception:
+                log.warning(
+                    "notification sink failed kind=%s sink=%s",
+                    wanted.value,
+                    type(sink).__name__,
+                )
         return item

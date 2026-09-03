@@ -29,6 +29,10 @@ def _isolate_live_and_ai_env(monkeypatch, tmp_path):
     monkeypatch.delenv("AGENTIC_READONLY_MCP_TOKEN_FILE", raising=False)
     monkeypatch.delenv("AGENTIC_LIVE_ORDER_PLACEMENT", raising=False)
     monkeypatch.delenv("LIVE_ORDER_PLACEMENT", raising=False)
+    monkeypatch.delenv("TELEGRAM_NOTIFICATIONS", raising=False)
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("TELEGRAM_CHAT_ID", raising=False)
+    monkeypatch.delenv("AGENTIC_PUBLIC_DASHBOARD_URL", raising=False)
     monkeypatch.setenv("AGENTIC_READONLY_MCP_HOME", str(tmp_path / "mcp-home"))
     from agentic_portfolio.runtime import reset_readonly_broker_runtime
     from agentic_portfolio.live_execution.broker import reset_live_write_broker

@@ -721,7 +721,16 @@ def _bind_watch_approval(services: AgentServices, item, approval, *, created: bo
         NotificationKind.APPROVAL_REQUIRED,
         title=f"TRADE APPROVAL REQUIRED — {item.ticker}",
         body=f"{item.ticker} is ready for human approval. Approving does not place an order.",
-        payload={"approval_id": approval.approval_id, "ticker": item.ticker},
+        payload={
+            "approval_id": approval.approval_id,
+            "ticker": item.ticker,
+            "action": approval.proposed_action,
+            "proposed_dollar_amount": approval.proposed_dollar_amount,
+            "proposed_allocation_pct": approval.proposed_allocation_pct,
+            "sleeve": approval.sleeve,
+            "reason": approval.reason,
+            "expires_at": approval.expires_at,
+        },
     )
     log_activity(services.root, "APPROVAL_CREATED", ticker=item.ticker, approval_id=approval.approval_id)
 
