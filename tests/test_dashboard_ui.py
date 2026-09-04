@@ -90,6 +90,13 @@ def test_admin_dashboard_identity_kpis_and_discovery_nav():
     assert payload["live_order_placement_enabled"] is False
 
 
+def test_admin_dashboard_hides_live_refresh_in_paper():
+    html = _client().get("/").get_data(as_text=True)
+    assert "Portfolio Value" in html
+    assert "Refresh Live State" not in html
+    assert 'action="/live/refresh"' not in html
+
+
 def test_discovery_page_reads_store_and_allows_users(tmp_path):
     client = _admin(_app(tmp_path, nav=10000.0))
     empty = client.get("/discovery")

@@ -7,6 +7,10 @@ from pathlib import Path
 from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.exceptions import HTTPException
 
+from agentic_portfolio.adapters.portfolio_facts import redact_live_error
+from agentic_portfolio.agent.connection import ConnectionManager
+from agentic_portfolio.agent.runtime import refresh_live_from_connection
+from agentic_portfolio.ai.locks import FileLock
 from agentic_portfolio.approval.types import ApprovalStatus
 from agentic_portfolio.approval.validate import ApprovalValidationError
 from agentic_portfolio.dashboard.accounts import (
@@ -55,7 +59,7 @@ from agentic_portfolio.dashboard.safety import (
 from agentic_portfolio.dashboard.settings import resolve_bind, resolve_ui_flags
 from agentic_portfolio.notify import NotificationStore
 from agentic_portfolio.paths import project_root
-from agentic_portfolio.runtime import bootstrap_readonly_broker_runtime
+from agentic_portfolio.runtime import RuntimeMode, bootstrap_readonly_broker_runtime, get_active_runtime
 
 HERE = Path(__file__).resolve().parent
 DECIDE_ENDPOINTS = {"approve_packet", "reject_packet", "api_approve", "api_reject"}
@@ -79,6 +83,7 @@ CSRF_ENDPOINTS = DECIDE_ENDPOINTS | {
     "family_reset_password",
     "notifications_read",
     "api_notifications_read",
+    "refresh_live_state",
 }
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -348,6 +353,49 @@ def create_app(root: Path | None = None) -> Flask:
             view = family_member_view(state(), user)
             return render_template("family_dashboard.html", view=view, page="dashboard")
         return render_template("dashboard.html", view=dashboard_view(state()), page="dashboard")
+
+    @app.post("/live/refresh")
+    def refresh_live_state():
+        user = _current_user()
+        if user is None or user.get("role") != ROLE_ADMIN:
+            return _forbidden()
+        if get_active_runtime() is not RuntimeMode.LIVE:
+            if _json_request():
+                return jsonify({"ok": False, "error": "live_refresh_requires_live_runtime", "placed_order": False}), 409
+            flash("Live state refresh is only available in LIVE runtime.")
+            return redirect(url_for("dashboard_page"))
+        lock = FileLock(
+            Path(app.config["ROOT"]) / "state" / "runtime" / "locks" / "DASHBOARD_LIVE_REFRESH.lock",
+            timeout=0.0,
+        )
+        try:
+            lock.acquire()
+        except TimeoutError:
+            if _json_request():
+                return jsonify({"ok": False, "error": "live_refresh_in_progress", "placed_order": False}), 409
+            flash("Live state refresh is already running.")
+            return redirect(url_for("dashboard_page"))
+        try:
+            connection = ConnectionManager(root=app.config["ROOT"])
+            existing = app.config.get("READONLY_BROKER_RUNTIME")
+            if existing is not None:
+                connection.runtime = existing
+                connection.connected = bool(getattr(existing, "bound", False))
+            refresh_live_from_connection(connection, root=app.config["ROOT"])
+            if connection.runtime is not None:
+                app.config["READONLY_BROKER_RUNTIME"] = connection.runtime
+        except Exception as exc:  # noqa: BLE001 — fail closed; do not place or mutate paper
+            message = redact_live_error(str(exc))
+            if _json_request():
+                return jsonify({"ok": False, "error": message, "placed_order": False, "live_data_unavailable": True}), 409
+            flash(f"Live state refresh failed: {message}")
+            return redirect(url_for("dashboard_page"))
+        finally:
+            lock.release()
+        if _json_request():
+            return jsonify({"ok": True, "placed_order": False})
+        flash("Live state refreshed.")
+        return redirect(url_for("dashboard_page"))
 
     @app.get("/users")
     @app.get("/family")

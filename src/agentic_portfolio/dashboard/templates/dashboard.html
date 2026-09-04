@@ -15,6 +15,12 @@
     <h2>Portfolio Value</h2>
     <p class="figure {{ '' if view.kpis.portfolio_value.available else 'unavailable' }}">{{ view.kpis.portfolio_value.display }}</p>
     <p class="meta">{{ view.updated_at | et }}</p>
+    {% if is_admin and environment == 'LIVE' %}
+    <form class="live-refresh" method="post" action="{{ url_for('refresh_live_state') }}" onsubmit="if(this.dataset.busy)return false;this.dataset.busy='1';var b=this.querySelector('button');if(b)b.disabled=true;">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit">Refresh Live State</button>
+    </form>
+    {% endif %}
   </article>
   <article class="kpi">
     <h2>Cash</h2>

@@ -584,3 +584,65 @@ def test_parse_positions_fail_closed_without_quotes():
     parsed = parse_positions(payload, quotes=_quotes(("MSFT", 120.0)))
     assert parsed[0].market_value == pytest.approx(240.0)
     assert parse_portfolio(_portfolio())["current_nav"] == 500.0
+
+
+def test_dashboard_live_refresh_persists_snapshot_and_ignores_paper(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    monkeypatch.setenv("DASHBOARD_ENVIRONMENT", "LIVE")
+    _write_paper(tmp_path, 10000.0)
+    fetcher = _fetcher(
+        portfolio=_portfolio(nav=1513.67, cash=1000.0, bp=1000.0),
+        positions=_positions([{"symbol": "MSFT", "quantity": "1", "average_buy_price": "500"}]),
+        quotes=_quotes(("MSFT", 513.67), ("SPY", 769.39)),
+    )
+
+    def _refresh(connection, *, root, now=None):
+        assert connection is not None
+        return refresh_live_portfolio(fetcher, now=now or NOW, root=root)
+
+    monkeypatch.setattr("agentic_portfolio.dashboard.app.refresh_live_from_connection", _refresh)
+    client = _admin(create_app(tmp_path).test_client())
+    html = client.get("/").get_data(as_text=True)
+    assert "Refresh Live State" in html
+    assert 'action="/live/refresh"' in html
+    token = _csrf(client)
+    res = client.post("/live/refresh", data={"csrf_token": token}, follow_redirects=True)
+    assert res.status_code == 200
+    body = res.get_data(as_text=True)
+    assert "Live state refreshed." in body
+    assert "$1,513.67" in body
+    assert "$1,000.00" in body
+    assert "$10,000.00" not in body
+    positions = client.get("/positions").get_data(as_text=True)
+    assert "MSFT" in positions
+    live = json.loads((tmp_path / "state" / "live_book" / "current.json").read_text(encoding="utf-8"))
+    assert live["context"]["current_nav"] == 1513.67
+    assert live["paper_environment"] is False
+    paper = json.loads((tmp_path / "state" / "paper_book" / "current.json").read_text(encoding="utf-8"))
+    assert paper["context"]["current_nav"] == 10000.0
+    for tool in ("place_equity_order", "review_equity_order", "cancel_equity_order"):
+        assert tool not in fetcher.calls
+
+
+def test_dashboard_live_refresh_rejects_in_progress(tmp_path, monkeypatch):
+    from agentic_portfolio.ai.locks import FileLock
+
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    monkeypatch.setenv("DASHBOARD_ENVIRONMENT", "LIVE")
+    called = []
+    monkeypatch.setattr(
+        "agentic_portfolio.dashboard.app.refresh_live_from_connection",
+        lambda *_a, **_k: called.append(True),
+    )
+    lock = FileLock(tmp_path / "state" / "runtime" / "locks" / "DASHBOARD_LIVE_REFRESH.lock", timeout=1.0)
+    lock.acquire()
+    try:
+        client = _admin(create_app(tmp_path).test_client())
+        token = _csrf(client)
+        res = client.post("/live/refresh", json={"csrf_token": token})
+        assert res.status_code == 409
+        assert res.get_json()["error"] == "live_refresh_in_progress"
+        assert res.get_json()["placed_order"] is False
+        assert called == []
+    finally:
+        lock.release()

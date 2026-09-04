@@ -226,6 +226,20 @@ h2 { margin: 0 0 10px; font-size: 11px; text-transform: uppercase; letter-spacin
 .figure.unavailable { font-size: 1.05rem; color: var(--muted); font-weight: 600; letter-spacing: 0; }
 .figure-sm { font-size: 1.2rem; margin: 0; }
 .meta, .empty, .crumb { color: var(--muted); }
+.kpi .live-refresh { margin: 2px 0 0; }
+.kpi .live-refresh button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .02em;
+  cursor: pointer;
+}
+.kpi .live-refresh button:hover { color: var(--accent); text-decoration: underline; }
+.kpi .live-refresh button:disabled { opacity: .45; cursor: default; text-decoration: none; }
 .collecting { padding: 56px 12px; text-align: center; font-size: 15px; }
 .lede { margin: 0; color: var(--muted); font-size: 13px; }
 .table-wrap { overflow-x: auto; overflow-y: hidden; display: flex; flex-direction: column; min-height: 0; flex: 1; }

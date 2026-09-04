@@ -364,3 +364,59 @@ def test_ui_flags_keep_localhost_and_paper_default():
     live = resolve_ui_flags(environ={"DASHBOARD_ENVIRONMENT": "LIVE"})
     assert live["environment"] == "LIVE"
     assert live["live_order_placement_enabled"] is False
+
+
+def test_paper_runtime_refuses_live_refresh_without_calling_runtime(tmp_path, monkeypatch):
+    called = []
+    monkeypatch.setattr(
+        "agentic_portfolio.dashboard.app.refresh_live_from_connection",
+        lambda *_a, **_k: called.append(True),
+    )
+    client = _client(tmp_path)
+    html = client.get("/").get_data(as_text=True)
+    assert "Refresh Live State" not in html
+    missing = client.post("/live/refresh")
+    assert missing.status_code == 403
+    token = _csrf(client)
+    res = client.post("/live/refresh", data={"csrf_token": token})
+    assert res.status_code in (302, 303)
+    assert called == []
+
+
+def test_live_refresh_requires_admin_csrf(tmp_path, monkeypatch):
+    monkeypatch.setenv("AGENTIC_RUNTIME_MODE", "LIVE")
+    monkeypatch.setenv("DASHBOARD_ENVIRONMENT", "LIVE")
+    called = []
+    monkeypatch.setattr(
+        "agentic_portfolio.dashboard.app.refresh_live_from_connection",
+        lambda *_a, **_k: called.append(True),
+    )
+    app = create_app(tmp_path)
+    anon = app.test_client()
+    anon_post = anon.post("/live/refresh", data={"csrf_token": "nope"})
+    assert anon_post.status_code in (302, 303, 401)
+    admin = app.test_client()
+    _login(admin)
+    no_csrf = admin.post("/live/refresh")
+    assert no_csrf.status_code == 403
+    token = _csrf(admin)
+    admin.post(
+        "/family/users",
+        json={"csrf_token": token, "name": "Dad", "username": "dad", "password": "dadpass"},
+    )
+    admin.get("/logout")
+    family = app.test_client()
+    _login(family, "dad", "dadpass")
+    family_token = _csrf(family)
+    forbidden = family.post("/live/refresh", data={"csrf_token": family_token})
+    assert forbidden.status_code == 403
+    assert called == []
+
+
+def test_live_refresh_uses_runtime_connection_path():
+    import inspect
+
+    src = inspect.getsource(create_app)
+    assert "refresh_live_from_connection" in src
+    assert "refresh_live_state" in src
+    assert "/live/refresh" in src
