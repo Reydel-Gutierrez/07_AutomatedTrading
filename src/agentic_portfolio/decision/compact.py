@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from agentic_portfolio.decision.residuals import configured_residual_symbol
 from agentic_portfolio.decision.types import CASH_SYMBOL, SPY_SYMBOL
 from agentic_portfolio.schemas import Decision
 
@@ -91,13 +92,24 @@ def expand_compact_committee_payload(payload: dict[str, Any]) -> dict[str, Any]:
             }
         )
         seen.add(CASH_SYMBOL)
-    if SPY_SYMBOL not in seen:
+    residual_symbol = str(configured_residual_symbol()).upper() or SPY_SYMBOL
+    if residual_symbol not in seen:
+        ranked_items.append(
+            {
+                "symbol": residual_symbol,
+                "rank": len(ranked_items) + 1,
+                "action": Decision.NO_ACTION.value,
+                "concise_reason": "Broad-market CORE residual considered; not selected.",
+            }
+        )
+        seen.add(residual_symbol)
+    if residual_symbol != SPY_SYMBOL and SPY_SYMBOL not in seen:
         ranked_items.append(
             {
                 "symbol": SPY_SYMBOL,
                 "rank": len(ranked_items) + 1,
                 "action": Decision.NO_ACTION.value,
-                "concise_reason": "Broad-market residual considered; not selected.",
+                "concise_reason": "Broad-market residual alias considered; not selected.",
             }
         )
         seen.add(SPY_SYMBOL)
@@ -107,14 +119,14 @@ def expand_compact_committee_payload(payload: dict[str, Any]) -> dict[str, Any]:
 
     selected_names = [sym for sym, row in selected_by.items() if row.get("action") in RISK_UP_VALUES]
     vs_cash = comparison_raw.get("vs_cash") or cash_raw.get("rationale") or (
-        "Selected residual improves expected CORE outcome versus retaining cash."
+        "Selected allocation improves expected CORE outcome versus retaining cash."
         if selected_names
-        else "Cash is retained as the residual. Unused sleeve capacity is not a mandate to buy."
+        else str(cash_raw.get("why_cash_beats_broad_market") or "Cash is the selected allocation pending comparative review.")
     )
-    vs_spy = comparison_raw.get("vs_spy") or (
-        "Selected residual versus generic beta, or cash if no residual is justified."
+    vs_spy = comparison_raw.get("vs_spy") or cash_raw.get("why_cash_beats_broad_market") or (
+        "Selected names versus diversified CORE market exposure, or cash if no equity allocation is justified."
         if selected_names
-        else "Prefer cash residual to funding generic beta solely because capital is available."
+        else "Diversified CORE market exposure is currently ranked below cash on the stated comparative evidence."
     )
     comparison = {
         "ranking": ranking,
@@ -140,14 +152,32 @@ def expand_compact_committee_payload(payload: dict[str, Any]) -> dict[str, Any]:
         if sym in decided:
             continue
         if sym == CASH_SYMBOL:
-            decisions.append(
-                {
-                    "symbol": CASH_SYMBOL,
-                    "decision": cash_action,
-                    "desired_allocation_pct": float(cash_weight) if cash_weight is not None else None,
-                    "rationale": str(cash_raw.get("rationale") or row.get("concise_reason") or "Cash remains a valid residual."),
-                }
+            recon = cash_raw.get("reconsideration") if isinstance(cash_raw.get("reconsideration"), dict) else {}
+            trigger = (
+                cash_raw.get("reconsideration_trigger")
+                or recon.get("next_review_reason")
+                or ("scheduled_core_review" if not selected_names else None)
             )
+            cash_decision = {
+                "symbol": CASH_SYMBOL,
+                "decision": cash_action,
+                "desired_allocation_pct": float(cash_weight) if cash_weight is not None else None,
+                "rationale": str(
+                    cash_raw.get("rationale")
+                    or row.get("concise_reason")
+                    or ("Cash is the selected allocation." if not selected_names else "Cash residual after selected CORE weights.")
+                ),
+                "why_preferable_to_spy": cash_raw.get("why_cash_beats_broad_market") or vs_spy,
+            }
+            if trigger:
+                cash_decision["reconsideration"] = {
+                    "why_lost": None if selected_names else (cash_raw.get("why_cash_beats_broad_market") or vs_spy),
+                    "lost_to": list(selected_names or [residual_symbol]),
+                    "next_review_reason": trigger,
+                    "next_review_at": recon.get("next_review_at") or cash_raw.get("next_review_at"),
+                    "not_an_auto_execution_condition": True,
+                }
+            decisions.append(cash_decision)
             decided.add(CASH_SYMBOL)
             continue
         selected = selected_by.get(sym)

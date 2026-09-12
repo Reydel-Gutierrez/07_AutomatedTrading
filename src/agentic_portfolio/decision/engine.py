@@ -12,13 +12,22 @@ from typing import Any
 from uuid import uuid4
 
 from agentic_portfolio.decision.reasoner import COMMITTEE_REASONER_INSTRUCTIONS, REASONER_INSTRUCTIONS, DecisionReasoner
-from agentic_portfolio.decision.residuals import build_broad_market_residual, resolve_cash_yield, spy_snapshot_usable
+from agentic_portfolio.decision.residuals import (
+    build_broad_market_residual,
+    build_strategic_residual_report,
+    configured_residual_symbol,
+    residual_config,
+    residual_strategic_buy_eligible,
+    resolve_cash_yield,
+    spy_snapshot_usable,
+)
 from agentic_portfolio.decision.safety import assert_draft, assert_no_forbidden_tools
 from agentic_portfolio.decision.store import DecisionStore
 from agentic_portfolio.decision.types import (
     CASH_SYMBOL,
     RISK_UP,
     SPY_SYMBOL,
+    STRATEGIC_RESIDUAL_SOURCE,
     DecisionPacket,
     DecisionReasoningRequest,
     DecisionResult,
@@ -32,7 +41,7 @@ from agentic_portfolio.journal import append_jsonl, append_risk_decision
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.policy import load_decision_config, load_policy
 from agentic_portfolio.research.packet import freeze_portfolio, freeze_risk_limits
-from agentic_portfolio.research.types import ResearchReport
+from agentic_portfolio.research.types import ResearchConclusion, ResearchReport, ResearchStatus
 from agentic_portfolio.risk_gate import evaluate
 from agentic_portfolio.schemas import (
     ClassificationStatus,
@@ -81,11 +90,34 @@ def run_portfolio_decision(
     market_evidence_reports: list[ResearchReport] | None = None,
 ) -> DecisionResult:
     """Form DRAFT theses, decide, convert to ProposedAction, send to Risk Gate."""
-    if not reports:
-        raise DecisionValidationError("at least one ResearchReport is required")
     cfg = config or load_decision_config()
-    assert_no_forbidden_tools(cfg.get("forbidden_tools") or [])
+    pol = policy if policy is not None else load_policy()
     now = now or datetime.now(timezone.utc)
+    residual_cfg = residual_config(cfg)
+    residual_symbol = configured_residual_symbol(policy=pol, decision_cfg=cfg, residual_cfg=residual_cfg)
+    residual_snapshot = None
+    residual_report = None
+    if committee:
+        residual_snapshot = build_broad_market_residual(
+            context,
+            spy_report=_residual_evidence_report(reports, market_evidence_reports, residual_symbol),
+            now=now,
+            residual_cfg=residual_cfg,
+            policy=pol,
+            decision_cfg=cfg,
+        )
+        has_qualified_residual_research = any(
+            str(r.symbol or "").upper() == residual_symbol
+            and r.research_conclusion is ResearchConclusion.ADVANCE_TO_THESIS
+            and r.research_status is ResearchStatus.RESEARCH_COMPLETE
+            for r in reports
+        )
+        if residual_strategic_buy_eligible(residual_snapshot) and not has_qualified_residual_research:
+            residual_report = build_strategic_residual_report(residual_snapshot, now=now)
+    if not reports:
+        if not (committee and residual_report is not None):
+            raise DecisionValidationError("at least one ResearchReport is required")
+    assert_no_forbidden_tools(cfg.get("forbidden_tools") or [])
     batch_id = str(uuid4())
     theses = theses or (ThesisRegistry() if persist else None)
     sleeves = sleeves or (SleeveRegistry() if persist else None)
@@ -97,8 +129,10 @@ def run_portfolio_decision(
         cfg,
         now=now,
         committee=committee,
-        policy=policy,
+        policy=pol,
         market_evidence_reports=market_evidence_reports,
+        residual_snapshot=residual_snapshot,
+        residual_cfg=residual_cfg,
     )
     request = DecisionReasoningRequest(
         packet=to_dict(packet),
@@ -112,7 +146,13 @@ def run_portfolio_decision(
 
     try:
         raw = reasoner.reason(request)
-        normalized, unsupported, errors = validate_payload(raw, reports, current_nav=context.current_nav)
+        normalized, unsupported, errors = validate_payload(
+            raw,
+            reports,
+            current_nav=context.current_nav,
+            committee=committee,
+            residual_snapshot=(packet.policy_context or {}).get("broad_market_residual"),
+        )
     except DecisionValidationError as exc:
         _journal(
             {
@@ -126,7 +166,7 @@ def run_portfolio_decision(
         )
         return DecisionResult(
             packet=packet,
-            reports=list(reports),
+            reports=_decision_reports(reports, residual_report),
             context=context,
             batch_id=batch_id,
             validation_errors=[str(exc)],
@@ -134,6 +174,8 @@ def run_portfolio_decision(
 
     comparison = _comparison(normalized.get("comparison") or {})
     report_by = {r.symbol.upper(): r for r in reports}
+    if residual_report is not None and residual_report.symbol.upper() not in report_by:
+        report_by[residual_report.symbol.upper()] = residual_report
     dec_by = {d["symbol"]: d for d in normalized["decisions"]}
     thesis_records: list[ThesisRecord] = []
     thesis_by_symbol: dict[str, ThesisRecord] = {}
@@ -171,7 +213,7 @@ def run_portfolio_decision(
         decisions=decisions,
         comparison=comparison,
         gated_actions=gated,
-        reports=list(reports),
+        reports=_decision_reports(reports, residual_report),
         context=context,
         batch_id=batch_id,
         unsupported_claims=list(unsupported),
@@ -197,14 +239,47 @@ def run_portfolio_decision(
     return result
 
 
+def _residual_evidence_report(
+    reports: list[ResearchReport],
+    extra: list[ResearchReport] | None,
+    residual_symbol: str,
+) -> ResearchReport | None:
+    want = str(residual_symbol or SPY_SYMBOL).upper()
+    candidates = [
+        r
+        for r in list(reports) + list(extra or [])
+        if str(r.symbol or "").upper() == want
+        and str(getattr(r, "research_source", "") or "") != STRATEGIC_RESIDUAL_SOURCE
+    ]
+    if not candidates and want != SPY_SYMBOL:
+        candidates = [
+            r
+            for r in list(reports) + list(extra or [])
+            if str(r.symbol or "").upper() == SPY_SYMBOL
+            and str(getattr(r, "research_source", "") or "") != STRATEGIC_RESIDUAL_SOURCE
+        ]
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda r: r.started_at or "", reverse=True)[0]
+
+
+def _decision_reports(
+    reports: list[ResearchReport],
+    residual_report: ResearchReport | None,
+) -> list[ResearchReport]:
+    out = list(reports)
+    if residual_report is None:
+        return out
+    if any(str(r.symbol or "").upper() == residual_report.symbol.upper() for r in out):
+        return out
+    return out + [residual_report]
+
+
 def _spy_evidence_report(
     reports: list[ResearchReport],
     extra: list[ResearchReport] | None,
 ) -> ResearchReport | None:
-    candidates = [r for r in list(reports) + list(extra or []) if str(r.symbol or "").upper() == SPY_SYMBOL]
-    if not candidates:
-        return None
-    return sorted(candidates, key=lambda r: r.started_at or "", reverse=True)[0]
+    return _residual_evidence_report(reports, extra, SPY_SYMBOL)
 
 
 def build_packet(
@@ -217,24 +292,31 @@ def build_packet(
     committee: bool = False,
     policy: dict | None = None,
     market_evidence_reports: list[ResearchReport] | None = None,
+    residual_snapshot: dict[str, Any] | None = None,
+    residual_cfg: dict[str, Any] | None = None,
 ) -> DecisionPacket:
     now = now or datetime.now(timezone.utc)
     pol = policy if policy is not None else load_policy()
-    alternatives = list(config.get("alternatives") or [CASH_SYMBOL, SPY_SYMBOL])
+    residual_symbol = configured_residual_symbol(policy=pol, residual_cfg=residual_cfg)
+    alternatives = list(config.get("alternatives") or [CASH_SYMBOL, residual_symbol])
     for report in reports:
         if report.symbol.upper() not in alternatives:
             alternatives.append(report.symbol.upper())
     if CASH_SYMBOL not in alternatives:
         alternatives.insert(0, CASH_SYMBOL)
-    if SPY_SYMBOL not in alternatives:
-        alternatives.insert(1, SPY_SYMBOL)
+    if residual_symbol not in alternatives:
+        alternatives.insert(1, residual_symbol)
+    if residual_symbol != SPY_SYMBOL and SPY_SYMBOL not in alternatives:
+        alternatives.insert(2, SPY_SYMBOL)
     existing = [to_dict(t) for t in theses.all_records()] if theses is not None else []
     cash_pol = dict(pol.get("cash") or {})
     cash_alt = resolve_cash_yield(cash_pol, now=now, context=context)
-    residual = build_broad_market_residual(
+    residual = residual_snapshot or build_broad_market_residual(
         context,
-        spy_report=_spy_evidence_report(reports, market_evidence_reports),
+        spy_report=_residual_evidence_report(reports, market_evidence_reports, residual_symbol),
         now=now,
+        residual_cfg=residual_cfg,
+        policy=pol,
     )
     spy_included = spy_snapshot_usable(residual)
     core_alloc = (context.sleeve_allocation_pct or {}).get("CORE_GROWTH")
@@ -252,7 +334,8 @@ def build_packet(
             "cash_is_valid_alternative": True,
             "spy_is_valid_alternative": True,
             "spy_included": spy_included,
-            "no_action_always_valid": True,
+            "no_action_always_valid": not committee,
+            "no_action_requires_comparative_justification": bool(committee),
             "unused_sleeve_capacity_is_not_a_mandate": True,
             "never_force_deployment": bool(cash_pol.get("never_force_deployment", True)),
             "thesis_remains_draft_until_real_execution": True,
@@ -271,20 +354,32 @@ def build_packet(
                 "yield_status": cash_alt["yield_status"],
                 "yield_unit": cash_alt["yield_unit"],
                 "optionality": True,
+                "optionality_is_not_sufficient_for_indefinite_cash": True,
                 "inflation_and_opportunity_cost": True,
                 "evaluate_expected_return_foregone": True,
             },
             "broad_market_residual": residual,
             "spy_alternative": residual,
+            "strategic_core_allocation": {
+                "vehicle_symbol": residual_symbol,
+                "distinct_from_individual_name_selection": True,
+                "lower_evidence_burden_than_concentrated_stock": True,
+                "does_not_require_company_thesis": True,
+                "does_not_require_advance_to_thesis": True,
+                "eligible": bool(residual.get("strategic_residual_eligible")),
+                "still_subject_to_risk_gate_and_human_approval": True,
+            },
             "starter_position": {
                 "allowed": True,
                 "not_mandatory": True,
                 "empty_book_does_not_require_deployment": True,
+                "empty_book_should_consider_strategic_core": True,
                 "unused_sleeve_capacity_is_not_a_reason_to_buy": True,
                 "size_from_conviction_valuation_construction_and_risk_gate": True,
             },
             "committee": committee,
             "residual_allocation_question": committee,
+            "portfolio_allocation_question": committee,
             "concentration": pol.get("concentration"),
             "sleeves": {k: {"target_percent_of_nav": v.get("target_percent_of_nav")} for k, v in (pol.get("sleeves") or {}).items()},
             "core_allocation_pct": core_alloc,
@@ -365,10 +460,12 @@ def _liquidity_from_report(report: ResearchReport) -> LiquidityInputs:
     avg_vol = fact_value(report, "average_volume")
     recent_vol = fact_value(report, "volume")
     spread = fact_value(report, "spread_pct")
-    adv = float(avg_vol) * float(price) if avg_vol and price else None
+    adv = fact_value(report, "median_daily_dollar_volume_20d")
+    if adv is None:
+        adv = float(avg_vol) * float(price) if avg_vol and price else None
     recent = float(recent_vol) * float(price) if recent_vol and price else None
     return LiquidityInputs(
-        median_daily_dollar_volume_20d=adv,
+        median_daily_dollar_volume_20d=float(adv) if adv is not None else None,
         recent_dollar_volume=recent,
         bid_ask_spread_pct=float(spread) if spread is not None else None,
     )

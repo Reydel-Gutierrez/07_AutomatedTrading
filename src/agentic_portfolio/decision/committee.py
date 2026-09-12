@@ -21,6 +21,13 @@ from agentic_portfolio.agent.safety import assert_auto_execution_disabled
 from agentic_portfolio.context import build_context
 from agentic_portfolio.decision.engine import run_portfolio_decision
 from agentic_portfolio.decision.reasoner import DecisionReasoner
+from agentic_portfolio.decision.residuals import (
+    build_broad_market_residual,
+    configured_residual_symbol,
+    is_strategic_residual_report,
+    residual_strategic_buy_eligible,
+    spy_snapshot_usable,
+)
 from agentic_portfolio.decision.types import CASH_SYMBOL, GatedAction, RISK_UP, SPY_SYMBOL, DecisionResult
 from agentic_portfolio.decision.validate import DecisionValidationError
 from agentic_portfolio.discovery.store import CandidateStore
@@ -31,7 +38,7 @@ from agentic_portfolio.research.store import ResearchStore
 from agentic_portfolio.research.types import ResearchConclusion, ResearchReport, ResearchStatus
 from agentic_portfolio.risk_gate import evaluate
 from agentic_portfolio.runtime import RuntimeMode, discovery_state_dir, live_placement_enabled
-from agentic_portfolio.schemas import Candidate, Decision, GateVerdict, PortfolioContext, Position, Sleeve
+from agentic_portfolio.schemas import Candidate, CandidateStatus, ClassificationStatus, Decision, GateVerdict, PortfolioContext, Position, SecurityClass, Sleeve
 from agentic_portfolio.watch.types import WatchItem, WatchStatus
 
 
@@ -41,7 +48,10 @@ CORE_SLEEVE = Sleeve.CORE_GROWTH
 RISK_PERMIT = {GateVerdict.PASS, GateVerdict.REQUIRES_ENHANCED_REVIEW}
 ACTIONABLE = {Decision.BUY, Decision.ADD, Decision.REDUCE, Decision.SELL}
 MATERIAL_CASH_PCT = 0.05
-SCHEDULED_REVIEW_DAYS = 7
+SCHEDULED_REVIEW_DAYS = 1
+DEFAULT_SCHEDULED_REVIEW_HOURS = 24
+DEFAULT_NO_ACTION_MAX_AGE_HOURS = 24
+NO_ACTION_STATUSES = {"NO_ACTION", "HOLD_CASH"}
 
 COMMITTEE_EVENTS = (
     "CORE_COMMITTEE_STARTED",
@@ -53,6 +63,7 @@ COMMITTEE_EVENTS = (
     "CORE_COMMITTEE_SKIPPED_UNCHANGED",
     "CORE_COMMITTEE_REEVALUATION",
     "CORE_COMMITTEE_OUTPUT_TRUNCATED_RETRY",
+    "CORE_COMMITTEE_NO_ACTION_EXPIRED_REVIEW",
 )
 
 
@@ -114,6 +125,14 @@ class CommitteeResult:
     LIVE_ORDER_PLACEMENT: bool = False
     reevaluation: bool = False
     spy_included: bool = False
+    previous_portfolio_action: str | None = None
+    portfolio_action: str | None = None
+    cash_target_weight: float | None = None
+    broad_market_target_weight: float | None = None
+    cash_reason: str | None = None
+    broad_market_reason: str | None = None
+    prior_decision_age_hours: float | None = None
+    next_eligible_scheduled_review_at: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -148,6 +167,14 @@ class CommitteeResult:
             "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
             "reevaluation": self.reevaluation,
             "spy_included": self.spy_included,
+            "previous_portfolio_action": self.previous_portfolio_action,
+            "portfolio_action": self.portfolio_action,
+            "cash_target_weight": self.cash_target_weight,
+            "broad_market_target_weight": self.broad_market_target_weight,
+            "cash_reason": self.cash_reason,
+            "broad_market_reason": self.broad_market_reason,
+            "prior_decision_age_hours": self.prior_decision_age_hours,
+            "next_eligible_scheduled_review_at": self.next_eligible_scheduled_review_at,
             "placement_attempted": False,
         }
 
@@ -243,6 +270,9 @@ def collect_committee_input(
         sym = str(report.symbol or "").upper()
         if not sym or sym in {CASH_SYMBOL}:
             return
+        if is_strategic_residual_report(report):
+            skipped.append({"symbol": sym, "reason": "strategic_residual_not_individual", "source": source})
+            return
         if not is_core_report(report) and not (watch is not None and is_core_sleeve(watch.sleeve)):
             skipped.append({"symbol": sym, "reason": "not_core", "source": source})
             return
@@ -308,10 +338,21 @@ def collect_committee_input(
 
     eligible = sorted(by_symbol.values(), key=lambda item: item.symbol)
     reports = [item.report for item in eligible]
-    alternatives = [CASH_SYMBOL, SPY_SYMBOL] + [item.symbol for item in eligible if item.symbol not in {CASH_SYMBOL, SPY_SYMBOL}]
-    spy_evidence = by_symbol[SPY_SYMBOL].report if SPY_SYMBOL in by_symbol else None
+    residual_symbol = configured_residual_symbol()
+    alternatives = [CASH_SYMBOL, residual_symbol] + [
+        item.symbol for item in eligible if item.symbol not in {CASH_SYMBOL, residual_symbol}
+    ]
+    if residual_symbol != SPY_SYMBOL and SPY_SYMBOL not in alternatives:
+        alternatives.insert(2, SPY_SYMBOL)
+    spy_evidence = by_symbol[residual_symbol].report if residual_symbol in by_symbol else None
+    if spy_evidence is None and SPY_SYMBOL in by_symbol:
+        spy_evidence = by_symbol[SPY_SYMBOL].report
     if spy_evidence is None and hasattr(research_store, "latest_for_symbol"):
-        spy_evidence = research_store.latest_for_symbol(SPY_SYMBOL)
+        spy_evidence = research_store.latest_for_symbol(residual_symbol) or (
+            research_store.latest_for_symbol(SPY_SYMBOL) if residual_symbol != SPY_SYMBOL else None
+        )
+    if is_strategic_residual_report(spy_evidence):
+        spy_evidence = None
     return CommitteeInput(
         reports=reports,
         alternatives=alternatives,
@@ -348,12 +389,13 @@ def committee_fingerprint(committee_input: CommitteeInput, context: PortfolioCon
         "daily_risk_halt": bool(context.daily_risk_halt),
         # Schema/config identity only — not live SPY ticks — so this packet
         # change reevaluates once without burning the $10 cap on every quote.
-        "packet_schema": "cash_yield_and_spy_residual_v1",
+        "packet_schema": "strategic_core_residual_v1",
         "cash_yield": {
             "current_yield": cash_pol.get("current_yield"),
             "yield_source": cash_pol.get("yield_source"),
             "yield_as_of": cash_pol.get("yield_as_of"),
         },
+        "residual_symbol": configured_residual_symbol(),
     }
     blob = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
@@ -364,12 +406,71 @@ def material_portfolio_change(context: PortfolioContext, ledger: dict[str, Any])
     now_holdings = {p.symbol.upper() for p in context.positions}
     if now_holdings != last_holdings:
         return True
+    last_risk = ledger.get("last_risk_state")
+    now_risk = context.risk_state.value if context.risk_state else None
+    if last_risk is not None and last_risk != now_risk:
+        return True
+    last_halt = ledger.get("last_daily_risk_halt")
+    if last_halt is not None and bool(last_halt) != bool(context.daily_risk_halt):
+        return True
     last_cash = ledger.get("last_cash_allocation_pct")
     if last_cash is None:
         return False
     cfg = (load_decision_config().get("core_committee") or {})
     threshold = float(cfg.get("material_cash_allocation_change") or MATERIAL_CASH_PCT)
     return abs(float(context.cash_allocation_pct or 0.0) - float(last_cash)) >= threshold
+
+
+def _committee_hours() -> tuple[float, float]:
+    cfg = load_decision_config().get("core_committee") or {}
+    if cfg.get("scheduled_review_hours") is not None:
+        scheduled = float(cfg.get("scheduled_review_hours"))
+    else:
+        days = float(cfg.get("scheduled_review_days") or SCHEDULED_REVIEW_DAYS)
+        scheduled = days * 24.0
+    no_action = cfg.get("no_action_max_age_hours")
+    no_action_hours = float(no_action) if no_action is not None else float(DEFAULT_NO_ACTION_MAX_AGE_HOURS)
+    return scheduled, no_action_hours
+
+
+def _parse_ledger_time(raw: Any) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        stamp = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=timezone.utc)
+    return stamp
+
+
+def _age_hours(last_at: Any, now: datetime) -> float | None:
+    prev = _parse_ledger_time(last_at)
+    if prev is None:
+        return None
+    return (now - prev).total_seconds() / 3600.0
+
+
+def last_was_no_action(ledger: dict[str, Any]) -> bool:
+    status = str(ledger.get("last_status") or "").upper()
+    action = str(ledger.get("last_portfolio_action") or "").upper()
+    return status in NO_ACTION_STATUSES or action in NO_ACTION_STATUSES
+
+
+def needs_periodic_review(context: PortfolioContext, ledger: dict[str, Any]) -> bool:
+    cash_pct = float(context.cash_allocation_pct or 0.0)
+    empty = int(context.holdings_count or 0) == 0 or not list(context.positions or [])
+    deployable = cash_pct >= MATERIAL_CASH_PCT or (empty and float(context.cash or 0.0) > 0)
+    return deployable or last_was_no_action(ledger)
+
+
+def next_scheduled_review_at(ledger: dict[str, Any], *, now: datetime) -> datetime:
+    scheduled_h, _ = _committee_hours()
+    prev = _parse_ledger_time(ledger.get("last_run_at"))
+    if prev is None:
+        return now
+    return prev + timedelta(hours=scheduled_h)
 
 
 def should_run_committee(
@@ -380,45 +481,42 @@ def should_run_committee(
     now: datetime,
     trigger: str,
     force: bool = False,
+    residual_eligible: bool = False,
 ) -> tuple[bool, str]:
-    if not committee_input.reports:
+    if not committee_input.reports and not residual_eligible:
         return False, "empty_eligible_set"
     fingerprint = committee_fingerprint(committee_input, context)
-    if ledger.get("last_fingerprint") == fingerprint and not force:
-        if trigger != "material_thesis_change":
-            return False, "unchanged_fingerprint"
-    if force:
-        if ledger.get("last_fingerprint") == fingerprint:
-            return False, "unchanged_fingerprint"
-        return True, trigger or "forced_reevaluation"
+    last_fp = ledger.get("last_fingerprint")
+    same_fp = last_fp == fingerprint
     last_ids = set(ledger.get("last_research_ids") or [])
     now_ids = {r.research_id for r in committee_input.reports}
     if now_ids - last_ids:
         return True, "new_advance_to_thesis" if trigger == "new_advance_to_thesis" else trigger or "new_eligible_research"
     if material_portfolio_change(context, ledger):
         return True, "portfolio_or_cash_change"
-    last_at = ledger.get("last_run_at")
-    days = float((load_decision_config().get("core_committee") or {}).get("scheduled_review_days") or SCHEDULED_REVIEW_DAYS)
-    if trigger in {"scheduled_review", "weekend_review", "material_thesis_change"}:
-        if last_at and trigger == "scheduled_review":
-            try:
-                prev = datetime.fromisoformat(str(last_at).replace("Z", "+00:00"))
-                if prev.tzinfo is None:
-                    prev = prev.replace(tzinfo=timezone.utc)
-                if now - prev < timedelta(hours=12) and fingerprint == ledger.get("last_fingerprint"):
-                    return False, "unchanged_fingerprint"
-            except ValueError:
-                pass
+    if trigger == "material_thesis_change":
         return True, trigger
-    if last_at:
-        try:
-            prev = datetime.fromisoformat(str(last_at).replace("Z", "+00:00"))
-            if prev.tzinfo is None:
-                prev = prev.replace(tzinfo=timezone.utc)
-            if now - prev >= timedelta(days=days):
-                return True, "scheduled_review"
-        except ValueError:
-            pass
+
+    age = _age_hours(ledger.get("last_run_at"), now)
+    scheduled_h, no_action_h = _committee_hours()
+    periodic = needs_periodic_review(context, ledger)
+    expired_no_action = last_was_no_action(ledger) and (age is None or age >= no_action_h)
+    expired_schedule = age is None or age >= scheduled_h
+
+    # Expiry is checked before unchanged_fingerprint so a stale NO_ACTION
+    # cannot skip scheduled reviews across multiple days.
+    if periodic and expired_no_action:
+        return True, "no_action_expired_review"
+    if periodic and expired_schedule:
+        if trigger in {"scheduled_review", "weekend_review"}:
+            return True, trigger
+        return True, "scheduled_review"
+    if force and not same_fp:
+        return True, trigger or "forced_reevaluation"
+    if same_fp:
+        return False, "unchanged_fingerprint"
+    if force:
+        return True, trigger or "forced_reevaluation"
     if trigger == "new_advance_to_thesis":
         return True, trigger
     return False, "no_material_change"
@@ -507,6 +605,53 @@ def sequential_risk_gate(
     return out
 
 
+def ensure_strategic_residual_candidate(worker, symbol: str, snapshot: dict[str, Any], now: datetime) -> Candidate | None:
+    store = getattr(worker, "candidates", None)
+    if store is None:
+        return None
+    existing = store.active_for_symbol(symbol) or store.current_for_symbol(symbol)
+    price = snapshot.get("current_price") if isinstance(snapshot, dict) else None
+    if existing is not None:
+        if price is not None:
+            existing.current_price = price
+        if existing.security_class is None:
+            existing.security_class = SecurityClass.BROAD_MARKET_INDEX_ETF
+        if existing.classification_status is None:
+            existing.classification_status = ClassificationStatus.VALIDATED
+        if not existing.provisional_sleeve:
+            existing.provisional_sleeve = Sleeve.CORE_GROWTH
+        return store.upsert(existing)
+    cand = Candidate(
+        candidate_id=f"strategic-residual-{symbol.lower()}",
+        symbol=symbol,
+        discovered_at=now.isoformat(),
+        discovery_source="strategic_core_residual",
+        provisional_sleeve=Sleeve.CORE_GROWTH,
+        security_class=SecurityClass.BROAD_MARKET_INDEX_ETF,
+        classification_status=ClassificationStatus.VALIDATED,
+        current_price=price,
+        status=CandidateStatus.RESEARCH_COMPLETE,
+        reasons=["configured_core_benchmark_vehicle"],
+    )
+    return store.upsert(cand, allow_status_transition=True)
+
+
+def _observability_from_decided(decided: DecisionResult, residual_symbol: str) -> dict[str, Any]:
+    residual = str(residual_symbol or SPY_SYMBOL).upper()
+    cash = next((d for d in decided.decisions if d.symbol == CASH_SYMBOL), None)
+    market = next((d for d in decided.decisions if d.symbol == residual), None)
+    selected = [d.symbol for d in decided.decisions if d.decision in RISK_UP and d.symbol not in {CASH_SYMBOL, residual}]
+    return {
+        "portfolio_action": "ALLOCATE" if any(d.decision in RISK_UP for d in decided.decisions) else "HOLD_CASH",
+        "cash_target_weight": cash.desired_allocation_pct if cash else None,
+        "broad_market_target_weight": market.desired_allocation_pct if market else None,
+        "selected_individual_names": selected,
+        "cash_reason": (decided.comparison.vs_cash if decided.comparison else None) or (cash.rationale if cash else None),
+        "broad_market_reason": (decided.comparison.vs_spy if decided.comparison else None)
+        or (market.why_preferable_to_cash if market else None),
+    }
+
+
 def _committee_meta(reasoner: DecisionReasoner | None) -> tuple[str | None, str | None]:
     result = getattr(reasoner, "last_result", None)
     if result is None:
@@ -573,8 +718,19 @@ def run_core_committee(
     result.skipped = list(committee_input.skipped)
     result.alternatives_considered = list(committee_input.alternatives)
     result.reports_in_packet = len(committee_input.reports)
-    result.fingerprint = committee_fingerprint(committee_input, context) if committee_input.reports else None
-    result.spy_included = False
+    residual_symbol = configured_residual_symbol()
+    residual_snapshot = build_broad_market_residual(
+        context,
+        spy_report=committee_input.spy_evidence_report,
+        now=now,
+    )
+    residual_eligible = residual_strategic_buy_eligible(residual_snapshot)
+    result.spy_included = spy_snapshot_usable(residual_snapshot)
+    committee_input.spy_included = result.spy_included
+    result.fingerprint = committee_fingerprint(committee_input, context)
+    result.previous_portfolio_action = ledger.get("last_portfolio_action") or ledger.get("last_status")
+    result.prior_decision_age_hours = _age_hours(ledger.get("last_run_at"), now)
+    result.next_eligible_scheduled_review_at = next_scheduled_review_at(ledger, now=now).isoformat()
 
     _event(
         root,
@@ -586,6 +742,10 @@ def run_core_committee(
         portfolio_cash=context.cash,
         holdings_count=context.holdings_count,
         reevaluation=reevaluation,
+        previous_portfolio_action=result.previous_portfolio_action,
+        prior_decision_age_hours=result.prior_decision_age_hours,
+        next_eligible_scheduled_review_at=result.next_eligible_scheduled_review_at,
+        spy_included=result.spy_included,
     )
     _event(
         root,
@@ -598,6 +758,8 @@ def run_core_committee(
         reports_in_packet=result.reports_in_packet,
         portfolio_cash=context.cash,
         holdings_count=context.holdings_count,
+        spy_included=result.spy_included,
+        residual_eligible=residual_eligible,
     )
 
     run, why = should_run_committee(
@@ -607,22 +769,42 @@ def run_core_committee(
         now=now,
         trigger=trigger,
         force=force,
+        residual_eligible=residual_eligible,
     )
-    if not run:
-        result.status = "SKIPPED_UNCHANGED" if why == "unchanged_fingerprint" else "SKIPPED"
-        result.skipped_reason = why
+    if why == "no_action_expired_review":
         _event(
             root,
-            "CORE_COMMITTEE_SKIPPED_UNCHANGED" if why == "unchanged_fingerprint" else "CORE_COMMITTEE_SKIPPED_UNCHANGED",
+            "CORE_COMMITTEE_NO_ACTION_EXPIRED_REVIEW",
             persist=persist,
             journal=journal,
             reason=why,
+            previous_portfolio_action=result.previous_portfolio_action,
+            prior_decision_age_hours=result.prior_decision_age_hours,
+            next_eligible_scheduled_review_at=result.next_eligible_scheduled_review_at,
             candidate_symbols=result.eligible_symbols,
             portfolio_cash=context.cash,
             holdings_count=context.holdings_count,
         )
+    if not run:
+        result.status = "SKIPPED_UNCHANGED" if why == "unchanged_fingerprint" else "SKIPPED"
+        result.skipped_reason = why
+        skip_kind = "CORE_COMMITTEE_SKIPPED_UNCHANGED"
+        _event(
+            root,
+            skip_kind,
+            persist=persist,
+            journal=journal,
+            reason=why,
+            previous_portfolio_action=result.previous_portfolio_action,
+            prior_decision_age_hours=result.prior_decision_age_hours,
+            next_eligible_scheduled_review_at=result.next_eligible_scheduled_review_at,
+            candidate_symbols=result.eligible_symbols,
+            portfolio_cash=context.cash,
+            holdings_count=context.holdings_count,
+            spy_included=result.spy_included,
+        )
         return result
-    if not committee_input.reports:
+    if not committee_input.reports and not residual_eligible:
         result.status = "SKIPPED"
         result.skipped_reason = "empty_eligible_set"
         return result
@@ -713,6 +895,26 @@ def run_core_committee(
         theses=worker.theses,
     )
     by_report = {item.symbol: item for item in committee_input.eligible}
+    residual_report = next(
+        (
+            r
+            for r in decided.reports
+            if is_strategic_residual_report(r) or str(r.symbol or "").upper() == residual_symbol
+        ),
+        None,
+    )
+    selected_residual = next(
+        (d for d in decided.decisions if d.symbol.upper() == residual_symbol and d.decision in ACTIONABLE),
+        None,
+    )
+    if selected_residual is not None and residual_report is not None and residual_symbol not in by_report:
+        cand = ensure_strategic_residual_candidate(worker, residual_symbol, residual_snapshot, now)
+        by_report[residual_symbol] = EligibleAlternative(
+            symbol=residual_symbol,
+            report=residual_report,
+            source="strategic_residual",
+            candidate=cand,
+        )
     symbol_rows = worker.apply_committee_decisions(decided, by_report, context)
     result.symbol_rows = symbol_rows
     result.theses_created = len(decided.theses)
@@ -723,9 +925,15 @@ def run_core_committee(
     result.decisions = {d.symbol: d.decision.value for d in decided.decisions}
     result.selected_symbols = [d.symbol for d in decided.decisions if d.decision in RISK_UP]
     result.target_allocations = {d.symbol: d.desired_allocation_pct for d in decided.decisions if d.decision in RISK_UP | {Decision.HOLD, Decision.NO_ACTION, Decision.WATCH}}
+    obs = _observability_from_decided(decided, residual_symbol)
+    result.portfolio_action = obs["portfolio_action"]
+    result.cash_target_weight = obs["cash_target_weight"]
+    result.broad_market_target_weight = obs["broad_market_target_weight"]
+    result.cash_reason = obs["cash_reason"]
+    result.broad_market_reason = obs["broad_market_reason"]
     if not result.selected_symbols:
         result.status = "NO_ACTION"
-        result.reason = (decided.comparison.vs_cash if decided.comparison else None) or "cash_retained"
+        result.reason = result.cash_reason or "cash_retained"
         _event(
             root,
             "CORE_COMMITTEE_NO_ACTION",
@@ -733,9 +941,18 @@ def run_core_committee(
             journal=journal,
             candidate_symbols=result.eligible_symbols,
             selected_symbols=[],
-            target_allocation=None,
+            target_allocation=result.target_allocations,
             alternatives_considered=result.alternatives_considered,
             reason=result.reason,
+            previous_portfolio_action=result.previous_portfolio_action,
+            portfolio_action=result.portfolio_action,
+            cash_target_weight=result.cash_target_weight,
+            broad_market_target_weight=result.broad_market_target_weight,
+            selected_individual_names=obs["selected_individual_names"],
+            cash_reason=result.cash_reason,
+            broad_market_reason=result.broad_market_reason,
+            prior_decision_age_hours=result.prior_decision_age_hours,
+            next_eligible_scheduled_review_at=now.isoformat(),
             portfolio_cash=context.cash,
             holdings_count=context.holdings_count,
             ai_role=result.ai_role,
@@ -753,6 +970,14 @@ def run_core_committee(
             target_allocation=result.target_allocations,
             alternatives_considered=result.alternatives_considered,
             reason=(decided.comparison.notes if decided.comparison else None),
+            previous_portfolio_action=result.previous_portfolio_action,
+            portfolio_action=result.portfolio_action,
+            cash_target_weight=result.cash_target_weight,
+            broad_market_target_weight=result.broad_market_target_weight,
+            selected_individual_names=obs["selected_individual_names"],
+            cash_reason=result.cash_reason,
+            broad_market_reason=result.broad_market_reason,
+            prior_decision_age_hours=result.prior_decision_age_hours,
             portfolio_cash=context.cash,
             holdings_count=context.holdings_count,
             ai_role=result.ai_role,
@@ -791,15 +1016,24 @@ def run_core_committee(
         ledger["last_research_ids"] = [r.research_id for r in committee_input.reports]
         ledger["last_holdings_symbols"] = [p.symbol.upper() for p in context.positions]
         ledger["last_cash_allocation_pct"] = context.cash_allocation_pct
+        ledger["last_risk_state"] = context.risk_state.value if context.risk_state else None
+        ledger["last_daily_risk_halt"] = bool(context.daily_risk_halt)
         ledger["last_batch_id"] = result.batch_id
         ledger["last_decisions"] = result.decisions
+        ledger["last_status"] = result.status
+        ledger["last_portfolio_action"] = result.portfolio_action
+        ledger["last_cash_target_weight"] = result.cash_target_weight
+        ledger["last_broad_market_target_weight"] = result.broad_market_target_weight
         run_row = {
             "at": now.isoformat(),
-            "trigger": trigger,
+            "trigger": trigger if why != "no_action_expired_review" else why,
             "fingerprint": result.fingerprint,
             "status": result.status,
+            "portfolio_action": result.portfolio_action,
             "symbols": result.eligible_symbols,
             "selected": result.selected_symbols,
+            "cash_target_weight": result.cash_target_weight,
+            "broad_market_target_weight": result.broad_market_target_weight,
             "batch_id": result.batch_id,
             "proposals_created": result.proposals_created,
             "reevaluation": reevaluation,

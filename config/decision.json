@@ -17,16 +17,28 @@
   "empty_book_does_not_require_deployment": true,
   "core_committee": {
     "enabled": true,
-    "question": "residual_allocation",
+    "question": "portfolio_allocation",
     "cash_is_valid": true,
-    "no_action_always_valid": true,
+    "no_action_always_valid": false,
+    "no_action_requires_comparative_justification": true,
     "do_not_force_buy": true,
     "prefer_one_coherent_allocation": true,
     "exclude_waiting_for_liquidity": true,
     "exclude_stale_research": true,
     "dedupe_unchanged_fingerprint": true,
-    "scheduled_review_days": 7,
-    "material_cash_allocation_change": 0.05
+    "scheduled_review_hours": 24,
+    "no_action_max_age_hours": 24,
+    "scheduled_review_days": 1,
+    "material_cash_allocation_change": 0.05,
+    "broad_market_residual": {
+      "symbol": "SPY",
+      "security_class": "BROAD_MARKET_INDEX_ETF",
+      "allows_strategic_allocation_without_company_thesis": true,
+      "median_daily_dollar_volume_20d": 20000000000,
+      "volume_source": "configured_supporting_adv",
+      "volume_as_of": "2026-09-02",
+      "volume_notes": "Supporting ADV for the configured CORE residual vehicle only. Refresh if stale. Not used for individual stocks."
+    }
   },
   "no_universal_valuation_thresholds": true,
   "no_universal_growth_thresholds": true,

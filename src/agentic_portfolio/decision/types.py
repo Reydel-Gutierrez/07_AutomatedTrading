@@ -19,6 +19,7 @@ from agentic_portfolio.schemas import (
 
 CASH_SYMBOL = "CASH"
 SPY_SYMBOL = "SPY"
+STRATEGIC_RESIDUAL_SOURCE = "strategic_residual"
 RISK_UP = {Decision.BUY, Decision.ADD}
 
 

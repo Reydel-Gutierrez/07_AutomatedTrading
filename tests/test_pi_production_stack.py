@@ -223,11 +223,19 @@ def test_real_stack_refresh_persists_and_dashboard_reads(monkeypatch, tmp_path):
     assert view["cash"] == 1000.0
     assert view["buying_power"] == 1000.0
     assert view["positions"][0]["symbol"] == "MSFT"
-    html = _admin(create_app(tmp_path).test_client()).get("/").get_data(as_text=True)
+    client = _admin(create_app(tmp_path).test_client())
+    html = client.get("/").get_data(as_text=True)
     assert "LIVE DATA UNAVAILABLE" not in html or "halt-banner\">LIVE DATA UNAVAILABLE" not in html
     assert "$1,513.67" in html
-    assert "MSFT" in html
     assert "$10,000.00" not in html
+    assert "/static/shell.js" in html
+    assert "/static/dashboard.js" in html
+    payload = client.get("/api/dashboard").get_json()
+    assert payload["live_data_unavailable"] is False
+    assert payload["nav"] == 1513.67
+    assert payload["positions"][0]["symbol"] == "MSFT"
+    positions = client.get("/positions").get_data(as_text=True)
+    assert "MSFT" in positions
     tools = [name for name, _ in fake.tool_calls()]
     assert "get_accounts" in tools
     assert "get_portfolio" in tools

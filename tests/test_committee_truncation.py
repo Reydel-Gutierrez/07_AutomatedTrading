@@ -139,8 +139,12 @@ def _compact_payload(symbols: list[str], *, buy: str | None = None, alloc: float
         "selected_allocations": selected,
         "cash": {
             "target_weight": cash_pct,
-            "rationale": "Cash remains a valid residual.",
+            "rationale": "Cash remains a valid residual." if buy else "Affirmative cash allocation versus diversified CORE exposure.",
             "action": "HOLD",
+            "why_cash_beats_broad_market": None
+            if buy
+            else "Current evidence does not support diversified CORE exposure over cash.",
+            "reconsideration_trigger": "scheduled_core_review",
         },
         "comparison": {
             "vs_cash": "Deploy only if a residual improves the book versus retaining cash.",

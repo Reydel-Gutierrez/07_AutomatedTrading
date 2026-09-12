@@ -5,9 +5,11 @@ from __future__ import annotations
 from typing import Any
 
 from agentic_portfolio.decision.compact import expand_compact_committee_payload, is_compact_committee_payload
+from agentic_portfolio.decision.residuals import configured_residual_symbol, residual_strategic_buy_eligible
 from agentic_portfolio.decision.types import CASH_SYMBOL, RISK_UP, SPY_SYMBOL
 from agentic_portfolio.research.sufficiency import is_etf_class
 from agentic_portfolio.research.types import ResearchConclusion, ResearchReport, ResearchStatus
+from agentic_portfolio.risk_gate import position_ceiling_pct
 from agentic_portfolio.schemas import Decision, ExitPolicy, SecurityClass, Sleeve
 
 VALID_DECISIONS = {d.value for d in Decision}
@@ -81,6 +83,8 @@ def validate_payload(
     reports: list[ResearchReport],
     *,
     current_nav: float,
+    committee: bool = False,
+    residual_snapshot: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[str], list[str]]:
     if not isinstance(payload, dict):
         raise DecisionValidationError("AI output is not an object")
@@ -113,9 +117,10 @@ def validate_payload(
     if ranking and not isinstance(ranking, list):
         raise DecisionValidationError("comparison.ranking must be a list")
     ranking_u = [str(s).upper() for s in ranking]
+    residual_symbol = str((residual_snapshot or {}).get("symbol") or configured_residual_symbol()).upper()
     if CASH_SYMBOL not in ranking_u:
         errors.append("cash_not_in_ranking")
-    if SPY_SYMBOL not in ranking_u:
+    if residual_symbol not in ranking_u and SPY_SYMBOL not in ranking_u:
         errors.append("spy_not_in_ranking")
 
     theses_raw = payload.get("theses") or []
@@ -179,11 +184,23 @@ def validate_payload(
         if sym == CASH_SYMBOL:
             if decision not in {Decision.HOLD, Decision.NO_ACTION, Decision.WATCH}:
                 errors.append("cash_must_be_hold_or_no_action")
+            recon = item.get("reconsideration")
+            if recon is not None and not isinstance(recon, dict):
+                errors.append(f"malformed_reconsideration:{sym}")
+            elif isinstance(recon, dict):
+                item["reconsideration"] = _normalize_reconsideration(recon)
             normalized_decisions.append(item)
             continue
 
         report = by_symbol.get(sym)
-        if report is None and sym != SPY_SYMBOL:
+        strategic_residual = _is_strategic_residual_buy(
+            sym,
+            report,
+            committee=committee,
+            residual_snapshot=residual_snapshot,
+            residual_symbol=residual_symbol,
+        )
+        if report is None and not strategic_residual and sym not in {SPY_SYMBOL, residual_symbol}:
             errors.append(f"no_research_report:{sym}")
         thesis = thesis_by_symbol.get(sym)
 
@@ -192,9 +209,13 @@ def validate_payload(
                 errors.append(f"buy_add_requires_allocation:{sym}")
             if not item.get("why_preferable_to_cash") and not comparison.get("vs_cash"):
                 errors.append(f"missing_vs_cash:{sym}")
-            if not _spy_comparison_is_circular(sym, report) and not item.get("why_preferable_to_spy") and not comparison.get("vs_spy"):
+            circular = _spy_comparison_is_circular(sym, report, residual_symbol=residual_symbol)
+            if not circular and not item.get("why_preferable_to_spy") and not comparison.get("vs_spy"):
                 errors.append(f"missing_vs_spy:{sym}")
-            if report is None:
+            if strategic_residual:
+                if not residual_strategic_buy_eligible(residual_snapshot):
+                    errors.append(f"buy_add_requires_usable_residual_snapshot:{sym}")
+            elif report is None:
                 errors.append(f"buy_add_requires_research:{sym}")
             else:
                 if report.research_status != ResearchStatus.RESEARCH_COMPLETE:
@@ -204,7 +225,7 @@ def validate_payload(
             if thesis is None:
                 errors.append(f"buy_add_requires_thesis:{sym}")
             else:
-                errors.extend(_thesis_field_errors(sym, thesis, report=report))
+                errors.extend(_thesis_field_errors(sym, thesis, report=report, strategic_residual=strategic_residual))
                 errors.extend(_exit_policy_errors(sym, thesis, decision))
             if alloc:
                 risk_up_pct += alloc
@@ -226,6 +247,16 @@ def validate_payload(
         normalized_decisions.append(item)
 
     errors.extend(named_decision_invariant_errors(seen, reports))
+    errors.extend(
+        _allocation_consistency_errors(
+            normalized_decisions,
+            by_symbol=by_symbol,
+            residual_symbol=residual_symbol,
+            committee=committee,
+        )
+    )
+    if committee:
+        errors.extend(_cash_justification_errors(normalized_decisions, comparison, residual_symbol=residual_symbol))
     if risk_up_pct > 100 + 1e-9:
         errors.append("risk_increasing_allocation_exceeds_100")
     if current_nav is not None and current_nav <= 0:
@@ -263,13 +294,114 @@ def parse_exit_policy(raw: Any) -> ExitPolicy:
     return policy
 
 
-def _spy_comparison_is_circular(symbol: str, report: ResearchReport | None) -> bool:
-    """SPY (or the same broad-market residual) must not be required to beat SPY."""
-    if symbol == SPY_SYMBOL:
+def _spy_comparison_is_circular(
+    symbol: str,
+    report: ResearchReport | None,
+    *,
+    residual_symbol: str = SPY_SYMBOL,
+) -> bool:
+    """The configured broad-market residual must not be required to beat itself."""
+    residual = str(residual_symbol or SPY_SYMBOL).upper()
+    if symbol == residual or symbol == SPY_SYMBOL:
         return True
     if report is None:
         return False
-    return report.security_class is SecurityClass.BROAD_MARKET_INDEX_ETF and str(report.symbol or "").upper() == SPY_SYMBOL
+    return report.security_class is SecurityClass.BROAD_MARKET_INDEX_ETF and str(report.symbol or "").upper() == residual
+
+
+def _is_strategic_residual_buy(
+    symbol: str,
+    report: ResearchReport | None,
+    *,
+    committee: bool,
+    residual_snapshot: dict[str, Any] | None,
+    residual_symbol: str,
+) -> bool:
+    """BUY/ADD of the configured residual may skip company ADVANCE_TO_THESIS in committee mode only."""
+    if not committee:
+        return False
+    if str(symbol or "").upper() != str(residual_symbol or "").upper():
+        return False
+    if not residual_strategic_buy_eligible(residual_snapshot):
+        return False
+    if report is not None and report.research_conclusion == REQUIRED_NAMED_DECISION_CONCLUSION:
+        if report.research_status == ResearchStatus.RESEARCH_COMPLETE:
+            return False
+    return True
+
+
+def _allocation_consistency_errors(
+    decisions: list[dict[str, Any]],
+    *,
+    by_symbol: dict[str, ResearchReport],
+    residual_symbol: str,
+    committee: bool,
+) -> list[str]:
+    errors: list[str] = []
+    weights: dict[str, float] = {}
+    for item in decisions:
+        alloc = item.get("desired_allocation_pct")
+        if alloc is None:
+            continue
+        try:
+            alloc_f = float(alloc)
+        except (TypeError, ValueError):
+            continue
+        sym = str(item["symbol"]).upper()
+        decision = Decision(item["decision"])
+        if decision in RISK_UP or sym == CASH_SYMBOL or (decision == Decision.HOLD and alloc_f > 0):
+            weights[sym] = alloc_f
+        if decision in RISK_UP:
+            report = by_symbol.get(sym)
+            security_class = report.security_class if report is not None else None
+            sleeve = report.provisional_sleeve if report is not None else Sleeve.CORE_GROWTH
+            if security_class is None and sym == str(residual_symbol).upper():
+                security_class = SecurityClass.BROAD_MARKET_INDEX_ETF
+                sleeve = Sleeve.CORE_GROWTH
+            if security_class is not None:
+                ceiling = position_ceiling_pct(security_class, sleeve)
+                if ceiling is not None and alloc_f > ceiling + 1e-9:
+                    errors.append(f"allocation_exceeds_ceiling:{sym}:{alloc_f:g}>{ceiling:g}")
+    total = sum(weights.values())
+    if total > 100 + 1e-6:
+        errors.append("allocation_weights_exceed_100")
+    if committee and weights:
+        cash_w = weights.get(CASH_SYMBOL)
+        equity_w = sum(v for k, v in weights.items() if k != CASH_SYMBOL)
+        if cash_w is not None and cash_w + equity_w > 100 + 1e-6:
+            errors.append("allocation_weights_exceed_100")
+    return errors
+
+
+def _cash_justification_errors(
+    decisions: list[dict[str, Any]],
+    comparison: dict[str, Any],
+    *,
+    residual_symbol: str,
+) -> list[str]:
+    """100% cash / no equity must be an affirmative comparative choice, not a missing-ticker leftover."""
+    errors: list[str] = []
+    risk_up = [item for item in decisions if item.get("decision") in RISK_UP_VALUES]
+    if risk_up:
+        return errors
+    cash = next((item for item in decisions if str(item.get("symbol") or "").upper() == CASH_SYMBOL), None)
+    cash_pct = float(cash.get("desired_allocation_pct") or 100.0) if cash else 100.0
+    if cash_pct < 99.0 - 1e-9:
+        return errors
+    vs_spy = str(comparison.get("vs_spy") or "").strip()
+    why_market = str((cash or {}).get("why_preferable_to_spy") or vs_spy).strip()
+    rationale = str((cash or {}).get("rationale") or comparison.get("vs_cash") or "").strip()
+    recon = (cash or {}).get("reconsideration") if isinstance((cash or {}).get("reconsideration"), dict) else {}
+    trigger = str(recon.get("next_review_reason") or "").strip()
+    if not why_market:
+        errors.append(f"cash_requires_why_{residual_symbol.lower()}_inferior")
+    if not rationale:
+        errors.append("cash_requires_comparative_rationale")
+    if cash is not None and not trigger:
+        recon = dict(recon or {})
+        recon["next_review_reason"] = "scheduled_core_review"
+        cash["reconsideration"] = _normalize_reconsideration(recon)
+    return errors
 
 
 def _is_core_or_etf_thesis(thesis: dict[str, Any], report: ResearchReport | None) -> bool:
@@ -309,7 +441,13 @@ def _normalize_reconsideration(raw: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _thesis_field_errors(symbol: str, thesis: dict[str, Any], *, report: ResearchReport | None = None) -> list[str]:
+def _thesis_field_errors(
+    symbol: str,
+    thesis: dict[str, Any],
+    *,
+    report: ResearchReport | None = None,
+    strategic_residual: bool = False,
+) -> list[str]:
     errors = []
     for key in (
         "thesis_summary",
@@ -327,10 +465,10 @@ def _thesis_field_errors(symbol: str, thesis: dict[str, Any], *, report: Researc
             errors.append(f"missing_{key}:{symbol}")
     catalysts = thesis.get("catalysts")
     has_catalysts = isinstance(catalysts, list) and any(str(item).strip() for item in catalysts)
-    if _is_core_or_etf_thesis(thesis, report):
-        # CORE ownership reasons / ETF vehicle theses are not near-term event catalysts.
+    if strategic_residual or _is_core_or_etf_thesis(thesis, report):
+        # CORE ownership / ETF vehicle theses are not near-term event catalysts.
         if not has_catalysts and not _has_nonempty_list(thesis, "thesis_drivers"):
-            if is_etf_class(getattr(report, "security_class", None)):
+            if strategic_residual or is_etf_class(getattr(report, "security_class", None)):
                 pass
             elif not thesis.get("why_position_should_exist"):
                 errors.append(f"missing_catalysts:{symbol}")

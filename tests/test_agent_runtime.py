@@ -1439,12 +1439,22 @@ def test_successful_mcp_refresh_persists_and_dashboard_reads_it(tmp_path, monkey
     assert view["buying_power"] == 1000.0
     assert view["positions"][0]["symbol"] == "MSFT"
     assert view["live_order_placement_enabled"] is False
-    html = _admin(create_app(tmp_path).test_client()).get("/").get_data(as_text=True)
+    client = _admin(create_app(tmp_path).test_client())
+    html = client.get("/").get_data(as_text=True)
     assert '<div class="halt-banner">LIVE DATA UNAVAILABLE</div>' not in html
     assert "$1,513.67" in html
     assert "$1,000.00" in html
-    assert "MSFT" in html
     assert "$10,000.00" not in html
+    assert "/static/shell.js" in html
+    assert "/static/dashboard.js" in html
+    payload = client.get("/api/dashboard").get_json()
+    assert payload["live_data_unavailable"] is False
+    assert payload["nav"] == 1513.67
+    assert payload["cash"] == 1000.0
+    assert payload["buying_power"] == 1000.0
+    assert payload["positions"][0]["symbol"] == "MSFT"
+    positions = client.get("/positions").get_data(as_text=True)
+    assert "MSFT" in positions
     for tool in FORBIDDEN_MCP_TOOLS:
         assert tool not in fetcher.calls
 

@@ -673,15 +673,20 @@ def test_spy_snapshot_reaches_packet_from_live_quote():
     packet = build_packet([_report("MSFT")], context, None, load_decision_config(), now=NOW, committee=True)
     residual = packet.policy_context["broad_market_residual"]
     assert packet.policy_context["spy_included"] is True
+    assert packet.policy_context["no_action_always_valid"] is False
+    assert packet.policy_context["no_action_requires_comparative_justification"] is True
+    assert packet.policy_context["starter_position"]["empty_book_should_consider_strategic_core"] is True
+    assert packet.policy_context["strategic_core_allocation"]["does_not_require_advance_to_thesis"] is True
     assert residual is packet.policy_context["spy_alternative"]
     assert residual["symbol"] == "SPY"
     assert residual["current_price"] == pytest.approx(640.12)
     assert residual["return_1d"] == pytest.approx(0.0042)
     assert residual["return_21d"] is None
     assert residual["usable_for_comparison"] is True
-    assert residual["comparison_only"] is True
-    assert residual["insufficient_for_purchase"] is True
-    assert residual["does_not_authorize_buy"] is True
+    assert residual["comparison_snapshot"] is True
+    assert residual["strategic_residual_eligible"] is True
+    assert residual["does_not_authorize_individual_stock_buy"] is True
+    assert residual["does_not_authorize_buy"] is False
     assert packet.portfolio_facts.spy["price"] == pytest.approx(640.12)
     assert "SPY" not in {r["symbol"] for r in packet.reports}
 
@@ -719,7 +724,9 @@ def test_operational_spy_report_enriches_snapshot_without_entering_packet_report
     assert residual["trend"] == "up"
     assert residual["fund_pe"] == pytest.approx(26.2)
     assert residual["usable_for_comparison"] is True
-    assert residual["does_not_authorize_buy"] is True
+    assert residual["strategic_residual_eligible"] is True
+    assert residual["does_not_authorize_individual_stock_buy"] is True
+    assert residual["does_not_authorize_buy"] is False
 
 
 def test_spy_buy_without_research_report_is_rejected():

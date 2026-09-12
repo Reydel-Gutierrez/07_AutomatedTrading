@@ -12,13 +12,19 @@ from pathlib import Path
 import pytest
 
 from agentic_portfolio.agent.activity import read_activity
-from agentic_portfolio.ai.config import monthly_cap
+from agentic_portfolio.ai.budget import BudgetManager
+from agentic_portfolio.ai.config import load_ai_config, monthly_cap
+from agentic_portfolio.ai.gateway import AIGateway
+from agentic_portfolio.ai.ledger import UsageLedger
+from agentic_portfolio.ai.types import BudgetMode
 from agentic_portfolio.decision.committee import (
     collect_committee_input,
+    committee_fingerprint,
     reevaluate_live_core_committee,
+    should_run_committee,
 )
 from agentic_portfolio.decision.reasoner import ScriptedDecisionReasoner
-from agentic_portfolio.decision.validate import DecisionValidationError
+from agentic_portfolio.decision.validate import DecisionValidationError, validate_payload
 from agentic_portfolio.discovery.store import CandidateStore
 from agentic_portfolio.journal import read_jsonl
 from agentic_portfolio.live_approval import LiveApprovalStatus
@@ -28,7 +34,7 @@ from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode, discove
 from agentic_portfolio.schemas import CandidateStatus, ResearchQueueStatus, SecurityClass, Sleeve, SpyBenchmark
 from agentic_portfolio.watch.store import WatchStore
 from agentic_portfolio.watch.types import WatchItem, WatchStatus
-from tests.conftest import ctx
+from tests.conftest import ctx, pos
 from tests.test_candidate_lifecycle import _put_candidate, _put_queue, _stores
 from tests.test_decision import _payload, _report, _thesis, _fact
 from tests.test_production_pipeline import _seed, _services, _worker
@@ -123,21 +129,58 @@ def _committee_payload(symbols: list[str], *, buy: str | None = None, alloc: flo
             continue
         decisions.append(_watch_row(symbol, lost_to=[buy or "CASH", "CASH"]))
     cash_pct = 100.0 - (alloc if buy else 0.0)
-    decisions.append({"symbol": "CASH", "decision": "HOLD", "desired_allocation_pct": cash_pct, "rationale": "Cash remains a valid residual."})
+    cash_row = {
+        "symbol": "CASH",
+        "decision": "HOLD",
+        "desired_allocation_pct": cash_pct,
+        "rationale": (
+            f"Cash residual after starter CORE allocation to {buy}."
+            if buy
+            else "Affirmative cash allocation: diversified CORE exposure is not the better expected outcome on current evidence."
+        ),
+        "why_preferable_to_spy": (
+            None
+            if buy
+            else "Current risk/valuation context favors cash over diversified market exposure until the reconsideration trigger."
+        ),
+        "reconsideration": {
+            "why_lost": None if buy else "Broad-market CORE currently ranks below cash.",
+            "lost_to": [buy] if buy else ["SPY"],
+            "next_review_reason": "scheduled_core_review",
+            "next_review_at": (NOW + timedelta(days=1)).isoformat(),
+        },
+    }
+    decisions.append({k: v for k, v in cash_row.items() if v is not None})
     vs_spy = (
         "SPY is the residual benchmark; comparison is versus cash and individual names, not versus itself."
         if buy == "SPY"
-        else "Selected residual versus generic beta, or cash if no residual is justified."
+        else (
+            "Selected residual versus generic beta, or cash if no residual is justified."
+            if buy
+            else "Diversified CORE exposure is currently ranked below cash on the stated comparative evidence."
+        )
     )
     return {
         "theses": theses,
         "comparison": {
             "ranking": ranking,
-            "vs_cash": "Deploy only if a residual improves the book versus retaining cash.",
+            "vs_cash": (
+                "Deploy only if a residual improves the book versus retaining cash."
+                if buy
+                else "Cash currently has the better expected risk-adjusted outcome versus deploying CORE capital."
+            ),
             "vs_spy": vs_spy,
             "notes": "One coherent committee allocation. Unused sleeve capacity is not a mandate.",
         },
         "decisions": decisions,
+        "portfolio_action": "ALLOCATE" if buy else "HOLD_CASH",
+        "cash": {
+            "target_weight": cash_pct,
+            "rationale": cash_row["rationale"],
+            "action": "HOLD",
+            "why_cash_beats_broad_market": cash_row.get("why_preferable_to_spy"),
+            "reconsideration_trigger": "scheduled_core_review",
+        },
     }
 
 
@@ -585,14 +628,16 @@ def test_committee_instructions_stay_multi_name_and_compact():
     from agentic_portfolio.decision.reasoner import COMMITTEE_REASONER_INSTRUCTIONS, REASONER_INSTRUCTIONS
 
     text = COMMITTEE_REASONER_INSTRUCTIONS
-    assert "several qualified CORE alternatives" in text
+    assert "qualified researched individual names" in text or "several qualified CORE alternatives" in text
     assert "selected_allocations" in text
     assert "rankings" in text
     assert "Do not independently mint several correlated starter BUYs" in text
     assert "yield_known" in text
     assert "not a Treasury" in text
     assert "broad_market_residual" in text
-    assert "Do not buy SPY from the snapshot alone" in text
+    assert "strategic residual path" in text
+    assert "Do not buy SPY from the snapshot alone" not in text
+    assert "NO_ACTION / HOLD_CASH is allowed only when supported" in text
     assert REASONER_INSTRUCTIONS not in text or "Return JSON only:" in text
     assert "Every ADVANCE_TO_THESIS researched symbol in this packet still needs exactly one decisions[] row" not in text
 
@@ -687,7 +732,10 @@ def test_spy_snapshot_reaches_committee_when_research_is_operational_failure(tmp
     assert residual["drawdown_from_52w_high"] == pytest.approx(0.03)
     assert residual["fund_pe"] == pytest.approx(26.2)
     assert residual["usable_for_comparison"] is True
-    assert residual["does_not_authorize_buy"] is True
+    assert residual["strategic_residual_eligible"] is True
+    assert residual["does_not_authorize_individual_stock_buy"] is True
+    assert residual["does_not_authorize_buy"] is False
+    assert residual["comparison_snapshot"] is True
     assert captured["cash"]["yield_known"] is True
     assert captured["cash"]["current_yield"] == pytest.approx(0.0)
     assert captured["cash"]["yield_source"] == "configured_actual_account_cash_yield"
@@ -741,7 +789,7 @@ def test_spy_ranked_from_snapshot_without_company_research(tmp_path):
     assert result.target_allocations.get("CASH") == pytest.approx(100.0)
 
 
-def test_committee_spy_buy_from_snapshot_still_requires_research(tmp_path):
+def test_committee_spy_buy_from_snapshot_uses_strategic_residual_path(tmp_path):
     _seed_core_universe(tmp_path, ["MSFT"])
     watch, approvals, notify = _services(tmp_path, now=NOW)
     result = reevaluate_live_core_committee(
@@ -754,11 +802,15 @@ def test_committee_spy_buy_from_snapshot_still_requires_research(tmp_path):
         approvals=approvals,
         notify=notify,
     )
-    assert result.proposals_created == 0
-    assert approvals.store.pending() == []
-    assert result.status == "DEGRADED"
-    assert "buy_add_requires_research:SPY" in (result.reason or "")
+    assert result.proposals_created == 1
+    pending = approvals.store.pending()
+    assert pending
+    assert pending[0].ticker == "SPY"
+    assert pending[0].status is LiveApprovalStatus.PENDING
+    assert pending[0].placed_order is False
+    assert result.status == "OK"
     assert result.as_dict()["placement_attempted"] is False
+    assert result.as_dict()["auto_execution"] is False
     assert LIVE_ORDER_PLACEMENT is False
 
 
@@ -789,4 +841,295 @@ def test_spy_included_is_false_without_snapshot_evidence(tmp_path):
     assert result.spy_included is False
     assert result.status == "NO_ACTION"
     assert result.proposals_created == 0
+
+
+def _empty_spy_ctx(nav: float = 1010):
+    return ctx(nav, spy=SpyBenchmark(price=640.12, period_return=0.0042))
+
+
+def test_a_empty_portfolio_can_select_broad_market_without_spy_thesis(tmp_path):
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    result = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(_committee_payload([], buy="SPY", alloc=8.0, etf=True)),
+        context_fn=_empty_spy_ctx,
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert result.status == "OK"
+    assert result.proposals_created == 1
+    pending = approvals.store.pending()
+    assert pending
+    assert pending[0].ticker == "SPY"
+    assert pending[0].proposed_action == "BUY"
+    assert pending[0].status is LiveApprovalStatus.PENDING
+    assert pending[0].placed_order is False
+    assert result.forced_buy is False
+    assert result.auto_execution is False
+    assert result.as_dict()["placement_attempted"] is False
+    assert LIVE_ORDER_PLACEMENT is False
+    gated_ok = any(row.get("risk_verdict") in {None, "PASS", "REQUIRES_ENHANCED_REVIEW"} or row.get("proposals_created") for row in result.symbol_rows)
+    assert gated_ok
+    kinds = {row.get("type") for row in read_jsonl(tmp_path / "logs" / "core_committee.jsonl")}
+    assert "CORE_COMMITTEE_PROPOSAL_CREATED" in kinds
+    assert "CORE_COMMITTEE_DECIDED" in kinds
+
+
+def test_b_empty_portfolio_defensive_cash_still_valid(tmp_path):
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    result = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(_committee_payload([], buy=None)),
+        context_fn=_empty_spy_ctx,
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert result.status == "NO_ACTION"
+    assert result.portfolio_action == "HOLD_CASH"
+    assert result.proposals_created == 0
+    assert approvals.store.pending() == []
+    assert result.forced_buy is False
+    assert result.target_allocations.get("CASH") == pytest.approx(100.0)
+
+
+def test_c_individual_stock_without_advance_to_thesis_cannot_buy(tmp_path):
+    cstore, _, _ = _stores(tmp_path)
+    cand = _put_candidate(cstore, "MSFT", CandidateStatus.WATCHING)
+    report = _fresh_report("MSFT", cand.candidate_id)
+    report.research_conclusion = ResearchConclusion.KEEP_WATCHING
+    ResearchStore(tmp_path).save(report)
+    WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE).save(_watch("MSFT", cand.candidate_id))
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    result = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(_committee_payload(["MSFT"], buy="MSFT")),
+        context_fn=_empty_spy_ctx,
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert result.proposals_created == 0
+    assert approvals.store.pending() == []
+    assert result.status in {"DEGRADED", "SKIPPED", "NO_ACTION"}
+    if result.status == "DEGRADED":
+        assert "buy_add_requires" in (result.reason or "") or "no_research_report:MSFT" in (result.reason or "")
+
+
+def test_d_individual_stock_with_advance_to_thesis_can_compete(tmp_path):
+    _seed_core_universe(tmp_path, ["MSFT"])
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    result = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(_committee_payload(["MSFT"], buy="MSFT", alloc=8.0)),
+        context_fn=_empty_spy_ctx,
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert result.proposals_created == 1
+    assert approvals.store.pending()[0].ticker == "MSFT"
+    assert approvals.store.pending()[0].placed_order is False
+    assert result.selected_symbols == ["MSFT"]
+
+
+def test_e_same_day_no_action_may_skip_next_day_runs(tmp_path):
+    _seed_core_universe(tmp_path, ["MSFT"])
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    payload = _committee_payload(["MSFT"], buy=None)
+    first = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(payload),
+        context_fn=_empty_spy_ctx,
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert first.status == "NO_ACTION"
+    same_day = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(payload),
+        context_fn=_empty_spy_ctx,
+        now=NOW + timedelta(hours=2),
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert same_day.skipped_reason == "unchanged_fingerprint"
+    nxt = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(payload),
+        context_fn=_empty_spy_ctx,
+        now=NOW + timedelta(hours=25),
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert nxt.skipped_reason != "unchanged_fingerprint"
+    assert nxt.status == "NO_ACTION"
+    kinds = {row.get("type") for row in read_jsonl(tmp_path / "logs" / "core_committee.jsonl")}
+    assert "CORE_COMMITTEE_NO_ACTION_EXPIRED_REVIEW" in kinds
+
+
+def test_e_unit_scheduled_expiry_checked_before_fingerprint(tmp_path):
+    _seed_core_universe(tmp_path, ["MSFT"])
+    inp = collect_committee_input(research_store=ResearchStore(tmp_path), now=NOW)
+    context = _empty_spy_ctx()
+    ledger = {
+        "last_fingerprint": committee_fingerprint(inp, context),
+        "last_run_at": NOW.isoformat(),
+        "last_research_ids": [r.research_id for r in inp.reports],
+        "last_holdings_symbols": [],
+        "last_cash_allocation_pct": context.cash_allocation_pct,
+        "last_status": "NO_ACTION",
+        "last_portfolio_action": "HOLD_CASH",
+        "last_risk_state": context.risk_state.value if context.risk_state else None,
+    }
+    run, why = should_run_committee(
+        inp, context, ledger, now=NOW + timedelta(hours=2), trigger="scheduled_review", residual_eligible=True
+    )
+    assert run is False
+    assert why == "unchanged_fingerprint"
+    run, why = should_run_committee(
+        inp, context, ledger, now=NOW + timedelta(hours=25), trigger="scheduled_review", residual_eligible=True
+    )
+    assert run is True
+    assert why == "no_action_expired_review"
+
+
+def test_f_new_research_id_reevaluates_immediately(tmp_path):
+    cands = _seed_core_universe(tmp_path, ["MSFT"])
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    first = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(_committee_payload(["MSFT"], buy=None)),
+        context_fn=_empty_spy_ctx,
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert first.status == "NO_ACTION"
+    newer = _fresh_report("MSFT", cands["MSFT"].candidate_id, rid="res-MSFT-new")
+    newer.started_at = (NOW + timedelta(minutes=5)).isoformat()
+    ResearchStore(tmp_path).save(newer)
+    second = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(_committee_payload(["MSFT"], buy=None)),
+        context_fn=_empty_spy_ctx,
+        now=NOW + timedelta(minutes=6),
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert second.skipped_reason != "unchanged_fingerprint"
+    assert second.status == "NO_ACTION"
+
+
+def test_g_holdings_or_cash_change_reevaluates_immediately(tmp_path):
+    _seed_core_universe(tmp_path, ["MSFT"])
+    watch, approvals, notify = _services(tmp_path, now=NOW)
+    first = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(_committee_payload(["MSFT"], buy=None)),
+        context_fn=_empty_spy_ctx,
+        now=NOW,
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert first.status == "NO_ACTION"
+    changed = ctx(
+        1010,
+        positions=[pos("CASHPROXY", 0.20, 1010, Sleeve.CORE_GROWTH, SecurityClass.INDIVIDUAL_EQUITY, "INFORMATION_TECHNOLOGY")],
+        spy=SpyBenchmark(price=640.12, period_return=0.0042),
+    )
+    second = reevaluate_live_core_committee(
+        root=tmp_path,
+        runtime_mode=RuntimeMode.LIVE,
+        decision_reasoner=ScriptedDecisionReasoner(_committee_payload(["MSFT"], buy=None)),
+        context_fn=lambda: changed,
+        now=NOW + timedelta(minutes=10),
+        watch=watch,
+        approvals=approvals,
+        notify=notify,
+    )
+    assert second.skipped_reason != "unchanged_fingerprint"
+    assert second.status == "NO_ACTION"
+
+
+def test_h_ai_budget_blocked_does_not_bypass(tmp_path):
+    _seed_core_universe(tmp_path, ["MSFT"])
+    cfg = load_ai_config()
+    ledger = UsageLedger(tmp_path, config=cfg)
+    data = ledger.load_month(now=NOW)
+    data["spent"] = "10.00"
+    ledger.save_month(data)
+    gw = AIGateway(
+        budget=BudgetManager(ledger, cfg, now_fn=lambda: NOW),
+        providers={},
+        config=cfg,
+        runtime_mode=RuntimeMode.LIVE,
+    )
+    assert gw.budget.status().mode is BudgetMode.EXHAUSTED
+    worker = _worker(
+        tmp_path,
+        gateway=gw,
+        decision=ScriptedDecisionReasoner(_committee_payload(["MSFT"], buy="MSFT")),
+        now=NOW,
+        nav=1010,
+    )
+    result = worker.run_core_committee(_empty_spy_ctx(), trigger="scheduled_review")
+    assert result["status"] == "BLOCKED"
+    assert result["skipped_reason"] == "budget_exhausted"
+    assert result["proposals_created"] == 0
+    assert worker.approvals.store.pending() == []
+
+
+def test_i_broad_market_proposal_requires_human_approval_not_execution(tmp_path):
+    test_a_empty_portfolio_can_select_broad_market_without_spy_thesis(tmp_path)
+
+
+def test_j_allocation_validation_rejects_inconsistent_or_over_ceiling_weights():
+    snap = {
+        "symbol": "SPY",
+        "current_price": 640.12,
+        "allows_strategic_allocation": True,
+        "usable_for_comparison": True,
+    }
+    over_ceiling = _committee_payload(["MSFT"], buy="SPY", alloc=50.0, etf=True)
+    with pytest.raises(DecisionValidationError, match="allocation_exceeds_ceiling:SPY"):
+        validate_payload(
+            over_ceiling,
+            [_report("MSFT")],
+            current_nav=1010,
+            committee=True,
+            residual_snapshot=snap,
+        )
+    over_total = _committee_payload(["MSFT"], buy="MSFT", alloc=8.0)
+    over_total["decisions"][-1]["desired_allocation_pct"] = 100.0
+    with pytest.raises(DecisionValidationError, match="allocation_weights_exceed_100"):
+        validate_payload(
+            over_total,
+            [_report("MSFT")],
+            current_nav=1010,
+            committee=True,
+            residual_snapshot=snap,
+        )
 

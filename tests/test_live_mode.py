@@ -410,10 +410,18 @@ def test_live_runtime_does_not_expose_paper_artifacts(tmp_path, monkeypatch):
     assert "ACTIVE RUNTIME: LIVE" in html or "ACTIVE RUNTIME" in html
     assert "INACTIVE / TEST ENVIRONMENT" in html
     assert "PAPER DIAGNOSTICS" in html
-    dash = _admin(create_app(tmp_path).test_client()).get("/").get_data(as_text=True)
+    client = _admin(create_app(tmp_path).test_client())
+    dash = client.get("/").get_data(as_text=True)
     assert "Buying Power" in dash
     assert "$500.00" in dash
-    assert "No live positions." in dash
+    assert "/static/shell.js" in dash
+    assert "/static/dashboard.js" in dash
+    payload = client.get("/api/dashboard").get_json()
+    assert payload["nav"] == 500.0
+    assert payload["positions"] == []
+    assert payload["empty_positions_label"] == "No live positions."
+    positions = client.get("/positions").get_data(as_text=True)
+    assert "No live positions." in positions
 
 
 def test_live_fail_closed_dashboard_without_snapshot(tmp_path, monkeypatch):
