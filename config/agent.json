@@ -1,13 +1,14 @@
 {
-  "version": "1.0.0",
-  "updated_at": "2026-08-30",
-  "description": "24/7 autonomous portfolio-management service. The process stays alive. The scheduler is an internal orchestrator. Live order placement remains disabled.",
+  "version": "2.0.0",
+  "updated_at": "2026-10-03",
+  "description": "24/7 autonomous portfolio-management service. The process stays alive; the scheduler is an internal orchestrator. Who may authorize orders is config/execution_policy.json; broker writes need AGENTIC_LIVE_ORDER_PLACEMENT (LIVE) or the PaperBroker (PAPER).",
   "invariants": {
-    "auto_execution": false,
-    "live_trade_actions_allowed": false,
-    "LIVE_ORDER_PLACEMENT": false,
-    "require_human_approval": true,
-    "approve_does_not_place": true,
+    "ai_has_broker_access": false,
+    "ai_may_authorize_orders": false,
+    "orders_only_via_executor": true,
+    "risk_gate_rerun_at_send_time": true,
+    "authorization_policy": "config/execution_policy.json",
+    "kill_switch_release_requires_human": true,
     "continue_when_ai_exhausted": true,
     "continue_on_job_failure": true
   },

@@ -1,10 +1,8 @@
 {
-  "version": "1.0.0",
-  "updated_at": "2026-08-31",
-  "description": "Live execution after human approval. Default is off. LiveOrderExecutor is the only placement surface.",
+  "version": "2.0.0",
+  "updated_at": "2026-10-03",
+  "description": "OrderExecutor send-time settings (LIVE and PAPER). Authorization (human or autonomous) is config/execution_policy.json. Every send re-runs the Risk Gate on fresh facts.",
   "live_order_placement_enabled": false,
-  "require_human_approval": true,
-  "auto_execution": false,
   "default_order_type": "market",
   "default_time_in_force": "gfd",
   "market_hours": "regular_hours",
@@ -13,7 +11,7 @@
   "quantity_decimal_places": 6,
   "revalidation": {
     "max_quote_move_pct": 0.03,
-    "max_nav_change_pct": 0.10,
+    "max_nav_change_pct": 0.1,
     "max_buying_power_change_pct": 0.15,
     "max_cash_change_pct": 0.15,
     "max_allocation_delta_pct_points": 1.0,

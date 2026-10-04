@@ -66,9 +66,15 @@ def upsert_from_fill(
     rationale: str | None = None,
     invalidation: list[str] | None = None,
     mode: RuntimeMode | str = RuntimeMode.LIVE,
+    intent_id: str | None = None,
 ) -> PositionLink:
     links = load_links(root, mode=mode)
-    order = next((o for o in store.orders() if o.symbol.upper() == symbol.upper()), None)
+    order = None
+    if intent_id:
+        order = store.order_for_intent(intent_id)
+    if order is None:
+        # store.orders() is newest-first; the latest fill owns the link.
+        order = next((o for o in store.orders() if o.symbol.upper() == symbol.upper()), None)
     link = links.get(symbol.upper()) or PositionLink(symbol=symbol.upper())
     if order is not None:
         link.approval_id = order.approval_id
@@ -107,7 +113,8 @@ def _sync_registries_from_fill(root, link: PositionLink, *, store: ExecutionStor
             action = "BUY"
         elif side in {"sell", "s"}:
             action = ""
-    theses = ThesisRegistry(base / "state" / "thesis_registry.json", runtime_mode="LIVE")
+    mode_value = getattr(getattr(store, "runtime_mode", None), "value", None) or "LIVE"
+    theses = ThesisRegistry(base / "state" / "thesis_registry.json", runtime_mode=mode_value)
     sleeves = SleeveRegistry(base / "state" / "sleeve_registry.json")
     sleeve_enum = None
     raw_sleeve = link.sleeve

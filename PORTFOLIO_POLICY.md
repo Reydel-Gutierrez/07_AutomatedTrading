@@ -207,7 +207,7 @@ Flows must be **explicit** (the agent never infers a deposit to rewrite HWM). Ma
 | `WARNING` | **−5%** | Enhanced portfolio review. **No** auto-liquidation. |
 | `RISK_REDUCTION` | **−10%** | No new Spec/Tactical; Core with validation; Opp enhanced review; SELL/REDUCE OK. **No** Core auto-liq. |
 | `DEFENSIVE` | **−15%** | No new Spec/Tactical; Opp add only if explicitly risk-reducing; new Core = **validated** `BROAD_MARKET_INDEX_ETF` only. No mechanical liquidation. |
-| `HALTED` | **−20%** | `auto_execution` false. May **recommend** SELL/REDUCE/HOLD/NO_ACTION. May **not** execute until explicit human authorization. No self-resume. No invented liquidation. |
+| `HALTED` | **−20%** | No autonomous authorization. May **recommend** SELL/REDUCE/HOLD/NO_ACTION; SELL/REDUCE go to the human queue and execute only after explicit human authorization. No self-resume. No invented liquidation. |
 
 ---
 
@@ -225,9 +225,9 @@ Never deposit, withdraw, or transfer — even if MCP later exposes tools. May em
 
 ## Execution vs policy
 
-One investment policy. Execution states (`RESEARCH_ONLY`, `HUMAN_APPROVAL`, `AUTO_EXECUTION`) do **not** change philosophy with NAV.
+One investment policy. Execution modes (`OBSERVE`, `HUMAN_APPROVAL`, `AUTONOMOUS` — `config/execution_policy.json`) change **who authorizes** an order, never the policy, the limits, or the philosophy with NAV.
 
-**Current:** `HUMAN_APPROVAL` with `auto_execution=false`, `live_trade_actions_allowed=false`, `require_human_approval=true`.
+**Committed default:** `HUMAN_APPROVAL`. `AUTONOMOUS` is enabled on the Pi with `AGENTIC_EXECUTION_MODE=AUTONOMOUS`; it auto-authorizes only Risk-Gate `PASS` proposals inside the autonomy circuit breakers (`RISK_RULES.md`) and escalates everything else to a human.
 
 ---
 

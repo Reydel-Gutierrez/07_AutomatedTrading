@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from agentic_portfolio.agent.activity import log_activity
-from agentic_portfolio.agent.safety import assert_auto_execution_disabled
 from agentic_portfolio.context import build_context
 from agentic_portfolio.decision.engine import run_portfolio_decision
 from agentic_portfolio.decision.reasoner import DecisionReasoner
@@ -695,7 +694,6 @@ def run_core_committee(
     reevaluation: bool = False,
 ) -> CommitteeResult:
     """Run one CORE committee pass using existing artifacts + current LIVE context."""
-    assert_auto_execution_disabled()
     result = CommitteeResult(trigger=trigger, reevaluation=reevaluation, LIVE_ORDER_PLACEMENT=live_placement_enabled())
     now = worker.now()
     root = Path(worker.root)

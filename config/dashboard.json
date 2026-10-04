@@ -1,27 +1,37 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-08-30",
-  "description": "Localhost web dashboard. Reads existing state through Python modules. May write only human approval decisions. APPROVED does not place an order. Never bind publicly until Cloudflare Tunnel + Access are configured.",
+  "updated_at": "2026-10-03",
+  "description": "Localhost web dashboard. Reads state through Python modules. Writes: human approve/reject of order proposals and the emergency kill switch (engage by any admin; release by a named admin). Never bind publicly until Cloudflare Tunnel + Access are configured.",
   "host": "127.0.0.1",
   "port": 3100,
   "bind_localhost_only": true,
   "allow_public_bind": false,
   "public_exposure": false,
   "environment": "PAPER",
-  "live_order_placement_enabled": false,
   "allow_paper_packet_decisions": true,
   "allow_demo_packet_decisions": false,
   "allow_stale_packet_decisions": false,
   "env": {
-    "port": ["DASHBOARD_PORT", "AGENTIC_DASHBOARD_PORT"],
-    "host": ["DASHBOARD_HOST", "AGENTIC_DASHBOARD_HOST"],
+    "port": [
+      "DASHBOARD_PORT",
+      "AGENTIC_DASHBOARD_PORT"
+    ],
+    "host": [
+      "DASHBOARD_HOST",
+      "AGENTIC_DASHBOARD_HOST"
+    ],
     "allow_public_bind": "DASHBOARD_ALLOW_PUBLIC_BIND",
     "environment": "DASHBOARD_ENVIRONMENT",
     "allow_paper_packet_decisions": "DASHBOARD_ALLOW_PAPER_PACKET_DECISIONS",
     "allow_demo_packet_decisions": "DASHBOARD_ALLOW_DEMO_PACKET_DECISIONS",
     "allow_stale_packet_decisions": "DASHBOARD_ALLOW_STALE_PACKET_DECISIONS"
   },
-  "writes_allowed": ["approve_packet", "reject_packet"],
+  "writes_allowed": [
+    "approve_packet",
+    "reject_packet",
+    "engage_kill_switch",
+    "release_kill_switch"
+  ],
   "writes_forbidden": [
     "place_equity_order",
     "cancel_equity_order",

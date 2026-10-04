@@ -14,7 +14,7 @@ from agentic_portfolio.agent.connection import ConnectionManager
 from agentic_portfolio.agent.handlers import AgentServices, build_handlers
 from agentic_portfolio.agent.heartbeat import load_health, mark_offline, write_health, write_pid
 from agentic_portfolio.agent.orchestrator import JobOrchestrator
-from agentic_portfolio.agent.safety import assert_execution_disabled
+
 from agentic_portfolio.agent.session import classify_market_phase
 from agentic_portfolio.live.engine import refresh_live_portfolio
 from agentic_portfolio.live.store import LivePortfolioStore
@@ -66,11 +66,15 @@ class AgentRuntime:
         budget_exhausted: bool = False,
         ai_allowed: bool = True,
     ) -> None:
-        self.base = root or project_root()
         self.config = config or load_agent_config()
         self.runtime_mode = runtime_mode or get_active_runtime()
         if isinstance(self.runtime_mode, str):
             self.runtime_mode = RuntimeMode(self.runtime_mode)
+        if root is None:
+            from agentic_portfolio.autonomy.policy import resolve_state_root
+
+            root = resolve_state_root(project_root(), runtime_mode=self.runtime_mode)
+        self.base = root
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
         self._sleep = sleep_fn or time.sleep
         self._stop = stop
@@ -81,11 +85,6 @@ class AgentRuntime:
         self.last_results: list[dict[str, Any]] = []
         self.fatal = False
         rules = load_account_rules()
-        exec_cfg = dict(rules.get("execution") or {})
-        assert_execution_disabled(
-            live_trade_actions_allowed=bool(exec_cfg.get("live_trade_actions_allowed")),
-            auto_execution=bool(exec_cfg.get("auto_execution")),
-        )
         sinks = []
         try:
             telegram_sink = telegram_sink_from_env()
@@ -95,12 +94,38 @@ class AgentRuntime:
             pass
         self.notify = NotificationEngine(NotificationStore(self.base), sinks=sinks, now_fn=self._now)
         self.connection = connection or ConnectionManager(notify=self.notify, root=self.base, now_fn=self._now)
+        from agentic_portfolio.autonomy import KillSwitch, OrderAuthority
+
+        self.kill_switch = KillSwitch(self.base, notify=self.notify, now_fn=self._now)
         if services is None:
             watch_store = WatchStore(self.base, runtime_mode=self.runtime_mode)
             approval_store = LiveApprovalStore(self.base, runtime_mode=self.runtime_mode)
             journal = self.base / "logs" / "agent.jsonl"
 
+            paper_broker = None
+            if self.runtime_mode is RuntimeMode.PAPER:
+                from agentic_portfolio.autonomy.paper_broker import PaperBroker
+
+                def paper_quotes(symbols: list[str]) -> Mapping[str, Any]:
+                    # Real market data from the read-only transport; no data → no fills (fail closed).
+                    bound = self.connection.ensure()
+                    fetcher = getattr(bound, "fetcher", None)
+                    if fetcher is None:
+                        return {}
+                    return fetcher.get_equity_quotes(list(symbols)) or {}
+
+                paper_broker = PaperBroker(
+                    self.base,
+                    account_number=str(rules["account"]["account_number"]),
+                    nickname=str(rules["account"].get("nickname") or "Agentic"),
+                    quote_source=paper_quotes,
+                    starting_cash=float(os.environ.get("AGENTIC_PAPER_STARTING_CASH") or 10_000.0),
+                    now_fn=self._now,
+                )
+
             def refresh_live() -> Any:
+                if paper_broker is not None:
+                    return refresh_live_portfolio(paper_broker, now=self.now(), root=self.base, runtime_mode=RuntimeMode.PAPER)
                 return refresh_live_from_connection(self.connection, root=self.base, now=self.now())
 
             def quotes_live(tickers: list[str]) -> dict[str, dict[str, Any]]:
@@ -130,9 +155,16 @@ class AgentRuntime:
 
             gateway = build_gateway(self.base, runtime_mode=self.runtime_mode, now_fn=self._now)
             exec_store = ExecutionStore(self.base, runtime_mode=self.runtime_mode)
-            broker = None
+            broker = paper_broker
             if live_placement_enabled() and self.runtime_mode is RuntimeMode.LIVE:
                 broker = bind_live_write_broker(account_number=str(rules["account"]["account_number"]))
+            self.authority = OrderAuthority(
+                self.base,
+                kill_switch=self.kill_switch,
+                execution_store=exec_store,
+                notify=self.notify,
+                now_fn=self._now,
+            )
             executor = LiveOrderExecutor(
                 exec_store,
                 broker,
@@ -143,6 +175,7 @@ class AgentRuntime:
                 notify=self.notify,
                 now_fn=self._now,
                 refresh_fn=refresh_live,
+                authority=self.authority,
             )
 
             def ai_status() -> dict[str, Any]:
@@ -206,10 +239,17 @@ class AgentRuntime:
                 ai_allowed=ai_allowed,
                 executor=executor,
                 discovery_fn=live_discover,
+                kill_switch=self.kill_switch,
             )
         else:
             services.budget_exhausted = budget_exhausted or services.budget_exhausted
             services.ai_allowed = ai_allowed and services.ai_allowed
+            executor = getattr(services, "executor", None)
+            self.authority = getattr(executor, "authority", None) or OrderAuthority(
+                self.base, kill_switch=self.kill_switch, execution_store=getattr(executor, "store", None), notify=self.notify, now_fn=self._now
+            )
+            if getattr(services, "kill_switch", None) is None:
+                services.kill_switch = self.authority.kill_switch
         self.services = services
         self.services.watch.reconcile_waiting_for_open_schedules()
         self.orchestrator = JobOrchestrator(
@@ -322,11 +362,17 @@ class AgentRuntime:
             live_error=live_error,
             job_skips=job_skips,
             write_transport_ready=self._write_transport_ready(),
+            execution=self._execution_status(),
         )
         return results
 
+    def _execution_status(self) -> dict[str, Any]:
+        try:
+            return self.authority.status()
+        except Exception as exc:  # noqa: BLE001 — health must still be written
+            return {"error": f"{type(exc).__name__}: {exc}"}
+
     def run(self) -> None:
-        assert_execution_disabled()
         self.running = True
         self.fatal = False
         self.started_at = self.now().isoformat()
@@ -348,6 +394,7 @@ class AgentRuntime:
             runtime_mode=self.runtime_mode.value,
             config=self.config,
             write_transport_ready=self._write_transport_ready(),
+            execution=self._execution_status(),
         )
         try:
             while not self._should_stop():

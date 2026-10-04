@@ -45,6 +45,16 @@ TS = "2026-08-30T18:00:00+00:00"
 NOW = datetime(2026, 8, 30, 18, 0, tzinfo=timezone.utc)
 
 
+def _executable(gated) -> bool:
+    """Risk Gate execution_permitted: PASS on an order-producing decision (authorization is separate)."""
+    return gated.risk.verdict == GateVerdict.PASS and gated.proposed_action.decision in {
+        Decision.BUY,
+        Decision.ADD,
+        Decision.REDUCE,
+        Decision.SELL,
+    }
+
+
 def _fact(name, value):
     return EvidenceItem(
         evidence_id=f"fact:{name}",
@@ -244,7 +254,7 @@ def test_core_fundamental_invalidation_can_invalidate(tmp_path):
     assert theses.get(rec.thesis_id).status == ThesisStatus.INVALIDATED
     assert row.gated_actions
     assert row.gated_actions[0].proposed_action.decision == Decision.SELL
-    assert row.gated_actions[0].risk.execution_permitted is False
+    assert row.gated_actions[0].risk.execution_permitted is _executable(row.gated_actions[0])  # permitted-by-policy == PASS; authorization is separate
     assert out.broker_stop_orders_created == 0
 
 
@@ -324,7 +334,7 @@ def test_tactical_detects_predefined_technical_invalidation(tmp_path):
     assert row.preliminary_state == MonitoringState.EXIT_CONDITION_TRIGGERED
     assert row.state == MonitoringState.EXIT_CONDITION_TRIGGERED
     assert row.recommended_action == Decision.SELL
-    assert row.gated_actions[0].risk.execution_permitted is False
+    assert row.gated_actions[0].risk.execution_permitted is _executable(row.gated_actions[0])  # permitted-by-policy == PASS; authorization is separate
     assert out.broker_stop_orders_created == 0
 
 
@@ -417,7 +427,7 @@ def test_research_refresh_and_decision_hit_risk_gate(tmp_path):
     assert TriggerKind.EARNINGS_EVENT in {t.kind for t in row.triggers}
     assert row.recommended_action == Decision.HOLD
     assert row.gated_actions
-    assert row.gated_actions[0].risk.execution_permitted is False
+    assert row.gated_actions[0].risk.execution_permitted is _executable(row.gated_actions[0])  # permitted-by-policy == PASS; authorization is separate
     assert out.execution_attempted is False
 
 
@@ -599,7 +609,7 @@ def test_paper_existing_research_and_theses(tmp_path):
     assert by["NKE"].recommended_action == Decision.REDUCE
     assert by["ESTC"].state == MonitoringState.EXIT_CONDITION_TRIGGERED
     assert by["ESTC"].recommended_action == Decision.SELL
-    assert all(g.risk.execution_permitted is False for r in out.positions for g in r.gated_actions)
+    assert all(g.risk.execution_permitted is _executable(g) for r in out.positions for g in r.gated_actions)  # permitted-by-policy == PASS; authorization is separate
     assert out.execution_attempted is False
     assert out.broker_stop_orders_created == 0
     journal = (tmp_path / "journal.jsonl").read_text(encoding="utf-8")

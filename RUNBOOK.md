@@ -1,16 +1,35 @@
 # Runbook
 
-LIVE path: discovery → research → thesis → portfolio decision → Risk Gate → human approval → send-time revalidation → `LiveOrderExecutor` (only if `AGENTIC_LIVE_ORDER_PLACEMENT=true`). Paper pipeline remains for tests/dev.
+One loop for PAPER and LIVE: discovery → research → thesis/portfolio decision → Risk Gate → ProposalIntake → authorization (human or deterministic autonomous policy) → `OrderExecutor` (kill switch, send-time revalidation, Risk Gate re-run, broker review, place) → reconcile → position monitoring. See `ARCHITECTURE.md`.
 
-Policy: `PORTFOLIO_POLICY.md`. Config: `config/pipeline.json`, `config/portfolio_policy.json`, `config/account_rules.json`, `config/live_execution.json`.
+Policy: `PORTFOLIO_POLICY.md`. Config: `config/execution_policy.json`, `config/portfolio_policy.json`, `config/account_rules.json`, `config/live_execution.json`, `config/pipeline.json`.
 
 ## Execution state
 
-`HUMAN_APPROVAL` · `auto_execution=false` · `require_human_approval=true`. Committed `LIVE_ORDER_PLACEMENT=false`. Enabling placement is a Pi env change only.
+| Switch | Committed | How to change |
+|---|---|---|
+| `AGENTIC_EXECUTION_MODE` | `HUMAN_APPROVAL` | `/etc/agentic-portfolio/env` + restart (`OBSERVE` / `HUMAN_APPROVAL` / `AUTONOMOUS`) |
+| `AGENTIC_LIVE_ORDER_PLACEMENT` | `false` | `/etc/agentic-portfolio/env` + restart |
+| Kill switch | released | Dashboard System page, `scripts/kill_switch.py`, or `AGENTIC_KILL_SWITCH=1` |
 
-`HALTED` keeps auto-exec false. Human-only resume.
+`HALTED` (−20% vs HWM): nothing is authorized autonomously; SELL/REDUCE recommendations wait for you. Human-only resume.
 
-## Paper pipeline
+## Daily operation in AUTONOMOUS mode
+
+* Dashboard **System** shows mode, broker writes, kill switch, orders sent today vs limit, failure streak.
+* Telegram: `ORDER AUTHORIZED` (policy authorized; executes in the next send window), `ORDER SUBMITTED/FILLED/REJECTED`, `TRADE APPROVAL REQUIRED` (escalated — open the approval to see why), `KILL SWITCH`.
+* Escalations you should expect: Risk Gate `REQUIRES_ENHANCED_REVIEW` (>10% NAV single name, >30% sector, speculative liquidity), any HALTED exit, daily order/buy limits reached, cash reserve, missing snapshot.
+* `python scripts/diagnose_pipeline.py` prints the whole funnel, authorized-but-unsent orders, escalations, and the execution status.
+
+## Kill switch procedure
+
+1. Engage: System page → **ENGAGE KILL SWITCH** (no password needed to stop), or `python scripts/kill_switch.py engage --reason "..."`.
+2. Investigate: `logs/execution_audit.jsonl`, `logs/kill_switch.jsonl`, `state/live_execution/`, Robinhood order history. For an ambiguous submission, run `LIVE_ORDER_RECONCILE` (it runs every 5 minutes while the market is open) until no order is `UNKNOWN_RECONCILIATION_REQUIRED`.
+3. Release: System page with your admin password and a note, or `python scripts/kill_switch.py release --by <name> --note "..."`. Approvals blocked while engaged were consumed; the pipeline re-proposes on fresh facts.
+
+## Legacy offline paper toolchain
+
+Historical stage list kept for the `scripts/run_paper_*.py` tools and their tests. The runtime does not use OrderPlans, approval packets, or review-only results; it uses the loop described at the top of this file.
 
 1. Market data (incl. **SPY**); start-of-day NAV if a **valid U.S. equities session** is open (America/New_York; not midnight; weekends/holidays do not roll SOD)  
 2. Regime (thin structured input; `UNKNOWN` if missing — do not fabricate)  
@@ -44,11 +63,11 @@ The Raspberry Pi scheduler (`scripts/run_scheduler.py`) is an internal orchestra
 
 `RESEARCH_QUEUE_WORKER` consumes the research queue during MARKET_OPEN (every 30 minutes, max 1 deep-research item) as well as overnight/premarket/postmarket/closed days (max 2). Lightweight `CANDIDATE_DISCOVERY` also runs during MARKET_OPEN every 15 minutes; broader discovery remains POSTMARKET / closed days. Discovery ending in `CANDIDATES_READY_FOR_RESEARCH` is no longer a terminal stop. Dynamic live universe construction is wired (`LIVE_DISCOVERY_WIRED=true`). Read-only dump: `PYTHONPATH=src python scripts/diagnose_pipeline.py`.
 
-Committed default: `LIVE_ORDER_PLACEMENT=false` / `AGENTIC_LIVE_ORDER_PLACEMENT=false`. Human APPROVE is required. With the switch off, APPROVE → `APPROVED_EXECUTION_DISABLED` and `place_equity_order` is not called. Enabling placement is a manual Pi step after validation, never a git default.
+Committed defaults: `AGENTIC_EXECUTION_MODE=HUMAN_APPROVAL`, `AGENTIC_LIVE_ORDER_PLACEMENT=false`. With broker writes off, an approved order becomes `APPROVED_EXECUTION_DISABLED` and `place_equity_order` is not called. Enabling writes and autonomy are manual Pi steps (`deploy/README.md` → "going from validation to autonomous operation"), never git defaults.
 
-Live execution (implemented, behind the switch): send-time revalidation → `review_equity_order` → `place_equity_order` via `LiveOrderExecutor` only → `LIVE_ORDER_RECONCILE` → holdings refresh. Ambiguous broker acks fail closed and require reconcile. Double APPROVE and process restart share one execution intent id.
+Execution path: kill switch → send-time revalidation → Risk Gate re-run → OrderAuthority pre-send checks → `review_equity_order` → `place_equity_order` via `OrderExecutor` only → `LIVE_ORDER_RECONCILE` → holdings refresh. Ambiguous broker acks fail closed, trip the kill switch, and require reconcile. Double APPROVE and process restart share one execution intent id.
 
-This tree is a **release candidate** (`pi-live-rc1`) awaiting Raspberry Pi validation. It is not production-validated.
+PAPER: `AGENTIC_RUNTIME_MODE=PAPER python scripts/run_service.py` runs the identical loop against a simulated PaperBroker account (state under `var/paper`), using real read-only market data.
 
 $10/month AI cap: `config/ai.json` + persisted `state/ai_budget/`. $0–$8 normal, $8+ conserving, $9.50+ critical reassessment only, $10 blocks all external AI until next calendar month. Market monitoring, broker sync, Risk Gate, dashboard, watch conditions, and logs continue when AI is blocked.
 
@@ -66,7 +85,7 @@ Optional paper `CAPITAL_INCREASE_RECOMMENDED`. Never move money.
 
 ## Shutdown
 
-Leave auto-exec false. Snapshot NAV, HWM, sleeves, cash, halt flags. `python scripts/service_ctl.py stop` or `systemctl stop agentic-portfolio`.
+Engage the kill switch first if anything is in doubt. Snapshot NAV, HWM, sleeves, cash, halt flags. `python scripts/service_ctl.py stop` or `systemctl stop agentic-portfolio`.
 
 ## 24/7 production service
 

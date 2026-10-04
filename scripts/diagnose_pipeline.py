@@ -25,10 +25,9 @@ from agentic_portfolio.notify import NotificationStore
 from agentic_portfolio.paths import project_root
 from agentic_portfolio.research.store import ResearchStore
 from agentic_portfolio.research.types import ResearchReport
+from agentic_portfolio.autonomy.authority import OrderAuthority
 from agentic_portfolio.runtime import (
-    AUTO_EXECUTION,
     LIVE_ORDER_PLACEMENT,
-    REQUIRE_HUMAN_APPROVAL,
     RuntimeMode,
     get_active_runtime,
     live_placement_enabled,
@@ -149,7 +148,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Read-only autonomous pipeline diagnostic. Never places.")
     parser.add_argument("--root", default=None, help="Project root (defaults to repo root)")
     args = parser.parse_args()
-    root = project_root() if args.root is None else __import__("pathlib").Path(args.root)
+    if args.root is None:
+        from agentic_portfolio.autonomy.policy import resolve_state_root
+
+        root = resolve_state_root(project_root(), runtime_mode=get_active_runtime())
+    else:
+        root = __import__("pathlib").Path(args.root)
     mode = get_active_runtime()
     health = load_health(root) or {}
     book = LivePortfolioStore(root).current_book() or {}
@@ -178,8 +182,7 @@ def main() -> int:
         "runtime_mode": mode.value if isinstance(mode, RuntimeMode) else str(mode),
         "LIVE_ORDER_PLACEMENT": LIVE_ORDER_PLACEMENT,
         "live_placement_enabled": live_placement_enabled(),
-        "REQUIRE_HUMAN_APPROVAL": REQUIRE_HUMAN_APPROVAL,
-        "AUTO_EXECUTION": AUTO_EXECUTION,
+        "execution": OrderAuthority(root, execution_store=exec_store).status(),
         "agent": health.get("agent"),
         "phase": (health.get("market") or {}).get("phase") or session.phase.value,
         "cycles": health.get("cycles"),
@@ -249,7 +252,16 @@ def main() -> int:
         "pending_count": approvals.get("pending_count"),
         "live_pending_count": approvals.get("live_pending_count"),
         "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
-        "REQUIRE_HUMAN_APPROVAL": REQUIRE_HUMAN_APPROVAL,
+        "authorized_unsent": [
+            {"approval_id": a.get("approval_id"), "ticker": a.get("ticker"), "action": a.get("action"), "decided_by": a.get("decided_by")}
+            for a in (approvals.get("items") or approvals.get("approvals") or [])
+            if str(a.get("status")) == "APPROVED"
+        ],
+        "escalated": [
+            {"approval_id": a.get("approval_id"), "ticker": a.get("ticker"), "reasons": a.get("escalation_reasons")}
+            for a in (approvals.get("pending") or [])
+            if a.get("escalation_reasons")
+        ],
     })
     _print("EXECUTION INTENTS", {
         "count": len(intents),

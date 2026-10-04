@@ -1,9 +1,22 @@
-"""LiveOrderExecutor — the only production path that may place a broker order."""
+"""OrderExecutor — the only code path that may place a broker order (LIVE or PAPER).
+
+Send sequence for one APPROVED proposal (human- or policy-authorized):
+
+kill switch → broker-write permission → fresh account refresh → quote/tradability
+→ send-time revalidation → deterministic sizing → FULL Risk Gate re-run on fresh
+facts → OrderAuthority pre-send checks (limits, window, spread) → broker review
+→ place → audit/notify → reconcile later.
+
+"Deferred" outcomes (market closed, outside the send window, transient quote
+outage, wide spread) leave the approval APPROVED so the drain job retries;
+everything else consumes the approval and the pipeline must re-propose.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -39,6 +52,19 @@ APPROVED_OK = {
 }
 
 
+DEFERRABLE_CODES = {
+    "MARKET_CLOSED",
+    "TOO_CLOSE_TO_OPEN",
+    "TOO_CLOSE_TO_CLOSE",
+    "QUOTE_UNAVAILABLE",
+    "BROKER_DISCONNECTED",
+    "SPREAD_TOO_WIDE",
+    "SPREAD_UNAVAILABLE",
+}
+RISK_UP = {"BUY", "ADD"}
+RISK_DOWN = {"SELL", "REDUCE"}
+
+
 @dataclass
 class ExecutionOutcome:
     intent: ExecutionIntent
@@ -46,6 +72,7 @@ class ExecutionOutcome:
     placed: bool = False
     reasons: list[str] = field(default_factory=list)
     review: dict[str, Any] = field(default_factory=dict)
+    deferred: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -53,6 +80,7 @@ class ExecutionOutcome:
             "approval_id": self.intent.approval_id,
             "status": self.intent.status.value,
             "placed": self.placed,
+            "deferred": self.deferred,
             "broker_order_id": self.intent.broker_order_id,
             "reasons": list(self.reasons),
             "review": dict(self.review),
@@ -76,6 +104,8 @@ class LiveOrderExecutor:
         account_number: str | None = None,
         thesis_status_fn: Callable[[str], str | None] | None = None,
         refresh_fn: Callable[[], Any] | None = None,
+        authority: Any = None,
+        risk_fn: Callable[..., Any] | None = None,
     ) -> None:
         self.store = store
         self.broker = broker
@@ -89,6 +119,12 @@ class LiveOrderExecutor:
         self.thesis_status_fn = thesis_status_fn
         self.refresh_fn = refresh_fn
         self.cfg = load_live_execution_config()
+        if authority is None:
+            from agentic_portfolio.autonomy.authority import OrderAuthority
+
+            authority = OrderAuthority(Path(root), execution_store=store, notify=notify, now_fn=self._now)
+        self.authority = authority
+        self.risk_fn = risk_fn
 
     def now(self) -> datetime:
         stamp = self._now()
@@ -185,10 +221,17 @@ class LiveOrderExecutor:
         )
         return self.store.save_intent(intent)
 
+    def _broker_is_paper(self) -> bool:
+        return bool(getattr(self.broker, "is_paper", False))
+
     def _run_locked(self, approval: LiveApproval, intent: ExecutionIntent) -> ExecutionOutcome:
         stamp = self.now()
-        placement = live_placement_enabled()
-        intent.LIVE_ORDER_PLACEMENT = placement
+        ks = self.authority.kill_switch.status() if self.authority is not None else None
+        if ks is not None and ks.engaged:
+            return self._block(intent, approval, ["KILL_SWITCH_ENGAGED"], LiveApprovalStatus.REVALIDATION_REQUIRED)
+        paper_ok = self.runtime_mode is RuntimeMode.PAPER and self._broker_is_paper()
+        placement = paper_ok or live_placement_enabled()
+        intent.LIVE_ORDER_PLACEMENT = bool(placement and not paper_ok)
         if not placement:
             intent.status = ExecutionIntentStatus.BLOCKED_DISABLED
             intent.block_reasons = ["LIVE_ORDER_PLACEMENT_false"]
@@ -207,10 +250,7 @@ class LiveOrderExecutor:
             )
             return ExecutionOutcome(intent=intent, placed=False, reasons=["LIVE_ORDER_PLACEMENT_false"])
 
-        if bool(self.cfg.get("auto_execution")):
-            return self._block(intent, approval, ["auto_execution_true"], LiveApprovalStatus.EXECUTION_FAILED)
-
-        if self.runtime_mode is not RuntimeMode.LIVE:
+        if self.runtime_mode is not RuntimeMode.LIVE and not paper_ok:
             intent.status = ExecutionIntentStatus.BLOCKED
             intent.block_reasons = ["runtime_not_live"]
             self.store.save_intent(intent)
@@ -220,6 +260,11 @@ class LiveOrderExecutor:
             intent.block_reasons = ["no_broker"]
             self.store.save_intent(intent)
             return ExecutionOutcome(intent=intent, placed=False, reasons=["no_broker"])
+        if self.runtime_mode is RuntimeMode.LIVE and self._broker_is_paper():
+            return self._block(intent, approval, ["paper_broker_bound_in_live_runtime"], LiveApprovalStatus.EXECUTION_FAILED)
+        hours = bool(self.regular_hours_fn())
+        if not hours:
+            return self._defer(intent, approval, ["MARKET_CLOSED"])
 
         if self.refresh_fn is not None:
             try:
@@ -230,9 +275,13 @@ class LiveOrderExecutor:
         context = self.context_fn() if self.context_fn else None
         if context is None:
             return self._block(intent, approval, ["missing_live_context"], LiveApprovalStatus.REVALIDATION_REQUIRED)
+        if str(getattr(context, "account_number", "") or "") and str(context.account_number) != str(self.account_number):
+            if self.authority is not None:
+                self.authority.trip(f"context account {context.account_number} is not the configured Agentic account", rule="wrong_account")
+            return self._block(intent, approval, ["WRONG_ACCOUNT"], LiveApprovalStatus.EXECUTION_FAILED)
 
         quote, tradable = self._quote_and_tradability(intent.symbol)
-        hours = bool(self.regular_hours_fn())
+        bid, ask = self._last_bid, self._last_ask
         thesis = self.thesis_status_fn(intent.symbol) if self.thesis_status_fn else None
         intent.status = ExecutionIntentStatus.REVALIDATING
         self.store.save_intent(intent)
@@ -249,6 +298,8 @@ class LiveOrderExecutor:
             connected=True,
         )
         if codes:
+            if set(codes) <= DEFERRABLE_CODES:
+                return self._defer(intent, approval, codes)
             return self._block(intent, approval, codes, LiveApprovalStatus.REVALIDATION_REQUIRED)
 
         payload, size_reasons = self._build_payload(approval, context, quote)
@@ -264,16 +315,37 @@ class LiveOrderExecutor:
         intent.notional = _f(payload.get("dollar_amount"))
         if intent.notional is None and intent.quantity and quote:
             intent.notional = float(intent.quantity) * float(quote)
+
+        risk_codes = self._send_time_risk(approval, context, quote=quote, notional=intent.notional, bid=bid, ask=ask)
+        if risk_codes:
+            return self._block(intent, approval, risk_codes, LiveApprovalStatus.REVALIDATION_REQUIRED)
+        if self.authority is not None:
+            pre = self.authority.pre_send(
+                approval,
+                nav=context.current_nav,
+                cash=context.cash,
+                notional=intent.notional,
+                bid=bid,
+                ask=ask,
+                now=stamp,
+            )
+            if pre:
+                if set(pre) <= DEFERRABLE_CODES:
+                    return self._defer(intent, approval, pre)
+                return self._block(intent, approval, pre, LiveApprovalStatus.REVALIDATION_REQUIRED)
+
         intent.status = ExecutionIntentStatus.REVIEWING
         self.store.save_intent(intent)
         try:
             raw_review = self.broker.review_equity_order(payload)
         except Exception as exc:  # noqa: BLE001
+            self._note_failure(f"review_failed:{type(exc).__name__}", intent.symbol)
             return self._block(intent, approval, [f"review_failed:{type(exc).__name__}:{exc}"], LiveApprovalStatus.EXECUTION_FAILED)
         parsed = parse_review_response(raw_review)
         nested = raw_review.get("data", raw_review) if isinstance(raw_review, dict) else {}
         if parsed.get("errors") or nested.get("ok") is False:
             record_audit("ORDER_REVIEW_REJECTED", root=self.root, now=stamp, approval_id=approval.approval_id, review=parsed)
+            self._note_failure("broker_review_rejected", intent.symbol)
             return self._block(intent, approval, ["broker_review_rejected"] + list(parsed.get("errors") or []), LiveApprovalStatus.EXECUTION_FAILED)
         record_audit("ORDER_REVIEW_ACCEPTED", root=self.root, now=stamp, approval_id=approval.approval_id, intent_id=intent.intent_id)
 
@@ -309,6 +381,9 @@ class LiveOrderExecutor:
             self.store.save_intent(intent)
             self.store.save_order(order)
             record_audit("ORDER_SUBMISSION_AMBIGUOUS", root=self.root, now=self.now(), approval_id=approval.approval_id, intent_id=intent.intent_id)
+            if self.authority is not None:
+                self.authority.note_execution_outcome(success=False, reason="ambiguous_submission", symbol=intent.symbol)
+                self.authority.trip(f"ambiguous broker submission for {intent.symbol}; reconcile before trading", rule="ambiguous_submission")
             if self.notify:
                 self.notify.emit(
                     NotificationKind.SERVICE_ERROR,
@@ -318,6 +393,7 @@ class LiveOrderExecutor:
                 )
             return ExecutionOutcome(intent=intent, order=order, placed=False, reasons=["ambiguous_submission"], review=parsed)
         except Exception as exc:  # noqa: BLE001
+            self._note_failure(f"place_failed:{type(exc).__name__}", intent.symbol)
             return self._block(intent, approval, [f"place_failed:{type(exc).__name__}:{exc}"], LiveApprovalStatus.EXECUTION_FAILED)
 
         broker_id, broker_state, reject = _parse_place(raw_place)
@@ -337,6 +413,7 @@ class LiveOrderExecutor:
             approval.execution_attempted = True
             self.store.save_order(order)
             self.store.save_intent(intent)
+            self._note_failure(f"broker_rejected:{order.rejection_reason}", intent.symbol)
             record_audit("ORDER_REJECTED", root=self.root, now=self.now(), approval_id=approval.approval_id, reason=order.rejection_reason)
             if self.notify:
                 self.notify.emit(
@@ -354,6 +431,8 @@ class LiveOrderExecutor:
 
         order.status = _order_status(broker_state)
         intent.status = _intent_status(order.status)
+        if self.authority is not None:
+            self.authority.note_execution_outcome(success=True, symbol=intent.symbol)
         approval.status = LiveApprovalStatus.APPROVED
         approval.broker_submitted = True
         approval.placed_order = True
@@ -381,6 +460,7 @@ class LiveOrderExecutor:
                     self.root,
                     symbol=intent.symbol,
                     store=self.store,
+                    intent_id=intent.intent_id,
                     sleeve=approval.sleeve,
                     rationale=approval.reason or approval.supporting_thesis,
                     invalidation=list(approval.invalidation or []),
@@ -414,6 +494,79 @@ class LiveOrderExecutor:
             )
         return ExecutionOutcome(intent=intent, order=order, placed=True, review=parsed)
 
+    def _defer(self, intent: ExecutionIntent, approval: LiveApproval, reasons: list[str]) -> ExecutionOutcome:
+        """Not now, but not consumed: the approval stays APPROVED for the drain job."""
+        changed = list(intent.block_reasons or []) != list(reasons)
+        intent.block_reasons = list(reasons)
+        intent.status = ExecutionIntentStatus.CREATED
+        intent.updated_at = self.now().isoformat()
+        self.store.save_intent(intent)
+        if changed:
+            record_audit(
+                "EXECUTION_DEFERRED",
+                root=self.root,
+                now=self.now(),
+                approval_id=approval.approval_id,
+                intent_id=intent.intent_id,
+                reasons=reasons,
+            )
+        return ExecutionOutcome(intent=intent, placed=False, reasons=list(reasons), deferred=True)
+
+    def _note_failure(self, reason: str, symbol: str | None) -> None:
+        if self.authority is not None:
+            self.authority.note_execution_outcome(success=False, reason=reason, symbol=symbol)
+
+    def _send_time_risk(
+        self,
+        approval: LiveApproval,
+        context: PortfolioContext,
+        *,
+        quote: float | None,
+        notional: float | None,
+        bid: float | None,
+        ask: float | None,
+    ) -> list[str]:
+        """Re-run the full deterministic Risk Gate on fresh facts. Empty list = permitted."""
+        from agentic_portfolio.autonomy.authority import is_autonomous_approval
+        from agentic_portfolio.autonomy.send_risk import send_time_risk
+
+        action = str(approval.proposed_action).upper()
+        human = not is_autonomous_approval(approval)
+        spread_pct = None
+        if bid and ask and ask >= bid > 0:
+            spread_pct = (ask - bid) / ((ask + bid) / 2.0)
+        fn = self.risk_fn or send_time_risk
+        try:
+            result = fn(
+                approval,
+                context,
+                price=quote,
+                notional=notional,
+                spread_pct=spread_pct,
+                root=Path(self.root),
+                human_decided=human,
+            )
+        except Exception as exc:  # noqa: BLE001 — fail closed
+            return [f"SEND_TIME_RISK_ERROR:{type(exc).__name__}"]
+        if result is None:
+            if action in RISK_UP:
+                return ["RISK_SNAPSHOT_MISSING"]
+            return []
+        verdict = str(getattr(result.verdict, "value", result.verdict) or "").upper()
+        approval.send_time_risk = {
+            "verdict": verdict,
+            "reasons": [getattr(r, "code", str(r)) for r in (result.reasons or [])],
+            "evaluated_at": self.now().isoformat(),
+            "human_decided": human,
+        }
+        if verdict == "PASS":
+            return []
+        if human and verdict == "HALTED" and action in RISK_DOWN:
+            return []
+        return [f"SEND_TIME_RISK_{verdict or 'UNKNOWN'}"] + [
+            code for code in approval.send_time_risk["reasons"] if code not in {"OVERLAP_OBSERVED"}
+        ][:8]
+
     def _block(
         self,
         intent: ExecutionIntent,
@@ -442,7 +595,12 @@ class LiveOrderExecutor:
         )
         return ExecutionOutcome(intent=intent, placed=False, reasons=reasons)
 
+    _last_bid: float | None = None
+    _last_ask: float | None = None
+
     def _quote_and_tradability(self, symbol: str) -> tuple[float | None, bool | None]:
+        self._last_bid = None
+        self._last_ask = None
         if self.broker is None:
             return None, None
         quote = None
@@ -454,6 +612,8 @@ class LiveOrderExecutor:
                 q = row.get("quote") if isinstance(row.get("quote"), dict) else row
                 if str((q or {}).get("symbol") or "").upper() == symbol.upper():
                     quote = _f((q or {}).get("last_trade_price"))
+                    self._last_bid = _f((q or {}).get("bid_price"))
+                    self._last_ask = _f((q or {}).get("ask_price"))
                     break
         except Exception:  # noqa: BLE001
             quote = None

@@ -16,6 +16,12 @@
   <article class="kpi"><h2>Allocation</h2><p class="figure">{{ packet.current_allocation_display }} → {{ packet.desired_allocation_display }}</p><p class="meta">risk {{ packet.risk_gate_verdict or '—' }}</p></article>
 </section>
 
+{% if packet.escalation_reasons %}
+<div class="halt-banner warn-banner">Escalated to a human: {{ packet.escalation_reasons|join(', ') }}</div>
+{% endif %}
+{% if packet.authorized_autonomously %}
+<div class="halt-banner">Authorized by the deterministic autonomous policy ({{ packet.decided_by }}).{% if packet.send_time_risk %} Send-time Risk Gate: {{ packet.send_time_risk.verdict }}.{% endif %}</div>
+{% endif %}
 <section class="card decision-card" id="decisions">
   <h2>Human decision</h2>
   <p class="lede"><span class="book-tag {{ 'live' if packet.queue_kind == 'live' else 'paper' }}">{{ packet.book_label or paper_book_label }}</span>

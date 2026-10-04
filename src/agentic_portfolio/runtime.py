@@ -26,9 +26,12 @@ from agentic_portfolio.policy import load_dashboard_config, load_runtime_config
 
 LIVE_AI_ALLOWED = True
 LIVE_PROPOSALS_ALLOWED = True
+# Committed defaults (code constants). The *runtime* answers come from:
+#   broker writes  → live_placement_enabled()  (AGENTIC_LIVE_ORDER_PLACEMENT, LIVE only)
+#   authorization  → autonomy.load_execution_policy() (AGENTIC_EXECUTION_MODE)
 LIVE_ORDER_PLACEMENT = False
-REQUIRE_HUMAN_APPROVAL = True
-AUTO_EXECUTION = False
+REQUIRE_HUMAN_APPROVAL = True  # committed default mode is HUMAN_APPROVAL
+AUTO_EXECUTION = False  # committed default mode is not AUTONOMOUS
 AI_MONTHLY_HARD_CAP_USD = 10.0
 
 
@@ -152,6 +155,8 @@ class LiveExecutionAuthority:
     observation_mode: str = OBSERVATION_MODE
     execution_mode: str = EXECUTION_MODE_DISABLED
 
+    authorization_mode: str = "HUMAN_APPROVAL"
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "runtime_mode": self.runtime_mode.value,
@@ -160,11 +165,12 @@ class LiveExecutionAuthority:
             "LIVE_ORDER_PLACEMENT": self.LIVE_ORDER_PLACEMENT,
             "live_order_placement_enabled": self.LIVE_ORDER_PLACEMENT,
             "live_trade_actions_allowed": self.live_trade_actions_allowed,
-            "auto_execution": False,
-            "require_human_approval": True,
+            "auto_execution": self.auto_execution,
+            "require_human_approval": self.require_human_approval,
+            "authorization_mode": self.authorization_mode,
             "observation_mode": self.observation_mode,
             "execution_mode": self.execution_mode,
-            "autonomous_trading_disabled": True,
+            "autonomous_trading_disabled": not self.auto_execution,
             "approved_does_not_place_order": not self.LIVE_ORDER_PLACEMENT,
         }
 
@@ -185,6 +191,12 @@ def live_execution_authority(
     )
     ready = bool(write_transport_ready) if write_transport_ready is not None else _write_transport_ready()
     executable = bool(requested and mode is RuntimeMode.LIVE and ready)
+    try:
+        from agentic_portfolio.autonomy.policy import load_execution_policy
+
+        authorization = load_execution_policy(environ=environ).mode.value
+    except Exception:  # noqa: BLE001 — display fails safe
+        authorization = "HUMAN_APPROVAL"
     if mode is RuntimeMode.PAPER:
         execution_mode = EXECUTION_MODE_PAPER
     elif executable:
@@ -199,10 +211,11 @@ def live_execution_authority(
         write_transport_ready=ready,
         LIVE_ORDER_PLACEMENT=executable,
         live_trade_actions_allowed=executable,
-        auto_execution=False,
-        require_human_approval=True,
+        auto_execution=authorization == "AUTONOMOUS",
+        require_human_approval=authorization == "HUMAN_APPROVAL",
         observation_mode=OBSERVATION_MODE,
         execution_mode=execution_mode,
+        authorization_mode=authorization,
     )
 
 
@@ -219,19 +232,13 @@ def require_human_approval(
     *,
     runtime_config: dict[str, Any] | None = None,
     account_rules: dict[str, Any] | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> bool:
-    cfg = dict(runtime_config if runtime_config is not None else load_runtime_config())
-    if "require_human_approval" in cfg:
-        return bool(cfg.get("require_human_approval"))
-    rules = dict(account_rules if account_rules is not None else {})
-    if not rules:
-        from agentic_portfolio.policy import load_account_rules
+    """True unless the execution policy is AUTONOMOUS (single source: autonomy.policy)."""
+    del runtime_config, account_rules
+    from agentic_portfolio.autonomy.policy import ExecutionMode, load_execution_policy
 
-        rules = load_account_rules()
-    exe = dict(rules.get("execution") or {})
-    if "require_human_approval" in exe:
-        return bool(exe.get("require_human_approval"))
-    return True
+    return load_execution_policy(environ=environ).mode is not ExecutionMode.AUTONOMOUS
 
 
 def source_of_truth(mode: RuntimeMode | None = None) -> str:

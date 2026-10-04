@@ -408,6 +408,17 @@ def evidence_fingerprint(candidate: Candidate, *, payload: ResearchPayload | Non
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()[:20]
 
 
+def _packet_price(packet: ResearchEvidencePacket) -> float | None:
+    for item in list(getattr(packet, "facts", None) or []):
+        if getattr(item, "name", None) == "market_price":
+            try:
+                value = float(item.value)
+            except (TypeError, ValueError):
+                return None
+            return value if value > 0 else None
+    return None
+
+
 def _blank_report(
     research_id: str,
     candidate: Candidate,
@@ -434,7 +445,9 @@ def _blank_report(
         security_class=sc or candidate.security_class,
         sector=candidate.sector or cls.sector,
         industry=candidate.industry or cls.industry,
-        market_price=candidate.current_price,
+        # The research packet's fresh quote wins over the (possibly days-old) discovery price;
+        # the executor compares the send-time quote against this reference.
+        market_price=_packet_price(packet) or candidate.current_price,
         research_status=ResearchStatus.RESEARCH_PENDING,
         subject_kind=subject_kind,
         thesis_id=existing_thesis_id,

@@ -61,6 +61,7 @@ def write_health(
     live_error: dict[str, Any] | None = None,
     job_skips: list[dict[str, Any]] | None = None,
     write_transport_ready: bool | None = None,
+    execution: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     started = datetime.fromisoformat(started_at.replace("Z", "+00:00"))
@@ -89,10 +90,13 @@ def write_health(
         "ai_budget": budget,
         "cycles": cycles,
         "LIVE_ORDER_PLACEMENT": auth.LIVE_ORDER_PLACEMENT,
-        "auto_execution": False,
+        "auto_execution": auth.auto_execution,
         "live_trade_actions_allowed": auth.live_trade_actions_allowed,
-        "require_human_approval": True,
+        "require_human_approval": auth.require_human_approval,
+        "authorization_mode": auth.authorization_mode,
         "execution_mode": auth.execution_mode,
+        "execution": dict(execution or {}),
+        "kill_switch_engaged": bool(((execution or {}).get("kill_switch") or {}).get("engaged")),
         "observation_mode": auth.observation_mode,
         "placement_requested": auth.placement_requested,
         "write_transport_ready": auth.write_transport_ready,

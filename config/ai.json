@@ -1,11 +1,12 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-09-02",
-  "description": "Provider-neutral AI gateway configuration. Model names live here, not in trading logic. Combined spend across every provider and model is capped at $10 USD per calendar month (America/New_York). AI is advisory only. LIVE order placement remains disabled.",
+  "updated_at": "2026-10-03",
+  "description": "Provider-neutral AI gateway configuration. Model names live here, not in trading logic. Combined spend across every provider and model is capped at $10 USD per calendar month (America/New_York). AI produces research and decisions only: it has no broker client and cannot authorize orders.",
   "invariants": {
     "LIVE_AI_ALLOWED": true,
     "LIVE_PROPOSALS_ALLOWED": true,
-    "LIVE_ORDER_PLACEMENT": false,
+    "ai_can_place_orders": false,
+    "ai_can_authorize_orders": false,
     "ai_is_advisory_only": true,
     "never_replace_broker_facts": true,
     "structured_outputs_only": true
@@ -20,17 +21,31 @@
     "reservation_ttl_seconds": 3600,
     "ledger_dir": "state/ai_budget",
     "modes": {
-      "NORMAL": {"min": 0.0, "max": 8.0},
-      "CONSERVING": {"min": 8.0, "max": 9.5},
-      "CRITICAL": {"min": 9.5, "max": 10.0},
-      "EXHAUSTED": {"min": 10.0, "max": null}
+      "NORMAL": {
+        "min": 0.0,
+        "max": 8.0
+      },
+      "CONSERVING": {
+        "min": 8.0,
+        "max": 9.5
+      },
+      "CRITICAL": {
+        "min": 9.5,
+        "max": 10.0
+      },
+      "EXHAUSTED": {
+        "min": 10.0,
+        "max": null
+      }
     },
     "critical_purposes": [
       "portfolio_reassessment",
       "existing_position_monitor",
       "thesis_invalidation"
     ],
-    "conserving_allowed_roles": ["screening"],
+    "conserving_allowed_roles": [
+      "screening"
+    ],
     "conserving_skip_fallback": true,
     "conserving_skip_escalation": true
   },
@@ -85,14 +100,38 @@
     }
   },
   "pricing_per_million": {
-    "gpt-5.6-luna": {"input": 0.20, "output": 1.20},
-    "gpt-5.6-terra": {"input": 2.00, "output": 12.00},
-    "gpt-5.6-sol": {"input": 4.00, "output": 20.00},
-    "claude-sonnet-4-20250514": {"input": 3.00, "output": 15.00},
-    "claude-opus-4-20250514": {"input": 15.00, "output": 75.00},
-    "claude-3-5-haiku-latest": {"input": 0.80, "output": 4.00},
-    "scripted": {"input": 0.0, "output": 0.0},
-    "default": {"input": 4.00, "output": 20.00}
+    "gpt-5.6-luna": {
+      "input": 0.2,
+      "output": 1.2
+    },
+    "gpt-5.6-terra": {
+      "input": 2.0,
+      "output": 12.0
+    },
+    "gpt-5.6-sol": {
+      "input": 4.0,
+      "output": 20.0
+    },
+    "claude-sonnet-4-20250514": {
+      "input": 3.0,
+      "output": 15.0
+    },
+    "claude-opus-4-20250514": {
+      "input": 15.0,
+      "output": 75.0
+    },
+    "claude-3-5-haiku-latest": {
+      "input": 0.8,
+      "output": 4.0
+    },
+    "scripted": {
+      "input": 0.0,
+      "output": 0.0
+    },
+    "default": {
+      "input": 4.0,
+      "output": 20.0
+    }
   },
   "pricing_source": {
     "url": "https://developers.openai.com/api/docs/pricing",
@@ -134,7 +173,11 @@
       "enabled": true,
       "weekday_only": true,
       "time": "07:00",
-      "jobs": ["refresh_live_account", "refresh_candidate_universe", "run_candidate_discovery"]
+      "jobs": [
+        "refresh_live_account",
+        "refresh_candidate_universe",
+        "run_candidate_discovery"
+      ]
     },
     "market_hours": {
       "enabled": true,
@@ -142,24 +185,45 @@
       "every_minutes": 15,
       "window_start": "09:30",
       "window_end": "16:00",
-      "jobs": ["refresh_account_positions", "monitor_existing_positions", "evaluate_reassessment_triggers"],
+      "jobs": [
+        "refresh_account_positions",
+        "monitor_existing_positions",
+        "evaluate_reassessment_triggers"
+      ],
       "ai_on_every_tick": false
     },
     "postmarket": {
       "enabled": true,
       "weekday_only": true,
       "time": "16:15",
-      "jobs": ["reconcile_account", "record_daily_portfolio_state", "summarize_decisions"]
+      "jobs": [
+        "reconcile_account",
+        "record_daily_portfolio_state",
+        "summarize_decisions"
+      ]
     },
     "overnight": {
       "enabled": true,
       "every_minutes": 120,
-      "jobs": ["news_catalyst_monitor", "thesis_updates", "fundamentals_if_new", "portfolio_risk_review", "watchlist_maintenance"]
+      "jobs": [
+        "news_catalyst_monitor",
+        "thesis_updates",
+        "fundamentals_if_new",
+        "portfolio_risk_review",
+        "watchlist_maintenance"
+      ]
     },
     "weekend_holiday": {
       "enabled": true,
       "once_per_day": true,
-      "jobs": ["latest_session_analysis", "deeper_candidate_research", "portfolio_review", "watchlist_construction", "stale_thesis_cleanup", "next_session_prep"]
+      "jobs": [
+        "latest_session_analysis",
+        "deeper_candidate_research",
+        "portfolio_review",
+        "watchlist_construction",
+        "stale_thesis_cleanup",
+        "next_session_prep"
+      ]
     },
     "job_timeout_seconds": 900,
     "lock_dir": "state/scheduler/locks",

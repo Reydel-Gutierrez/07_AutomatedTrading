@@ -52,7 +52,7 @@
         </a>
         <span class="env-chip {{ environment }}">{{ environment }}</span>
       </div>
-      <div class="status-copy env-banner {{ environment }}{% if live_order_placement_enabled %} placement-on{% endif %}" role="status">{{ environment_banner }} · {{ no_live_placement_banner }}{% if live_order_placement_enabled %} · HUMAN APPROVAL STILL REQUIRED{% endif %}{% if autonomous_disabled and not live_order_placement_enabled %} · AUTONOMOUS TRADING DISABLED · approve does not place an order{% endif %}</div>
+      <div class="status-copy env-banner {{ environment }}{% if live_order_placement_enabled %} placement-on{% endif %}" role="status">{{ environment_banner }} · {{ no_live_placement_banner }} · MODE {{ execution_flags.authorization_mode }}{% if execution_flags.kill_switch_engaged %} · KILL SWITCH ENGAGED{% endif %}{% if execution_flags.authorization_mode != 'AUTONOMOUS' %} · AUTONOMOUS TRADING DISABLED{% endif %}{% if execution_flags.authorization_mode == 'HUMAN_APPROVAL' and live_order_placement_enabled %} · HUMAN APPROVAL REQUIRED{% endif %}{% if not live_order_placement_enabled %} · approve does not place an order{% endif %}</div>
       <div class="top-right">
         {% if current_user %}
         <span class="who">{{ current_user.name }} ({{ current_user.role }})</span>

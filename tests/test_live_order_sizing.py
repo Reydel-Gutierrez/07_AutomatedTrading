@@ -113,8 +113,24 @@ def _approve(
         portfolio_impact={"nav": nav, "cash": cash, "buying_power": bp if bp is not None else cash},
         supporting_thesis="Test thesis.",
         reason="Test.",
+        metadata={"proposed_action_snapshot": _snapshot(ticker, action, dollars, quote)},
     )
     return engine.record_decision(item.approval_id, LiveApprovalStatus.APPROVED, note="human")
+
+
+def _snapshot(ticker: str, action: str, dollars: float | None, quote: float) -> dict:
+    """Proposal-time ProposedAction; the executor re-runs the Risk Gate from it at send time."""
+    from agentic_portfolio.schemas import Decision, SecurityClass
+    from tests.autonomy_helpers import action_snapshot
+
+    return action_snapshot(
+        ticker,
+        decision=Decision(action),
+        notional=dollars,
+        price=quote,
+        security_class=SecurityClass.INDIVIDUAL_EQUITY,
+        sector="INFORMATION_TECHNOLOGY",
+    )
 
 
 def _qty(payload: dict) -> float:

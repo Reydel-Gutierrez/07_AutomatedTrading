@@ -33,6 +33,9 @@ TELEGRAM_KINDS = frozenset(
         NotificationKind.BROKER_CONNECTION_LOST,
         NotificationKind.AI_BUDGET_CRITICAL,
         NotificationKind.AI_BUDGET_EXHAUSTED,
+        NotificationKind.ORDER_AUTHORIZED,
+        NotificationKind.KILL_SWITCH,
+        NotificationKind.EXECUTION_BLOCKED,
     }
 )
 
@@ -47,6 +50,9 @@ _KIND_EMOJI = {
     NotificationKind.BROKER_CONNECTION_LOST: "🔌",
     NotificationKind.AI_BUDGET_CRITICAL: "💸",
     NotificationKind.AI_BUDGET_EXHAUSTED: "🚫",
+    NotificationKind.ORDER_AUTHORIZED: "🤖",
+    NotificationKind.KILL_SWITCH: "🛑",
+    NotificationKind.EXECUTION_BLOCKED: "⛔",
 }
 
 Transport = Callable[[dict[str, Any]], Any]

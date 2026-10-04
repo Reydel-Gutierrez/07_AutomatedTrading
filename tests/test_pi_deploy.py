@@ -135,8 +135,9 @@ def test_deploy_readme_documents_pi_hardening():
         "state/live_ai/watch/",
         "state/live_ai/approvals/",
         "state/ai_budget/",
-        "auto_execution=false",
-        "live_trade_actions_allowed=false",
+        "AGENTIC_EXECUTION_MODE",
+        "kill_switch.py",
+        "AUTONOMOUS",
         "Do **not** run the application as root",
     ]
     for snippet in required:
@@ -240,14 +241,19 @@ def test_pi_smoke_script_is_read_only():
 
 
 def test_execution_safety_unchanged_for_live_pi():
+    from agentic_portfolio.autonomy.policy import ExecutionMode, load_execution_policy
+    from agentic_portfolio.runtime import live_placement_enabled
+
     exe = dict(load_account_rules().get("execution") or {})
     agent = load_agent_config()
     invariants = dict(agent.get("invariants") or {})
-    assert exe.get("auto_execution") is False
-    assert exe.get("live_trade_actions_allowed") is False
-    assert invariants.get("auto_execution") is False
-    assert invariants.get("live_trade_actions_allowed") is False
-    assert invariants.get("LIVE_ORDER_PLACEMENT") is False
+    assert exe.get("committed_default_mode") == "HUMAN_APPROVAL"
+    assert exe.get("send_time_risk_gate") is True
+    assert invariants.get("ai_has_broker_access") is False
+    assert invariants.get("orders_only_via_executor") is True
+    assert invariants.get("kill_switch_release_requires_human") is True
+    assert load_execution_policy(environ={}).mode is ExecutionMode.HUMAN_APPROVAL
+    assert live_placement_enabled(environ={}) is False
     assert LIVE_ORDER_PLACEMENT is False
     assert get_active_runtime(environ={"AGENTIC_RUNTIME_MODE": "LIVE"}).value == "LIVE"
     assert get_active_runtime(environ={"DASHBOARD_ENVIRONMENT": "LIVE"}).value == "LIVE"

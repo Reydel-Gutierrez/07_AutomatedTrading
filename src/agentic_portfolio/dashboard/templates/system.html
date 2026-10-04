@@ -2,7 +2,11 @@
 {% block title %}System · Agentic Portfolio{% endblock %}
 {% block content %}
 <div class="page">
-  <div class="halt-banner">{% if view.live_order_placement_enabled %}HUMAN APPROVAL REQUIRED · LIVE ORDER PLACEMENT ON{% else %}AUTONOMOUS TRADING DISABLED{% endif %}</div>
+  {% set ks = (view.autonomy or {}).get('kill_switch') or {} %}
+  {% if ks.engaged %}
+  <div class="halt-banner">KILL SWITCH ENGAGED · NO ORDERS WILL BE SENT · {{ ks.reason or '' }}</div>
+  {% endif %}
+  <div class="halt-banner">EXECUTION MODE {{ view.execution.authorization_mode }} · {% if view.live_order_placement_enabled %}BROKER WRITES ON{% else %}BROKER WRITES OFF{% endif %}</div>
   {% if view.live_data_unavailable %}
   <div class="halt-banner">LIVE DATA UNAVAILABLE{% if view.live_error_code %} · {{ view.live_error_code }}{% endif %}</div>
   {% endif %}
@@ -42,14 +46,33 @@
           <dt>PAPER book</dt><dd>{{ view.paper_book_status }}</dd>
           <dt>Portfolio source</dt><dd>{{ view.active_context.source_of_truth if view.active_context else '—' }}</dd>
         </dl>
-        <h2>Execution flags</h2>
+        <h2>Execution</h2>
         <dl class="facts">
-          <dt>State</dt><dd>{{ view.execution.state }}</dd>
-          <dt>auto_execution</dt><dd>{{ view.execution.auto_execution }}</dd>
-          <dt>live_trade_actions_allowed</dt><dd>{{ view.execution.live_trade_actions_allowed }}</dd>
-          <dt>require_human_approval</dt><dd>{{ view.execution.require_human_approval }}</dd>
-          <dt>Approved places order?</dt><dd>{{ 'yes, after Risk Gate and human APPROVE' if view.live_order_placement_enabled else 'no' }}</dd>
+          <dt>Authorization mode</dt><dd>{{ view.execution.authorization_mode }} <span class="muted">({{ view.execution.authorization_mode_source }})</span></dd>
+          <dt>Broker writes</dt><dd>{{ 'ON' if view.live_order_placement_enabled else 'OFF' }}</dd>
+          <dt>Kill switch</dt><dd>{{ 'ENGAGED' if ks.engaged else 'released' }}{% if ks.engaged_by %} · by {{ ks.engaged_by }}{% endif %}{% if ks.engaged_at %} · {{ ks.engaged_at | et(seconds=True) }}{% endif %}</dd>
+          {% set today = (view.autonomy or {}).get('today') or {} %}
+          <dt>Orders sent today</dt><dd>{{ today.orders_submitted or 0 }} / {{ view.execution.autonomy_limits.max_orders_per_day }} · buys ${{ '%.2f'|format(today.buy_notional or 0) }}</dd>
+          <dt>Consecutive failures</dt><dd>{{ (view.autonomy or {}).get('consecutive_failures', 0) }} / {{ view.execution.autonomy_limits.max_consecutive_execution_failures }}</dd>
+          <dt>Every order</dt><dd>Risk Gate at proposal and again at send · broker review · audit log</dd>
         </dl>
+        {% if is_admin %}
+        <h2>Emergency stop</h2>
+        {% if ks.engaged %}
+        <form method="post" action="{{ url_for('kill_switch_release') }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="password" name="admin_password" placeholder="Admin password" required>
+          <input type="text" name="note" placeholder="Why it is safe to resume" required>
+          <button type="submit" class="btn">Release kill switch</button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ url_for('kill_switch_engage') }}" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <input type="text" name="reason" placeholder="Reason" required>
+          <button type="submit" class="btn danger">ENGAGE KILL SWITCH</button>
+        </form>
+        {% endif %}
+        {% endif %}
       </article>
     </div>
   </section>

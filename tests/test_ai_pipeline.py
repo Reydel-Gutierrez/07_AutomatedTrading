@@ -354,13 +354,18 @@ def test_production_execution_flags_unchanged():
     from agentic_portfolio.ai.safety import LIVE_ORDER_PLACEMENT, inspect_ai_module_for_forbidden_calls
     from agentic_portfolio.policy import load_account_rules
 
+    from agentic_portfolio.autonomy.policy import ExecutionMode, load_execution_policy
+
     rules = load_account_rules()
     exe = rules["execution"]
-    assert exe["auto_execution"] is False
-    assert exe["live_trade_actions_allowed"] is False
+    # One authorization source; committed default never trades without a human.
+    assert exe["authorization_policy"] == "config/execution_policy.json"
+    assert exe["ai_may_authorize_orders"] is False and exe["ai_may_call_broker_tools"] is False
+    assert load_execution_policy(environ={}).mode is ExecutionMode.HUMAN_APPROVAL
     assert LIVE_ORDER_PLACEMENT is False
     cfg = load_ai_config()
-    assert cfg["invariants"]["LIVE_ORDER_PLACEMENT"] is False
+    assert cfg["invariants"]["ai_can_place_orders"] is False
+    assert cfg["invariants"]["ai_can_authorize_orders"] is False
     assert inspect_ai_module_for_forbidden_calls() == []
 
 

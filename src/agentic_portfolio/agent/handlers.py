@@ -12,7 +12,6 @@ from agentic_portfolio.adapters.portfolio_facts import live_error_code_of, redac
 from agentic_portfolio.agent.activity import log_activity
 from agentic_portfolio.agent.jobs import research_queue_max_items
 from agentic_portfolio.agent.connection import ConnectionManager
-from agentic_portfolio.agent.safety import assert_auto_execution_disabled
 from agentic_portfolio.agent.session import MarketPhase, SessionSnapshot
 from agentic_portfolio.live_approval import LiveApprovalEngine, LiveApprovalStore
 from agentic_portfolio.live_approval.types import LiveApprovalStatus
@@ -58,6 +57,8 @@ class AgentServices:
     executor: Any = None
     discovery_fn: Callable[..., Any] | None = None
     monitoring_reasoner: Any = None
+    intake: Any = None
+    kill_switch: Any = None
 
 
 def _now(services: AgentServices) -> datetime:
@@ -154,6 +155,8 @@ def _pipeline_worker(services: AgentServices):
         notify=services.notify,
         now_fn=services.now_fn,
     )
+    if services.approvals is not None:
+        worker._intake = _intake(services)
     services._pipeline_worker = worker
     return worker
 
@@ -218,7 +221,6 @@ def _premarket_revalidate(services: AgentServices, ctx: dict[str, Any]) -> dict[
 def build_handlers(services: AgentServices) -> dict[str, Callable[[dict[str, Any]], dict[str, Any]]]:
     def wrap(fn: Callable[[dict[str, Any]], dict[str, Any]]) -> Callable[[dict[str, Any]], dict[str, Any]]:
         def inner(ctx: dict[str, Any]) -> dict[str, Any]:
-            assert_auto_execution_disabled()
             return fn(ctx)
 
         return inner
@@ -467,16 +469,24 @@ def _drain_execution(services: AgentServices, ctx: dict[str, Any]) -> dict[str, 
         return _skipped(services, "APPROVED_EXECUTION_DRAIN", "off_hours_liquidity_not_executable")
     if services.executor is None:
         return _skipped(services, "APPROVED_EXECUTION_DRAIN", "no_executor")
+    authority = getattr(services.executor, "authority", None)
+    if authority is not None and authority.kill_switch.engaged():
+        # Approvals are left untouched; the executor would consume them. Nothing is sent.
+        return _skipped(services, "APPROVED_EXECUTION_DRAIN", "kill_switch_engaged")
     ran = 0
+    placed = 0
+    deferred = 0
     for item in services.approval_store.all():
         if item.status not in {LiveApprovalStatus.APPROVED, LiveApprovalStatus.APPROVED_EXECUTION_DISABLED}:
             continue
         if item.placed_order:
             continue
-        services.executor.execute_approved(item)
+        outcome = services.executor.execute_approved(item)
         services.approval_store.save(item)
         ran += 1
-    return _ok("APPROVED_EXECUTION_DRAIN", drained=ran)
+        placed += int(bool(getattr(outcome, "placed", False)))
+        deferred += int(bool(getattr(outcome, "deferred", False)))
+    return _ok("APPROVED_EXECUTION_DRAIN", drained=ran, placed=placed, deferred=deferred)
 
 
 def _session_analysis(services: AgentServices, ctx: dict[str, Any], job: str) -> dict[str, Any]:
@@ -530,15 +540,16 @@ def _cash_available(services: AgentServices, dollars: float | None) -> bool:
     ctx = services.last_context
     cash = getattr(ctx, "cash", None) if ctx is not None else None
     if cash is None:
-        return True
+        return False  # unknown cash is not available cash (fail closed)
     if dollars is None:
         return float(cash) > 0
     return float(cash) >= float(dollars)
 
 
 def _risk_pass(services: AgentServices, item, quote: dict[str, Any]) -> bool | None:
+    """Legacy injectable hook (tests). Production uses _watch_risk with the real Risk Gate."""
     if services.risk_fn is None:
-        return True
+        return None
     try:
         result = services.risk_fn(item, quote, services.last_context)
     except Exception:  # noqa: BLE001
@@ -632,6 +643,7 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
         spread = quote.get("spread_bps")
         volume = quote.get("dollar_volume")
         adverse = bool(quote.get("adverse_catalyst"))
+        proposal, risk_result, risk_pass, risk_reason = _watch_risk(services, item, dollars=dollars, price=price, sizing_error=sizing_error)
         result = services.watch.evaluate_conditions(
             item,
             regular_hours_open=True,
@@ -640,12 +652,12 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
             dollar_volume=volume,
             adverse_catalyst=adverse,
             cash_available=_cash_available(services, dollars if dollars is not None else (item.conditional_plan.max_price if item.conditional_plan else None)),
-            risk_pass=_risk_pass(services, item, quote),
+            risk_pass=risk_pass,
         )
         if not result.get("create_approval"):
             failed += 1
             if "risk_gate" in str(result.get("reason") or ""):
-                log_activity(services.root, "RISK_GATE_REJECTED", ticker=item.ticker, watch_id=item.watch_id)
+                log_activity(services.root, "RISK_GATE_REJECTED", ticker=item.ticker, watch_id=item.watch_id, reason=risk_reason)
             log_activity(services.root, "WATCH_CONDITION_TRIGGERED", ticker=item.ticker, ok=False, reason=result.get("reason"))
             continue
         if sizing_error or dollars is None:
@@ -671,41 +683,46 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
                 watch_id=item.watch_id,
                 reason="malformed_or_stale_execution_context",
             )
-        flags = snapshot_execution_flags(placement_enabled=placement)
         ctx_obj = services.last_context
         impact = {
             "nav": nav,
             "cash": getattr(ctx_obj, "cash", None) if ctx_obj is not None else None,
             "buying_power": getattr(ctx_obj, "buying_power", None) if ctx_obj is not None else None,
-            "source_of_truth": LIVE_SOURCE_OF_TRUTH if services.runtime_mode is RuntimeMode.LIVE else "isolated_paper_book",
+            "source_of_truth": LIVE_SOURCE_OF_TRUTH if services.runtime_mode is RuntimeMode.LIVE else "paper_broker",
             "proposed_notional": dollars,
             "desired_allocation_pct": pct,
-            "LIVE_ORDER_PLACEMENT": flags["LIVE_ORDER_PLACEMENT"],
-            "live_execution_blocked": flags["live_execution_blocked"],
-            "live_trade_actions_allowed": flags["live_trade_actions_allowed"],
-            "auto_execution": False,
         }
-        approval, is_new = services.approvals.get_or_create(
+        intake = _intake(services).submit(
             ticker=item.ticker,
-            proposed_action="BUY",
-            proposed_dollar_amount=dollars,
-            proposed_allocation_pct=pct,
-            reason="Conditional next-session plan passed live regular-hours confirmation.",
+            action=(proposal.decision.value if proposal is not None else "BUY"),
+            risk=risk_result if risk_result is not None else {"verdict": "PASS" if risk_pass else "", "reasons": ["legacy_risk_hook"]},
+            proposed_action=proposal,
+            dollars=dollars,
+            pct=pct,
+            context=ctx_obj,
+            reason="Watch entry conditions passed live regular-hours confirmation.",
             ai_rationale=item.research_thesis,
             supporting_thesis=item.research_thesis,
-            current_quote=price,
-            current_spread_bps=spread,
-            risk_gate_result={"verdict": "PASS"},
-            portfolio_impact=impact,
+            quote=price,
+            spread_bps=spread,
             watch_id=item.watch_id,
             preferred_approval_id=item.approval_id,
-            expected_order_type="market",
+            portfolio_impact=impact,
             metadata=_watch_approval_metadata(item, nav=nav, price=price),
+            origin="watch_conditions",
         )
+        approval = intake.approval
+        if approval is None:
+            failed += 1
+            log_activity(services.root, "WATCH_CONDITION_TRIGGERED", ticker=item.ticker, watch_id=item.watch_id, ok=False, reason=intake.status.lower(), create_approval=False)
+            if intake.status == "OBSERVED":
+                services.watch.set_status(item, WatchStatus.WATCH, reason="observe_mode_proposal")
+            continue
+        is_new = intake.created
         if is_new and existing is not None:
             existing.superseded_by = approval.approval_id
             services.approval_store.save(existing)
-        _bind_watch_approval(services, item, approval, created=is_new)
+        _bind_watch_approval(services, item, approval, created=is_new, intake_status=intake.status)
         if is_new:
             created += 1
         else:
@@ -713,7 +730,41 @@ def _validate_plans(services: AgentServices, ctx: dict[str, Any], job: str = "MA
     return _ok(job, approvals_created=created, approvals_reused=reused, failed=failed, executable_liquidity=True)
 
 
-def _bind_watch_approval(services: AgentServices, item, approval, *, created: bool) -> None:
+def _intake(services: AgentServices):
+    existing = getattr(services, "intake", None)
+    if existing is not None:
+        return existing
+    from agentic_portfolio.autonomy.intake import build_intake
+
+    services.intake = build_intake(services.approvals, root=services.root, notify=services.notify, now_fn=services.now_fn)
+    return services.intake
+
+
+def _watch_risk(services: AgentServices, item, *, dollars: float | None, price: float | None, sizing_error: str | None):
+    """Real Risk Gate for the watch → order path. Returns (proposal, risk, risk_pass, reason)."""
+    legacy = _risk_pass(services, item, {"price": price})
+    if services.risk_fn is not None:
+        return None, None, legacy, "legacy_risk_hook"
+    if sizing_error or dollars is None:
+        # No order can be created without sizing; the sizing branch reports MISSING_ORDER_SIZING.
+        return None, None, True, "sizing_unavailable"
+    context = services.last_context
+    if context is None:
+        return None, None, False, "missing_live_context"
+    from agentic_portfolio.autonomy.watch_proposal import build_watch_proposal, evaluate_watch_proposal
+
+    try:
+        proposal, why = build_watch_proposal(item, context, dollars=dollars, price=price, root=services.root)
+        if proposal is None:
+            return None, None, False, why
+        risk = evaluate_watch_proposal(proposal, context, root=services.root)
+    except Exception as exc:  # noqa: BLE001 — fail closed
+        return None, None, False, f"risk_gate_error:{type(exc).__name__}"
+    verdict = getattr(risk.verdict, "value", risk.verdict)
+    return proposal, risk, verdict in {"PASS", "REQUIRES_ENHANCED_REVIEW"}, f"verdict:{verdict}"
+
+
+def _bind_watch_approval(services: AgentServices, item, approval, *, created: bool, intake_status: str | None = None) -> None:
     changed = item.approval_id != approval.approval_id or item.status is not WatchStatus.APPROVAL_REQUIRED
     item.approval_id = approval.approval_id
     if item.status is not WatchStatus.APPROVAL_REQUIRED:
@@ -724,22 +775,14 @@ def _bind_watch_approval(services: AgentServices, item, approval, *, created: bo
         if changed:
             log_activity(services.root, "APPROVAL_REUSED", ticker=item.ticker, approval_id=approval.approval_id, watch_id=item.watch_id)
         return
-    services.notify.emit(
-        NotificationKind.APPROVAL_REQUIRED,
-        title=f"TRADE APPROVAL REQUIRED — {item.ticker}",
-        body=f"{item.ticker} is ready for human approval. Approving does not place an order.",
-        payload={
-            "approval_id": approval.approval_id,
-            "ticker": item.ticker,
-            "action": approval.proposed_action,
-            "proposed_dollar_amount": approval.proposed_dollar_amount,
-            "proposed_allocation_pct": approval.proposed_allocation_pct,
-            "sleeve": approval.sleeve,
-            "reason": approval.reason,
-            "expires_at": approval.expires_at,
-        },
+    # The notification (APPROVAL_REQUIRED or ORDER_AUTHORIZED) was emitted once by ProposalIntake.
+    log_activity(
+        services.root,
+        "ORDER_AUTHORIZED" if intake_status == "AUTHORIZED" else "APPROVAL_CREATED",
+        ticker=item.ticker,
+        approval_id=approval.approval_id,
+        intake_status=intake_status,
     )
-    log_activity(services.root, "APPROVAL_CREATED", ticker=item.ticker, approval_id=approval.approval_id)
 
 
 def _risk_monitor(services: AgentServices, ctx: dict[str, Any]) -> dict[str, Any]:

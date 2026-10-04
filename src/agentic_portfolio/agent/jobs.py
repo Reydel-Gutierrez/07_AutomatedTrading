@@ -63,40 +63,41 @@ class JobSpec:
 
 
 def catalog() -> list[JobSpec]:
+    """One job per responsibility. The runtime is a single portfolio loop:
+
+    observe (account/positions) → discover → research → decide → Risk Gate →
+    ProposalIntake (human or autonomous authorization) → execute → reconcile → monitor.
+
+    Removed in the autonomy consolidation (they duplicated another job's handler):
+    QUOTE_REFRESH, MARKET_OPEN_CONDITIONAL_VALIDATE, PREMARKET_NEWS, POSTMARKET_CLOSE_ANALYSIS,
+    POSTMARKET_DAILY_SNAPSHOT, POSTMARKET_CANDIDATE_RANK, TERRA_RESEARCH, THESIS_WATCH_CREATE,
+    OVERNIGHT_NEWS, OVERNIGHT_THESIS, OVERNIGHT_FUNDAMENTALS, WEEKEND_SESSION_ANALYSIS,
+    WEEKEND_DEEP_RESEARCH, WEEKEND_WATCH_CONSTRUCT, WEEKEND_STALE_CLEANUP, WEEKEND_NEXT_SESSION_PREP.
+    Their handlers remain callable by name (``LEGACY_JOB_ALIASES``) for manual runs.
+    """
     return [
         JobSpec("HEARTBEAT", ALL_PHASES, "interval", every_minutes=1, description="Persist health/uptime"),
         JobSpec("BROKER_RECONNECT", ALL_PHASES, "interval", every_minutes=5, requires_broker=False, description="Load/refresh OAuth and reconnect"),
-        JobSpec("APPROVAL_EXPIRY", ALL_PHASES, "interval", every_minutes=5, description="Expire pending approvals"),
+        JobSpec("APPROVAL_EXPIRY", ALL_PHASES, "interval", every_minutes=5, description="Expire/supersede stale order proposals"),
         JobSpec("WATCH_STALE_CLEANUP", ALL_PHASES, "interval", every_minutes=60, description="Expire stale theses"),
-        JobSpec("LIVE_ACCOUNT_REFRESH", ALL_PHASES, "interval", every_minutes=15, requires_broker=True, description="Live account/position refresh"),
-        JobSpec("POSITION_MONITOR", OPEN, "interval", every_minutes=15, requires_broker=True, requires_regular_hours=True, description="Position monitoring"),
-        JobSpec("QUOTE_REFRESH", OPEN, "interval", every_minutes=15, requires_broker=True, requires_regular_hours=True, description="Quote/liquidity refresh"),
+        JobSpec("LIVE_ACCOUNT_REFRESH", ALL_PHASES, "interval", every_minutes=15, requires_broker=True, description="Account/position refresh (broker is the source of truth)"),
+        JobSpec("LIVE_ORDER_RECONCILE", OPEN | POST, "interval", every_minutes=5, requires_broker=True, requires_regular_hours=False, description="Reconcile broker orders"),
+        JobSpec("APPROVED_EXECUTION_DRAIN", OPEN, "interval", every_minutes=5, requires_broker=True, requires_regular_hours=True, description="Execute authorized orders (human or autonomous) inside the send window"),
+        JobSpec("POSITION_MONITOR", OPEN, "interval", every_minutes=15, requires_broker=True, requires_regular_hours=True, description="Position monitoring and thesis reassessment"),
+        JobSpec("WATCH_CONDITION_MONITOR", OPEN, "interval", every_minutes=15, requires_broker=True, requires_regular_hours=True, description="Watch entry conditions → Risk Gate → ProposalIntake"),
+        JobSpec("RISK_MONITOR", OPEN, "interval", every_minutes=15, requires_broker=True, description="Deterministic risk monitoring"),
+        JobSpec("AI_REASSESS_IF_WARRANTED", OPEN, "interval", every_minutes=15, allow_ai=True, description="AI reassessment only on material events"),
         JobSpec(
             "CANDIDATE_DISCOVERY",
             OPEN | POST | CLOSED_DAYS,
             "once_per_session",
             requires_broker=True,
-            description="Broad live universe discovery; lightweight MARKET_OPEN pass every 15 minutes",
+            description="Broad discovery once after each session (and once per closed day); lightweight MARKET_OPEN pass every 15 minutes",
             open_cadence="interval",
             open_every_minutes=MARKET_OPEN_DISCOVERY_MINUTES,
         ),
-        JobSpec("POSTMARKET_EARNINGS_DISCOVERY", POST, "once_per_session", requires_broker=True, description="Earnings and event discovery"),
         JobSpec("PREMARKET_EVENT_DISCOVERY", PRE, "once_per_session", requires_broker=True, description="Overnight event / earnings refresh"),
-        JobSpec("LIVE_ORDER_RECONCILE", OPEN | POST, "interval", every_minutes=5, requires_broker=True, requires_regular_hours=False, description="Reconcile broker orders"),
-        JobSpec("APPROVED_EXECUTION_DRAIN", OPEN, "interval", every_minutes=5, requires_broker=True, requires_regular_hours=True, description="Drain approved execution intents"),
-        JobSpec("WATCH_CONDITION_MONITOR", OPEN, "interval", every_minutes=15, requires_broker=True, requires_regular_hours=True, description="Watch condition monitoring"),
-        JobSpec("RISK_MONITOR", OPEN, "interval", every_minutes=15, requires_broker=True, description="Deterministic risk monitoring"),
-        JobSpec("MARKET_OPEN_CONDITIONAL_VALIDATE", OPEN, "interval", every_minutes=15, requires_broker=True, requires_regular_hours=True, description="Validate next-session conditional plans"),
-        JobSpec("AI_REASSESS_IF_WARRANTED", OPEN, "interval", every_minutes=15, allow_ai=True, description="AI reassessment only on material events"),
-        JobSpec("PREMARKET_NEWS", PRE, "once_per_session", allow_ai=False, description="Refresh overnight news"),
-        JobSpec("PREMARKET_THESIS_REVALIDATE", PRE, "once_per_session", allow_ai=False, description="Revalidate watchlist theses"),
-        JobSpec("PREMARKET_PREPARE_CONDITIONAL", PRE, "once_per_session", allow_ai=False, description="Prepare conditional opening-session proposals"),
-        JobSpec("POSTMARKET_CLOSE_ANALYSIS", POST, "once_per_session", description="Closing-price analysis"),
-        JobSpec("POSTMARKET_RECONCILE", POST, "once_per_session", requires_broker=True, description="Portfolio reconciliation"),
-        JobSpec("POSTMARKET_DAILY_SNAPSHOT", POST, "once_per_session", description="Daily performance snapshot"),
-        JobSpec("POSTMARKET_CANDIDATE_RANK", POST, "once_per_session", description="Candidate ranking from completed session"),
-        JobSpec("LUNA_SCREEN", POST | CLOSED_DAYS, "once_per_day", allow_ai=True, description="Cheap Luna screening of queued names before Terra"),
-        JobSpec("TERRA_RESEARCH", POST | CLOSED_DAYS, "once_per_day", allow_ai=True, description="Terra deep research after Luna; skipped when core evidence is missing"),
+        JobSpec("POSTMARKET_EARNINGS_DISCOVERY", POST, "once_per_session", requires_broker=True, description="Earnings and event discovery"),
         JobSpec(
             "RESEARCH_QUEUE_WORKER",
             OPEN | NIGHT | PRE | POST | CLOSED_DAYS,
@@ -105,15 +106,7 @@ def catalog() -> list[JobSpec]:
             allow_ai=True,
             description="Luna screen then Terra research; skip paid Terra when core evidence is missing (max 1 deep-research item during MARKET_OPEN)",
         ),
-        JobSpec("THESIS_WATCH_CREATE", POST | CLOSED_DAYS, "once_per_day", description="Thesis/watchlist creation"),
-        JobSpec("NEXT_SESSION_PLANS", POST | CLOSED_DAYS, "once_per_day", description="Conditional next-session plans"),
-        JobSpec("OVERNIGHT_NEWS", NIGHT, "interval", every_minutes=120, description="News/catalyst monitoring"),
-        JobSpec("OVERNIGHT_THESIS", NIGHT, "interval", every_minutes=240, description="Thesis updates"),
-        JobSpec("OVERNIGHT_FUNDAMENTALS", NIGHT, "interval", every_minutes=360, description="Fundamentals when new data exists"),
-        JobSpec("OVERNIGHT_RISK", NIGHT, "interval", every_minutes=240, description="Portfolio risk review"),
-        JobSpec("OVERNIGHT_WATCH_MAINTAIN", NIGHT, "interval", every_minutes=120, description="Watchlist maintenance"),
-        JobSpec("WEEKEND_SESSION_ANALYSIS", CLOSED_DAYS, "once_per_day", description="Latest completed-session analysis"),
-        JobSpec("WEEKEND_DEEP_RESEARCH", CLOSED_DAYS, "once_per_day", allow_ai=True, description="Deeper candidate research"),
+        JobSpec("LUNA_SCREEN", POST | CLOSED_DAYS, "once_per_day", allow_ai=True, description="Cheap Luna screening of queued names before Terra"),
         JobSpec(
             "CORE_COMMITTEE_REVIEW",
             POST | CLOSED_DAYS,
@@ -121,11 +114,34 @@ def catalog() -> list[JobSpec]:
             allow_ai=True,
             description="CORE portfolio investment committee: residual allocation among cash, broad-market, and qualified CORE research",
         ),
+        JobSpec("PREMARKET_THESIS_REVALIDATE", PRE, "once_per_session", allow_ai=False, description="Revalidate watchlist theses and open proposals"),
+        JobSpec("PREMARKET_PREPARE_CONDITIONAL", PRE, "once_per_session", allow_ai=False, description="Prepare conditional opening-session proposals"),
+        JobSpec("POSTMARKET_RECONCILE", POST, "once_per_session", requires_broker=True, description="Portfolio reconciliation"),
+        JobSpec("NEXT_SESSION_PLANS", POST | CLOSED_DAYS, "once_per_day", description="Conditional next-session plans"),
+        JobSpec("OVERNIGHT_WATCH_MAINTAIN", NIGHT, "interval", every_minutes=120, description="Watchlist/thesis maintenance (no AI)"),
+        JobSpec("OVERNIGHT_RISK", NIGHT, "interval", every_minutes=240, description="Portfolio risk review"),
         JobSpec("WEEKEND_PORTFOLIO_REVIEW", CLOSED_DAYS, "once_per_day", requires_broker=True, description="Read-only portfolio review"),
-        JobSpec("WEEKEND_WATCH_CONSTRUCT", CLOSED_DAYS, "once_per_day", description="Watchlist construction"),
-        JobSpec("WEEKEND_STALE_CLEANUP", CLOSED_DAYS, "once_per_day", description="Stale thesis cleanup"),
-        JobSpec("WEEKEND_NEXT_SESSION_PREP", CLOSED_DAYS, "once_per_day", description="Prepare for next trading session"),
     ]
+
+
+LEGACY_JOB_ALIASES = {
+    "QUOTE_REFRESH": "QUOTE_REFRESH",
+    "MARKET_OPEN_CONDITIONAL_VALIDATE": "WATCH_CONDITION_MONITOR",
+    "PREMARKET_NEWS": "OVERNIGHT_WATCH_MAINTAIN",
+    "POSTMARKET_CLOSE_ANALYSIS": "CANDIDATE_DISCOVERY",
+    "POSTMARKET_DAILY_SNAPSHOT": "HEARTBEAT",
+    "POSTMARKET_CANDIDATE_RANK": "CANDIDATE_DISCOVERY",
+    "TERRA_RESEARCH": "RESEARCH_QUEUE_WORKER",
+    "THESIS_WATCH_CREATE": "CANDIDATE_DISCOVERY",
+    "OVERNIGHT_NEWS": "OVERNIGHT_WATCH_MAINTAIN",
+    "OVERNIGHT_THESIS": "OVERNIGHT_WATCH_MAINTAIN",
+    "OVERNIGHT_FUNDAMENTALS": "OVERNIGHT_WATCH_MAINTAIN",
+    "WEEKEND_SESSION_ANALYSIS": "CANDIDATE_DISCOVERY",
+    "WEEKEND_DEEP_RESEARCH": "RESEARCH_QUEUE_WORKER",
+    "WEEKEND_WATCH_CONSTRUCT": "CANDIDATE_DISCOVERY",
+    "WEEKEND_STALE_CLEANUP": "WATCH_STALE_CLEANUP",
+    "WEEKEND_NEXT_SESSION_PREP": "NEXT_SESSION_PLANS",
+}
 
 
 def specs_by_name() -> dict[str, JobSpec]:

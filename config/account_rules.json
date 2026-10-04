@@ -1,6 +1,6 @@
 {
-  "version": "4.1.0",
-  "updated_at": "2026-08-29",
+  "version": "5.0.0",
+  "updated_at": "2026-10-03",
   "architecture": {
     "document": "ARCHITECTURE.md",
     "policy_document": "PORTFOLIO_POLICY.md",
@@ -8,10 +8,12 @@
     "pipeline_config": "config/pipeline.json",
     "thesis_schema": "config/thesis_schema.json",
     "layers": {
-      "investment_intelligence": "advisory",
-      "deterministic_risk_control": "hard_veto",
-      "execution_control": "gated_off"
-    }
+      "investment_intelligence": "AI proposes (advisory; no broker access)",
+      "deterministic_risk_control": "hard_veto (Risk Gate at proposal time AND at send time)",
+      "authorization": "config/execution_policy.json (OBSERVE | HUMAN_APPROVAL | AUTONOMOUS)",
+      "execution_control": "OrderExecutor only; broker writes gated by AGENTIC_LIVE_ORDER_PLACEMENT (LIVE) or PaperBroker (PAPER); kill switch stops everything"
+    },
+    "execution_policy": "config/execution_policy.json"
   },
   "account": {
     "nickname": "Agentic",
@@ -31,45 +33,24 @@
     }
   },
   "execution": {
-    "state": "HUMAN_APPROVAL",
-    "available_states": ["RESEARCH_ONLY", "HUMAN_APPROVAL", "AUTO_EXECUTION"],
-    "mode": "HUMAN_APPROVAL",
-    "auto_execution": false,
-    "require_human_approval": true,
-    "live_trade_actions_allowed": false,
-    "allowed_modes": ["HUMAN_APPROVAL", "AUTO_EXECUTION"],
-    "mode_switch_requires_explicit_human_change": true,
-    "halted_drawdown_forces_auto_execution_false": true,
-    "agent_may_not_autonomously_reactivate_execution": true,
-    "market_hours": "regular_hours_only",
-    "pipeline_stop_before": "execution_controller",
-    "current_terminal_stage": "robinhood_order_review",
-    "paper_pipeline_through": [
-      "market_data",
-      "market_regime_analysis",
-      "market_sector_research",
-      "candidate_discovery",
-      "security_research",
-      "investment_thesis",
-      "opportunity_ranking",
-      "current_portfolio_analysis",
-      "portfolio_allocation_decision",
-      "deterministic_risk_validation",
-      "order_plan",
-      "paper_fill",
-      "human_approval",
-      "robinhood_order_review"
+    "authorization_policy": "config/execution_policy.json",
+    "authorization_modes": [
+      "OBSERVE",
+      "HUMAN_APPROVAL",
+      "AUTONOMOUS"
     ],
-    "live_only_steps": [
-      "confirm_agentic_account",
-      "fetch_live_portfolio_snapshot",
-      "check_buying_power",
-      "check_existing_positions",
-      "check_tradability",
-      "validate_framework_and_risk",
-      "require_explicit_human_approval",
-      "place_equity_order"
-    ]
+    "committed_default_mode": "HUMAN_APPROVAL",
+    "mode_env": "AGENTIC_EXECUTION_MODE",
+    "broker_write_switch_env": "AGENTIC_LIVE_ORDER_PLACEMENT",
+    "kill_switch_env": "AGENTIC_KILL_SWITCH",
+    "placement_surface": "src/agentic_portfolio/live_execution/executor.py",
+    "send_time_risk_gate": true,
+    "ai_may_authorize_orders": false,
+    "ai_may_call_broker_tools": false,
+    "halted_drawdown_requires_human_for_any_order": true,
+    "kill_switch_release_requires_human": true,
+    "market_hours": "regular_hours_only",
+    "notes": "Flags auto_execution / require_human_approval / live_trade_actions_allowed were removed in 5.0.0: they duplicated (and contradicted) the execution policy. The runtime truth is autonomy.load_execution_policy() + runtime.live_execution_authority()."
   },
   "capital_boundary": {
     "permanent": true,
@@ -84,11 +65,22 @@
     "even_if_mcp_later_exposes_tools": true
   },
   "allowed": {
-    "asset_classes": ["us_equities", "us_etfs"],
+    "asset_classes": [
+      "us_equities",
+      "us_etfs"
+    ],
     "direction": "long_only",
-    "order_sides": ["buy", "sell_to_close"],
-    "order_types": ["market", "limit"],
-    "sessions": ["regular_hours"]
+    "order_sides": [
+      "buy",
+      "sell_to_close"
+    ],
+    "order_types": [
+      "market",
+      "limit"
+    ],
+    "sessions": [
+      "regular_hours"
+    ]
   },
   "prohibited": {
     "options": true,
@@ -99,12 +91,12 @@
     "short_selling": true,
     "leveraged_etfs": true,
     "trading_outside_regular_market_hours": true,
-    "autonomous_execution": true,
     "averaging_down": false,
     "duplicate_symbols_as_separate_logical_positions": true,
     "overriding_risk_limits": true,
     "capital_transfers": true,
-    "loosening_hard_concentration_ceilings": true
+    "loosening_hard_concentration_ceilings": true,
+    "ai_authorized_orders": true
   },
   "definitions": {
     "leveraged_etf_absolute_leverage_gt": 1.0,
@@ -112,7 +104,13 @@
       "timezone": "America/New_York",
       "open": "09:30",
       "close": "16:00",
-      "days": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
+      "days": [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday"
+      ]
     }
   },
   "risk": {
@@ -134,7 +132,9 @@
       "REJECT",
       "NO_ACTION"
     ],
-    "decision_aliases": { "EXIT": "SELL" },
+    "decision_aliases": {
+      "EXIT": "SELL"
+    },
     "no_action_always_valid": true,
     "hardcoded_universe_forbidden": true,
     "single_indicator_insufficient": true,
@@ -144,7 +144,7 @@
     "allowed_now": {
       "read_only": true,
       "order_review": true,
-      "order_execution": false,
+      "order_execution": "OrderExecutor only, after authorization (human or deterministic autonomous policy), send-time revalidation and Risk Gate re-run",
       "order_cancel": false,
       "order_modify": false,
       "capital_transfer": false
@@ -185,7 +185,6 @@
       "cancel": "cancel_equity_order"
     },
     "forbidden_now": [
-      "place_equity_order",
       "cancel_equity_order"
     ],
     "never_call_for_this_system": [
@@ -203,6 +202,10 @@
       "any_withdrawal_tool",
       "any_inter_account_transfer_tool",
       "any_ach_or_wire_tool"
+    ],
+    "forbidden_outside_executor": [
+      "place_equity_order",
+      "review_equity_order"
     ]
   }
 }

@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
 
-from agentic_portfolio.agent.safety import assert_execution_disabled
 from agentic_portfolio.calendar import NyseEquityCalendar, is_regular_hours, next_regular_open_at
 from agentic_portfolio.journal import append_jsonl
 from agentic_portfolio.policy import load_agent_config, load_research_config
@@ -113,7 +112,6 @@ class WatchEngine:
         proposed_notional: float | None = None,
         desired_allocation_pct: float | None = None,
     ) -> WatchItem:
-        assert_execution_disabled()
         stamp = self.now()
         existing = self.store.by_ticker(ticker)
         if existing is None:
@@ -314,7 +312,6 @@ class WatchEngine:
         Thesis, invalidation, sleeve, score, expiry, and evidence are left alone.
         A timestamp correction is not a Terra event.
         """
-        assert_execution_disabled()
         migrated: list[WatchItem] = []
         for item in self.store.active():
             if item.status is WatchStatus.WATCH:
@@ -344,7 +341,6 @@ class WatchEngine:
         Thesis, sleeve, score, and evidence are left alone. A status correction is
         not a Terra event and does not place an order.
         """
-        assert_execution_disabled()
         migrated: list[WatchItem] = []
         for item in self.store.active():
             if item.status is not WatchStatus.WAITING_FOR_OPEN:

@@ -42,7 +42,15 @@ SATURDAY = datetime(2026, 8, 29, 14, 0, tzinfo=EASTERN)
 LABOR_DAY = datetime(2026, 9, 7, 12, 0, tzinfo=EASTERN)
 
 
+WATCH_RESEARCH = {"QUAL": 50.0, "HD": 180.0}
+
+
 def _services(tmp_path: Path, *, now, quotes=None, candidates=None, exhausted=False, bootstrap=None, last_context=None):
+    # The watch → order path runs the real Risk Gate, which needs the persisted research facts.
+    from tests.autonomy_helpers import seed_research
+
+    for symbol, price in WATCH_RESEARCH.items():
+        seed_research(tmp_path, symbol, price)
     watch_store = WatchStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
     approval_store = LiveApprovalStore(tmp_path, runtime_mode=RuntimeMode.LIVE)
     notify = NotificationEngine(NotificationStore(tmp_path), now_fn=now)
@@ -137,22 +145,24 @@ def test_off_market_and_weekend_jobs_execute(tmp_path):
     now = lambda: SATURDAY
     orch = JobOrchestrator(tmp_path, handlers=build_handlers(_services(tmp_path, now=now)), now_fn=now)
     due = orch.due_jobs(SATURDAY)
-    assert "WEEKEND_SESSION_ANALYSIS" in due
-    assert "WEEKEND_WATCH_CONSTRUCT" in due
-    assert "MARKET_OPEN_CONDITIONAL_VALIDATE" not in due
+    # One discovery job per closed day (the old *_ANALYSIS / *_CONSTRUCT aliases were duplicates).
+    assert "CANDIDATE_DISCOVERY" in due
+    assert "WEEKEND_PORTFOLIO_REVIEW" in due
+    assert "WATCH_CONDITION_MONITOR" not in due
+    assert "APPROVED_EXECUTION_DRAIN" not in due
     rows = orch.tick(SATURDAY)
     names = {row["job"] for row in rows}
-    assert "WEEKEND_SESSION_ANALYSIS" in names
+    assert "CANDIDATE_DISCOVERY" in names
     assert all(row.get("placement_attempted") is False for row in rows)
 
     pre = JobOrchestrator(tmp_path / "pre", now_fn=lambda: FRIDAY_PRE)
-    assert "PREMARKET_NEWS" in pre.due_jobs(FRIDAY_PRE)
+    assert "PREMARKET_THESIS_REVALIDATE" in pre.due_jobs(FRIDAY_PRE)
     post = JobOrchestrator(tmp_path / "post", now_fn=lambda: FRIDAY_POST)
-    assert "POSTMARKET_CLOSE_ANALYSIS" in post.due_jobs(FRIDAY_POST)
+    assert "CANDIDATE_DISCOVERY" in post.due_jobs(FRIDAY_POST)
     night = JobOrchestrator(tmp_path / "night", now_fn=lambda: FRIDAY_NIGHT)
-    assert "OVERNIGHT_NEWS" in night.due_jobs(FRIDAY_NIGHT)
+    assert "OVERNIGHT_WATCH_MAINTAIN" in night.due_jobs(FRIDAY_NIGHT)
     holiday = JobOrchestrator(tmp_path / "hol", now_fn=lambda: LABOR_DAY)
-    assert "WEEKEND_SESSION_ANALYSIS" in holiday.due_jobs(LABOR_DAY)
+    assert "CANDIDATE_DISCOVERY" in holiday.due_jobs(LABOR_DAY)
 
     open_orch = JobOrchestrator(tmp_path / "open", now_fn=lambda: FRIDAY_OPEN)
     open_due = open_orch.due_jobs(FRIDAY_OPEN)
@@ -1158,10 +1168,12 @@ def test_approve_reject_dashboard_does_not_place(tmp_path):
     body = res.get_json()
     assert body["ok"] is True
     assert body["placed_order"] is False
-    assert body["packet"]["status"] == LiveApprovalStatus.APPROVED_EXECUTION_DISABLED.value
+    # PAPER approvals execute only through the PaperBroker in a send window with a quote; here
+    # there is neither, so the approval waits (APPROVED) or is held — it never reaches a broker.
+    assert body["packet"]["status"] in {LiveApprovalStatus.APPROVED.value, LiveApprovalStatus.APPROVED_EXECUTION_DISABLED.value}
     assert body["packet"]["broker_submitted"] is False
     stored = store.get(item.approval_id)
-    assert stored.status is APPROVED_HOLD
+    assert stored.status in {LiveApprovalStatus.APPROVED, APPROVED_HOLD}
     assert stored.placed_order is False
     other = engine.create(ticker="IONQ", proposed_action="BUY")
     rej = client.post(f"/api/approvals/{other.approval_id}/reject", json=_decide_payload(client, note="no"))
@@ -1268,8 +1280,10 @@ def test_no_paper_contamination_and_no_live_order_path(tmp_path):
     assert inspect_agent_packages_for_forbidden_calls() == []
     assert LIVE_ORDER_PLACEMENT is False
     names = {spec.name for spec in catalog()}
-    assert "WEEKEND_SESSION_ANALYSIS" in names
-    assert "MARKET_OPEN_CONDITIONAL_VALIDATE" in names
+    assert "CANDIDATE_DISCOVERY" in names
+    assert "WATCH_CONDITION_MONITOR" in names
+    # Duplicate validators were consolidated; the legacy name remains runnable by hand.
+    assert "MARKET_OPEN_CONDITIONAL_VALIDATE" not in names
 
 
 def test_malformed_candidate_is_rejected_before_ai(tmp_path):

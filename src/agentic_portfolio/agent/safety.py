@@ -1,4 +1,9 @@
-"""24/7 agent runtime must never auto-execute. Placement is LiveOrderExecutor-only."""
+"""Structural safety for the 24/7 runtime.
+
+Job handlers, watch, approvals and notifications never call broker mutation
+tools. The only placement surface is live_execution/executor.py. WHO may
+authorize an order is decided by autonomy.OrderAuthority, not by flags here.
+"""
 
 from __future__ import annotations
 
@@ -16,21 +21,6 @@ AGENT_FORBIDDEN_TOOLS = frozenset(LIVE_FORBIDDEN_TOOLS) | {
 
 class AgentSafetyError(LiveSafetyError):
     """Raised when the 24/7 runtime would trade or move money."""
-
-
-def assert_auto_execution_disabled(*, live_trade_actions_allowed: bool = False, auto_execution: bool = False) -> None:
-    if auto_execution:
-        raise AgentSafetyError("auto_execution must remain false")
-    if live_trade_actions_allowed:
-        raise AgentSafetyError("live_trade_actions_allowed must remain false; LiveOrderExecutor is the placement path")
-
-
-def assert_execution_disabled(*, live_trade_actions_allowed: bool = False, auto_execution: bool = False) -> None:
-    """Job handlers and paper modules must not auto-execute. Placement flag is independent."""
-    assert_auto_execution_disabled(
-        live_trade_actions_allowed=live_trade_actions_allowed,
-        auto_execution=auto_execution,
-    )
 
 
 def inspect_agent_packages_for_forbidden_calls(root: Path | None = None) -> list[str]:

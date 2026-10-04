@@ -40,7 +40,7 @@ def test_paper_research_workflow_does_not_execute(tmp_path):
         thesis_fields={"thesis_summary": "core beta", "bull_case": "beta", "bear_case": "drawdown"},
     )
     assert out.execution_attempted is False
-    assert out.risk.execution_permitted is False
+    assert out.risk.execution_permitted is (out.risk.verdict.value == "PASS")  # permitted-by-policy == PASS; authorization is separate
     assert out.classification.security_class.value == "BROAD_MARKET_INDEX_ETF"
     assert out.thesis is not None
     assert out.sleeve == Sleeve.CORE_GROWTH

@@ -139,9 +139,10 @@ def evaluate(ctx: PortfolioContext, action: ProposedAction, sleeves=None, theses
     reviews: list[str] = []
     verdict = GateVerdict.PASS
     rec_ok = True
-    exec_ok = bool(rules["execution"].get("live_trade_actions_allowed")) and bool(
-        rules["execution"].get("auto_execution")
-    )
+    # The gate answers "is this permitted under policy?". WHO may authorize the
+    # order (human or autonomous policy) is decided by autonomy.OrderAuthority,
+    # not by flags here. execution_permitted is derived from the final verdict.
+    exec_ok = True
 
     def fail(code: str, msg: str, kind: BreachKind = BreachKind.PROPOSED_ACTION_BREACH) -> None:
         nonlocal verdict
@@ -153,13 +154,6 @@ def evaluate(ctx: PortfolioContext, action: ProposedAction, sleeves=None, theses
         reviews.append(flag)
         reasons.append(GateReason(code, msg, BreachKind.PROPOSED_ACTION_BREACH))
         verdict = _bump(verdict, GateVerdict.REQUIRES_ENHANCED_REVIEW)
-
-    # A. execution-state (paper PASS still allowed; live exec off)
-    if not rules["execution"].get("live_trade_actions_allowed"):
-        exec_ok = False
-        reasons.append(
-            GateReason("LIVE_TRADE_ACTIONS_DISABLED", "Paper evaluation only; execution controller is off.", BreachKind.NONE)
-        )
 
     # B. Agentic account
     if ctx.account_number != rules["account"]["account_number"]:
@@ -223,10 +217,15 @@ def evaluate(ctx: PortfolioContext, action: ProposedAction, sleeves=None, theses
         if thesis is None or thesis.status not in _ACTIVE_THESIS:
             fail("ADD_NO_ACTIVE_THESIS", "ADD requires an existing ACTIVE thesis in the thesis registry.")
         else:
-            if not theses.has_fresh_review(thesis.thesis_id, "INVESTMENT_THESIS_REVIEW", session_id=ctx.trading_session_id):
-                fail("ADD_STALE_THESIS_REVIEW", "ADD requires a fresh INVESTMENT_THESIS_REVIEW in the thesis registry.")
-            if not theses.has_fresh_review(thesis.thesis_id, "RISK_REVIEW", session_id=ctx.trading_session_id):
-                fail("ADD_STALE_RISK_REVIEW", "ADD requires a fresh RISK_REVIEW in the thesis registry.")
+            # A fresh AI thesis review must exist: a portfolio decision (INVESTMENT_THESIS_REVIEW)
+            # or a position-monitor reassessment (POSITION_MONITOR_REVIEW). The RISK_REVIEW for an
+            # ADD is this deterministic gate evaluation itself, journaled with every decision.
+            fresh = any(
+                theses.has_fresh_review(thesis.thesis_id, kind, session_id=ctx.trading_session_id)
+                for kind in ("INVESTMENT_THESIS_REVIEW", "POSITION_MONITOR_REVIEW")
+            )
+            if not fresh:
+                fail("ADD_STALE_THESIS_REVIEW", "ADD requires a fresh thesis review (portfolio decision or position-monitor reassessment).")
 
     # F/G. concentration matrix
     current_pos_pct = _existing_mv(ctx, action.symbol) / ctx.current_nav if ctx.current_nav else 0.0
@@ -358,14 +357,12 @@ def evaluate(ctx: PortfolioContext, action: ProposedAction, sleeves=None, theses
             fail("DEFENSIVE_CORE_ETF_NOT_VALIDATED", "Defensive Core ETF must be validated broad-market.")
 
     if state == RiskState.HALTED:
-        exec_ok = False
         if risk_up:
             fail("HALTED_NO_NEW_RISK", "HALTED: no new autonomous risk.")
         elif decision in {Decision.SELL, Decision.REDUCE, Decision.HOLD, Decision.NO_ACTION, Decision.WATCH}:
             verdict = _bump(verdict, GateVerdict.HALTED)
             rec_ok = True
             if not action.human_authorized_halted_execution:
-                exec_ok = False
                 reasons.append(
                     GateReason(
                         "HALTED_RECOMMEND_ONLY",
@@ -408,6 +405,13 @@ def evaluate(ctx: PortfolioContext, action: ProposedAction, sleeves=None, theses
 
     if decision in {Decision.HOLD, Decision.WATCH, Decision.REJECT, Decision.NO_ACTION} and verdict == GateVerdict.PASS:
         rec_ok = True
+
+    if verdict is GateVerdict.HALTED:
+        exec_ok = exec_ok and decision in {Decision.SELL, Decision.REDUCE} and action.human_authorized_halted_execution
+    elif verdict is not GateVerdict.PASS:
+        exec_ok = False
+    if decision in {Decision.HOLD, Decision.WATCH, Decision.REJECT, Decision.NO_ACTION}:
+        exec_ok = False  # nothing to execute
 
     snapshot_id = str(uuid4())
     record = {

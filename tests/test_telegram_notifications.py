@@ -38,6 +38,10 @@ ALLOWED = (
     NotificationKind.BROKER_CONNECTION_LOST,
     NotificationKind.AI_BUDGET_CRITICAL,
     NotificationKind.AI_BUDGET_EXHAUSTED,
+    # Autonomy: autonomous authorizations, kill-switch changes and execution blocks reach the phone.
+    NotificationKind.ORDER_AUTHORIZED,
+    NotificationKind.KILL_SWITCH,
+    NotificationKind.EXECUTION_BLOCKED,
 )
 
 
@@ -162,7 +166,7 @@ def test_all_selected_kinds_are_accepted():
     sink = _sink(transport=transport)
     for kind in ALLOWED:
         sink.emit(_note(kind, title=kind.value, body=f"body-{kind.value}", payload={"ticker": "MSFT", "action": "BUY"}))
-    assert len(transport.calls) == 10
+    assert len(transport.calls) == len(ALLOWED)
 
 
 def test_disallowed_kinds_are_not_sent():

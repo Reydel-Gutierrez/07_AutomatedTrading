@@ -14,16 +14,13 @@ Use live `get_portfolio` going forward. Do not treat $500 as a policy constraint
 
 ## Execution
 
-| Setting | Value |
-|---|---|
-| State | `HUMAN_APPROVAL` |
-| `auto_execution` | `false` |
-| `require_human_approval` | `true` |
-| `live_trade_actions_allowed` | `false` |
-| `LIVE_ORDER_PLACEMENT` | `false` (committed default) |
-| Placement surface | `LiveOrderExecutor` only, after human APPROVE + send-time revalidation + broker review |
+| Switch | Committed default | Production (Pi env) |
+|---|---|---|
+| `AGENTIC_EXECUTION_MODE` (`OBSERVE` / `HUMAN_APPROVAL` / `AUTONOMOUS`) | `HUMAN_APPROVAL` | your choice (`AUTONOMOUS` for unattended operation) |
+| `AGENTIC_LIVE_ORDER_PLACEMENT` (LIVE broker writes) | `false` | `true` once validated |
+| Kill switch | released | dashboard / `scripts/kill_switch.py` / `AGENTIC_KILL_SWITCH` |
 
-Human approval is mandatory. With `LIVE_ORDER_PLACEMENT=false`, APPROVE → `APPROVED_EXECUTION_DISABLED` and the broker place tool is not called. Enabling placement is a manual Raspberry Pi step after validation — never a git default. No deposits/withdrawals/transfers.
+Every order — human- or policy-authorized — passes the deterministic Risk Gate at proposal time **and again on fresh facts at send time**, then broker review, through `OrderExecutor` (the only placement surface). In `AUTONOMOUS` mode only clean Risk-Gate `PASS` proposals inside the autonomy circuit breakers are authorized without you; enhanced-review, HALTED, oversized, or limit-breaching proposals are escalated to the dashboard/Telegram. AI never has broker access and never authorizes. No deposits/withdrawals/transfers. See `ARCHITECTURE.md`.
 
 ## Layout
 
@@ -50,6 +47,7 @@ config/review.json
 config/runtime.json
 config/ai.json
 config/dashboard.json
+config/execution_policy.json
 deploy/                  ← Raspberry Pi systemd unit, env example, install procedure
 src/agentic_portfolio/   ← context, LIVE Robinhood snapshot, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, deep research, thesis+portfolio decision, position monitoring, risk gate, paper execution controller, paper fill/blotter, human approval packet, LiveOrderExecutor (the only broker place surface)
 tests/
@@ -71,7 +69,8 @@ logs/  reports/  state/
 11. `config/runtime.json` — PAPER vs LIVE source of truth (placement still off in git)  
 12. `config/ai.json` — AI Gateway roles/providers, $10/month hard cap, conservative LIVE shortlist, Raspberry Pi scheduler  
 13. `config/live_execution.json` — send-time revalidation, dollar BUY orders, idempotency  
-14. If prose ≠ JSON, **stop**
+14. `config/execution_policy.json` — who authorizes orders (OBSERVE / HUMAN_APPROVAL / AUTONOMOUS), autonomy circuit breakers, kill switch  
+15. If prose ≠ JSON, **stop**
 
 ## Candidate Discovery
 

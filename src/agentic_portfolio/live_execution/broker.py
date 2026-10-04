@@ -360,6 +360,8 @@ class FakeBroker:
         dollars = payload.get("dollar_amount")
         price = self.quotes.get(symbol) or 0.0
         quantity = float(qty) if qty not in (None, "") else (float(dollars) / price if dollars and price else 0.0)
+        # Like the real broker, fractional fills are recorded at 6-decimal share precision.
+        quantity = int(quantity * 1_000_000) / 1_000_000
         order = {
             "id": str(uuid4()),
             "ref_id": payload.get("ref_id"),

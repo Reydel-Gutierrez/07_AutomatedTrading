@@ -88,7 +88,7 @@ def reconcile_orders(
             try:
                 from agentic_portfolio.live_execution.positions import upsert_from_fill
 
-                upsert_from_fill(root, symbol=order.symbol, store=store, mode=store.runtime_mode)
+                upsert_from_fill(root, symbol=order.symbol, store=store, mode=store.runtime_mode, intent_id=order.intent_id)
             except Exception:  # noqa: BLE001
                 pass
             if refresh_fn:

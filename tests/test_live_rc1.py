@@ -121,7 +121,16 @@ def _stack(tmp_path: Path, broker: FakeBroker, *, nav: float = 500.0, cash: floa
     return store, executor, approvals, context
 
 
+def _qual_snapshot(dollars=25.0):
+    from tests.autonomy_helpers import action_snapshot
+
+    return action_snapshot("QUAL", notional=dollars, price=QUOTE, security_class=SecurityClass.OTHER_DIVERSIFIED_ETF)
+
+
 def _approved_buy(engine: LiveApprovalEngine, *, dollars=25.0, pct=5.0, quote=QUOTE, nav=500.0, cash=500.0, bp=500.0, action="BUY"):
+    from agentic_portfolio.schemas import Decision
+    from tests.autonomy_helpers import action_snapshot
+
     item = engine.create(
         ticker="QUAL",
         proposed_action=action,
@@ -132,6 +141,16 @@ def _approved_buy(engine: LiveApprovalEngine, *, dollars=25.0, pct=5.0, quote=QU
         portfolio_impact={"nav": nav, "cash": cash, "buying_power": bp},
         supporting_thesis="Quality compounder.",
         reason="Favorable vs cash.",
+        # The executor re-runs the full Risk Gate at send time from this snapshot.
+        metadata={
+            "proposed_action_snapshot": action_snapshot(
+                "QUAL",
+                decision=Decision(action),
+                notional=dollars,
+                price=quote,
+                security_class=SecurityClass.OTHER_DIVERSIFIED_ETF,
+            )
+        },
     )
     return engine.record_decision(item.approval_id, LiveApprovalStatus.APPROVED, note="human")
 
@@ -350,6 +369,7 @@ def test_10_restart_between_approval_and_execution(monkeypatch, tmp_path):
         current_quote=QUOTE,
         portfolio_impact={"nav": 500, "cash": 500, "buying_power": 500},
         risk_gate_result={"verdict": "PASS"},
+        metadata={"proposed_action_snapshot": _qual_snapshot()},
     )
     item.status = LiveApprovalStatus.APPROVED
     engine.store.save(item)
@@ -383,6 +403,7 @@ def test_11_ambiguous_submit_reconcile_no_blind_retry(monkeypatch, tmp_path):
         current_quote=QUOTE,
         portfolio_impact={"nav": 500, "cash": 500, "buying_power": 500},
         risk_gate_result={"verdict": "PASS"},
+        metadata={"proposed_action_snapshot": _qual_snapshot()},
     )
     item.status = LiveApprovalStatus.APPROVED
     engine.store.save(item)

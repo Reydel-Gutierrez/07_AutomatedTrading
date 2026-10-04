@@ -109,13 +109,17 @@ def run_smoke(
     add("runtime_mode_LIVE", runtime is RuntimeMode.LIVE, runtime.value)
     add("LIVE_ORDER_PLACEMENT_false", LIVE_ORDER_PLACEMENT is False, str(LIVE_ORDER_PLACEMENT).lower())
     rules = load_account_rules()
-    exe = dict(rules.get("execution") or {})
-    add("auto_execution_false", exe.get("auto_execution") is False, str(bool(exe.get("auto_execution"))).lower())
-    add(
-        "live_trade_actions_allowed_false",
-        exe.get("live_trade_actions_allowed") is False,
-        str(bool(exe.get("live_trade_actions_allowed"))).lower(),
-    )
+    from agentic_portfolio.autonomy.kill_switch import KillSwitch
+    from agentic_portfolio.autonomy.policy import load_execution_policy
+    from agentic_portfolio.runtime import live_placement_enabled
+
+    policy = load_execution_policy(environ=env)
+    # A typo in AGENTIC_EXECUTION_MODE silently falls back to HUMAN_APPROVAL; surface it here.
+    add("execution_mode_valid", policy.invalid_mode_value is None, f"{policy.mode.value} ({policy.mode_source})")
+    # Informational: unset or ambiguous values fail closed to OFF.
+    add("broker_writes_switch", True, f"AGENTIC_LIVE_ORDER_PLACEMENT={str(live_placement_enabled(environ=env)).lower()}")
+    ks = KillSwitch(base, policy=policy, environ=env).status()
+    add("kill_switch_readable", ks.reason not in {"kill_switch_state_unreadable", "kill_switch_state_invalid"}, "ENGAGED" if ks.engaged else "released")
 
     home = _home(env)
     store = oauth_store_path(environ=env)

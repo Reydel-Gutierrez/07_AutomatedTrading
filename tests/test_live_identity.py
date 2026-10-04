@@ -424,9 +424,13 @@ def test_paper_fixtures_still_allowed_for_discovery():
 def test_live_placement_remains_impossible():
     from agentic_portfolio.policy import load_account_rules
 
+    from agentic_portfolio.autonomy.policy import ExecutionMode, load_execution_policy
+    from agentic_portfolio.runtime import live_placement_enabled
+
     rules = load_account_rules()["execution"]
-    assert rules["auto_execution"] is False
-    assert rules["live_trade_actions_allowed"] is False
+    assert rules["committed_default_mode"] == "HUMAN_APPROVAL"
+    assert load_execution_policy(environ={}).mode is ExecutionMode.HUMAN_APPROVAL
+    assert live_placement_enabled(environ={}) is False  # committed broker-write switch is off
     assert LIVE_ORDER_PLACEMENT is False
 
 

@@ -1,154 +1,160 @@
 # Architecture
 
-AI agentic portfolio manager on Robinhood Trading MCP. **One** percent-of-NAV policy at any Agentic NAV.
+AI-assisted, deterministic-risk portfolio manager for the dedicated Robinhood **Agentic** account.
+One percent-of-NAV policy at any NAV (`PORTFOLIO_POLICY.md` + `config/portfolio_policy.json`).
 
-Canonical policy: `PORTFOLIO_POLICY.md` + `config/portfolio_policy.json`.  
-Reasoning: `STRATEGY.md`. Risk: `RISK_RULES.md`.
+The system is **one portfolio loop**. It runs identically in PAPER and LIVE. The only differences are the
+broker endpoint (the simulated `PaperBroker` or Robinhood) and the state root.
 
-Live trading is **off in committed config**. After human APPROVE, `LiveOrderExecutor` may place only when `AGENTIC_LIVE_ORDER_PLACEMENT=true` in `/etc/agentic-portfolio/env`. Default remains false. No transfers.
+```
+                 ┌──────────────────────── AI (advisory, $10/month cap, no broker access) ───────────────────────┐
+ broker facts →  DISCOVERY → RESEARCH (Luna screen, Terra report) → THESIS + PORTFOLIO DECISION / CORE COMMITTEE
+ (read-only)                                       POSITION MONITOR reassessment ┘                                │
+                 └──────────────────────────────────────────────────────────────────────────────────────────────┘
+                                   │ ProposedAction (symbol, action, class, sleeve, sector, size, liquidity)
+                                   ▼
+                        DETERMINISTIC RISK GATE (hard veto, proposal time)
+                                   ▼
+                        ProposalIntake  ── OBSERVE → journal only, no order
+                                   │
+                        OrderAuthority (deterministic, no AI)
+                          ├─ HUMAN_APPROVAL → PENDING → human APPROVE ─┐
+                          └─ AUTONOMOUS → clean PASS within limits ────┤→ APPROVED
+                             anything else → ESCALATED to a human ─────┘
+                                   ▼
+                        OrderExecutor (the ONLY placement surface)
+                          kill switch → broker-write permission → fresh account refresh → quote/tradability
+                          → send-time revalidation → sizing → FULL RISK GATE RE-RUN on fresh facts
+                          → OrderAuthority pre-send checks (limits, window, spread, staleness)
+                          → broker review → place → audit/notify
+                                   ▼
+                        RECONCILE → account refresh → POSITION MONITOR → (loop)
+```
 
-Production AI is **advisory**. Cursor is the development agent. The Raspberry Pi application is the autonomous production runtime. OpenAI/Anthropic are reasoning services used only through the AI Gateway. Risk Gate is the deterministic authority. The broker is the authoritative account/execution state. AI never has unrestricted trading authority.
+## Authority
 
-## Layers
+| Layer | Owner | Authority |
+|---|---|---|
+| Facts (NAV, cash, positions, quotes) | Broker via read-only adapter | Source of truth |
+| Interpretation (research, thesis, action, size) | AI through the AI Gateway | Advisory; structured JSON only |
+| Permission | Deterministic Risk Gate | Hard veto, evaluated twice (proposal + send) |
+| Authorization | `OrderAuthority` + `config/execution_policy.json` | Human or deterministic policy. **Never AI.** |
+| Execution | `OrderExecutor` (`live_execution/executor.py`) | Sole broker-write caller |
+| Emergency stop | Kill switch | Stops every submission; human release only |
 
-| Layer | Authority |
+AI never holds a broker client, never calls `review/place/cancel`, and never calls an approve/authorize
+method. `tests/test_autonomy_e2e.py::test_ai_layer_has_no_broker_or_authorization_access` enforces this
+statically for `ai/`, `research/`, and `decision/`.
+
+## Three switches (and only three)
+
+| Switch | Where | Values | Meaning |
+|---|---|---|---|
+| Execution mode | `AGENTIC_EXECUTION_MODE` or `config/execution_policy.json` | `OBSERVE` / `HUMAN_APPROVAL` / `AUTONOMOUS` | Who may authorize an order. Committed default `HUMAN_APPROVAL`. Typos fail safe to `HUMAN_APPROVAL`. |
+| Broker writes (LIVE) | `AGENTIC_LIVE_ORDER_PLACEMENT` | `true` / `false` | Whether the executor may bind the Robinhood write transport. Committed default `false`. PAPER always writes to the PaperBroker. |
+| Kill switch | `state/runtime/kill_switch.json` (dashboard / `scripts/kill_switch.py`) or `AGENTIC_KILL_SWITCH` | engaged / released | Stops all submissions immediately. Auto-trips on ambiguous submission, repeated broker failures, wrong account. |
+
+The former flags `auto_execution`, `require_human_approval`, and `live_trade_actions_allowed` in
+`account_rules.json` / `agent.json` / `live_execution.json` / `runtime.json` were removed. They duplicated these
+switches, contradicted the runtime, and several modules crashed if anyone changed them.
+
+## Autonomous authorization (`config/execution_policy.json → autonomous`)
+
+`AUTONOMOUS` authorizes a proposal only when **all** hold; otherwise it is escalated to the human queue with
+explicit reasons:
+
+* Risk Gate verdict is exactly `PASS` (not `REQUIRES_ENHANCED_REVIEW`, not `HALTED`);
+* action in `allowed_actions`; order sized; full ProposedAction snapshot present (BUY/ADD);
+* single BUY/ADD ≤ `max_single_order_pct_nav`; daily BUY notional ≤ `max_buy_notional_pct_nav_per_day`;
+  orders today < `max_orders_per_day`; cash after a buy ≥ `min_cash_reserve_pct_nav`;
+* kill switch released; broker failure streak < `max_consecutive_execution_failures`.
+
+At send time an autonomous order additionally needs: mode still `AUTONOMOUS`, inside the send window
+(`min_minutes_after_open` / `min_minutes_before_close`), spread ≤ `max_spread_bps`, and an authorization from
+its first eligible session. An authorization made off-hours (Friday evening) is valid for the next session
+(Monday) only; stale ones are consumed and the pipeline re-proposes on fresh facts.
+
+A human APPROVE of an escalated proposal is the review the Risk Gate asked for (enhanced concentration,
+sector, speculative liquidity, HALTED exits). Human-approved orders still pass send-time revalidation and the
+Risk Gate re-run.
+
+## Send-time protection (every order, every mode)
+
+1. Kill switch.
+2. Broker-write permission (`LIVE` + switch + bound write transport, or `PAPER` + PaperBroker; a PaperBroker in
+   LIVE or a real broker in PAPER is refused).
+3. Fresh account refresh; account number must match the Agentic account (mismatch trips the kill switch).
+4. `revalidate_for_send`: expiry, session, tradability, quote move vs proposal, NAV/cash/BP drift, duplicate
+   open order, thesis invalidated, risk regime.
+5. Deterministic sizing (dollar BUYs; SELL = full exit; REDUCE = to target %).
+6. **Full Risk Gate re-run** on the persisted ProposedAction with fresh price, size, spread, and context.
+7. OrderAuthority pre-send checks.
+8. Broker `review_equity_order`, then `place_equity_order`; ambiguous acknowledgement → UNKNOWN + kill switch.
+
+Deferrable conditions (market closed, outside the send window, transient quote outage, wide spread) leave the
+order APPROVED for `APPROVED_EXECUTION_DRAIN`; everything else consumes it.
+
+## PAPER and LIVE
+
+| | LIVE | PAPER |
+|---|---|---|
+| Account facts | Agentic Robinhood account (read-only MCP) | `PaperBroker` simulated account (`state/paper_broker/account.json`) |
+| Market data | Read-only Robinhood quotes | The same read-only Robinhood quotes |
+| Orders | `LiveWriteAdapter` (needs `AGENTIC_LIVE_ORDER_PLACEMENT=true`) | `PaperBroker` fills at ask/bid |
+| State root | project root (existing Pi state) | `var/paper` (or `AGENTIC_STATE_ROOT`) |
+| Pipeline | identical | identical |
+
+The older offline paper toolchain (`execution/` OrderPlan, `paper_fill/`, `approval/` packets, `review/`
+review-only, `scripts/run_paper_*.py`) is **legacy**: kept for its tests and historical dashboards, not used by
+the runtime.
+
+## Runtime
+
+`scripts/run_service.py` = dashboard thread + `AgentRuntime` (24/7). The orchestrator runs one job per
+responsibility (`agent/jobs.py`, 27 jobs; 14 duplicate aliases were removed and remain runnable by name):
+
+| Phase | Jobs |
 |---|---|
-| AI intelligence | Advisory |
-| Deterministic risk (class + sleeve % NAV, daily halt, HWM) | Hard veto; agent may tighten only |
-| Execution | Paper OrderPlan + paper fill for tests; LIVE human APPROVE → LiveOrderExecutor only when placement is explicitly enabled |
+| Always | HEARTBEAT, BROKER_RECONNECT, APPROVAL_EXPIRY, WATCH_STALE_CLEANUP, LIVE_ACCOUNT_REFRESH |
+| Market open | APPROVED_EXECUTION_DRAIN (5m), LIVE_ORDER_RECONCILE (5m), POSITION_MONITOR, WATCH_CONDITION_MONITOR, RISK_MONITOR, AI_REASSESS_IF_WARRANTED (15m), CANDIDATE_DISCOVERY lightweight (15m), RESEARCH_QUEUE_WORKER (30m, 1 item) |
+| Pre-market | PREMARKET_EVENT_DISCOVERY, PREMARKET_THESIS_REVALIDATE, PREMARKET_PREPARE_CONDITIONAL |
+| After close | CANDIDATE_DISCOVERY broad, POSTMARKET_EARNINGS_DISCOVERY, POSTMARKET_RECONCILE, LUNA_SCREEN, CORE_COMMITTEE_REVIEW, NEXT_SESSION_PLANS |
+| Overnight | OVERNIGHT_WATCH_MAINTAIN, OVERNIGHT_RISK, RESEARCH_QUEUE_WORKER |
+| Weekend/holiday | CANDIDATE_DISCOVERY broad, RESEARCH_QUEUE_WORKER, LUNA_SCREEN, CORE_COMMITTEE_REVIEW, NEXT_SESSION_PLANS, WEEKEND_PORTFOLIO_REVIEW |
 
-## Components
+One failed job never stops the process. AI is skipped (not the runtime) when the budget is exhausted.
 
-Keep these modules separate:
+## Proposal sources (all through `ProposalIntake`)
 
-| Module | Role |
+| Origin | Module | Risk Gate input |
+|---|---|---|
+| New research → decision / CORE committee | `agent/pipeline.py` | `ProposedAction` from `decision/engine.py` |
+| Holding reassessment (ADD/REDUCE/SELL) | `monitoring/live.py` | `ProposedAction` from `monitoring/engine.py` |
+| Watch entry conditions met at the open | `agent/handlers.py` | `ProposedAction` rebuilt from persisted research (`autonomy/watch_proposal.py`) |
+
+The watch path previously created approvals with a hard-coded `PASS`; it now runs the real gate.
+
+## AI budget
+
+Unchanged: one combined $10/month cap across providers (`config/ai.json`, persisted ledger). Autonomy adds
+**zero** AI calls: authorization, send-time checks, and the kill switch are deterministic.
+
+## Modules
+
+| Package | Role |
 |---|---|
-| Robinhood Read Adapter | Facts only (`src/agentic_portfolio/adapters/`). LIVE portfolio refresh confirms the Agentic account and maps `get_portfolio` / `get_equity_positions` into the canonical snapshot. |
-| Portfolio Context | Observed book + session SOD + HWM. **LIVE** source of truth is the Agentic Robinhood account (`state/live_book`). **PAPER** source of truth is the isolated paper book (`state/paper_book`) for tests/dev. The two never mix. |
-| Security Classification | Deterministic class; AI cannot override |
-| Sleeve Registry | Persisted role; no silent sleeve changes |
-| Thesis Registry | Decision/review records; not a reasoning engine. New theses from this stage stay DRAFT until a future real execution. |
-| AI Gateway | Sole caller of AI providers (`src/agentic_portfolio/ai/`). OpenAI + Anthropic adapters. Structured JSON only. Hard $10/month budget. |
-| Candidate Discovery | Research-queue generation (`src/agentic_portfolio/discovery/`). Finds what is worth researching. Does **not** buy, size, or write ACTIVE theses. Same-sector names are overlap-penalized and comparison-grouped, not count-rejected. Production path: universe → eligibility → quantitative ranking → cheap Luna screen (`gpt-5.6-luna`) → Terra deep research (`gpt-5.6-terra`) → portfolio reasoning → Risk Gate → **LIVE proposal**. Placement is forbidden. |
-| Deep Research | Advisory interpretation (`src/agentic_portfolio/research/`). Python collects facts and derived metrics. A provider-agnostic `ResearchReasoner` interprets. Output is a persisted `ResearchReport`. Does **not** allocate, buy, or bypass Risk Gate. |
-| Investment Thesis + Portfolio Decision | Advisory (`src/agentic_portfolio/decision/`). AI forms/updates a DRAFT thesis and chooses BUY/ADD/HOLD/REDUCE/SELL/WATCH/REJECT/NO_ACTION vs cash and SPY. Python validates, persists, converts to `ProposedAction`, and sends it to the existing Risk Gate. No stock-picking thresholds. No broker stops. |
-| Position Monitoring + Thesis Reassessment | Advisory (`src/agentic_portfolio/monitoring/`). Python collects position facts and detects triggers. AI interprets new evidence. Meaningful triggers request Research refresh, reassess the thesis, run Portfolio Decision, and send HOLD/ADD/REDUCE/SELL/NO_ACTION to Risk Gate. Price movement alone does not invalidate CORE. Exit conditions are not broker stop orders. |
-| Risk Validation | Hard veto |
-| Execution Controller | Mechanical paper OrderPlan (`src/agentic_portfolio/execution/`). BUY/ADD/REDUCE/SELL only. HOLD/WATCH/REJECT/NO_ACTION create no plan. Does not invent stop orders. Live review/place/cancel remain off. |
-| Paper Fill + Blotter | Mechanical paper simulator (`src/agentic_portfolio/paper_fill/`). Fills PAPER_ONLY plans at the eligible quote/reference price. Updates isolated paper cash/quantity/average cost/P&L/NAV. Reconciles the blotter. Does not call live order tools. Does not modify live thesis/account state. |
-| Human Approval Packet | Packaging (`src/agentic_portfolio/approval/`). Turns a Risk-Gate-approved paper OrderPlan plus thesis/research/decision/risk/context into a human-readable packet. APPROVED does not place an order. Packets expire or are superseded when facts drift. |
-| Robinhood Review-Only | Preflight (`src/agentic_portfolio/review/`). Takes a still-valid APPROVED ApprovalPacket, revalidates, re-checks Risk Gate, and calls `review_equity_order`. Persists `ReviewResult`. REVIEW_ACCEPTED does not execute. Does not place or cancel. |
-| Journal | Append-only records |
-| 24/7 Agent Runtime | Long-running process (`src/agentic_portfolio/agent/`). Stays alive on weekends/holidays. Internal orchestrator selects jobs from market phase. One failed job cannot kill the service. |
-| Persistent Watch / Thesis | LIVE watch items (`src/agentic_portfolio/watch/`). Survive close and restart. Off-hours AI may only write CONDITIONAL next-session plans. |
-| LIVE Approval Queue | Human queue (`src/agentic_portfolio/live_approval/`). APPROVE is mandatory. Default → `APPROVED_EXECUTION_DISABLED`. |
-| Live Order Executor | Sole broker mutation surface (`src/agentic_portfolio/live_execution/`). Send-time revalidation → review → place (only if `LIVE_ORDER_PLACEMENT=true`) → reconcile. |
-| Notifications | Dashboard events (`src/agentic_portfolio/notify/`). Sinks can be added later without changing trading logic. |
-
-The production application is a **24/7 autonomous portfolio-management service**, not a market-hours script. Raspberry Pi boot starts `scripts/run_service.py`: dashboard + agent runtime. The scheduler is only an internal orchestrator.
-
-```
-while service_running:
-    determine market/session phase
-    run due jobs (isolated failures)
-    sleep until next due job / heartbeat
-```
-
-Phases: MARKET_OPEN, PREMARKET, AFTER_CLOSE, OVERNIGHT, WEEKEND, HOLIDAY.
-
-Off-hours work uses the latest completed session. It must not treat stale/off-hours quotes as executable liquidity. When the next regular session opens, deterministic software refreshes price/spread/liquidity/catalyst/cash/Risk Gate. Conditions fail → remain WATCH / invalidate / expire. Conditions pass → LIVE approval queue. APPROVE still does not place.
-
-Dashboard is the control room (system, portfolio, discovery, watchlist, AI, approvals banner, notifications, activity).
-
-Discovery finds things to research. Research determines whether the opportunity is real. Portfolio Decision decides what we want to do. Risk Gate decides whether we are allowed to do it. Position Monitoring decides whether existing holdings still deserve that chain. Execution Controller converts a permitted action into a paper OrderPlan. Paper fill simulates the fill on an isolated paper book. Human Approval Packet packages that plan for a human; approval still does not trade. Robinhood review-only asks the broker what it would say; it still does not place. The 24/7 runtime keeps this chain warm around the clock without enabling placement.
-
-```
-MARKET / SECURITY DATA (read-only adapters + classification)
-        ↓
-CANDIDATE DISCOVERY
-        ↓
-DEEP RESEARCH
-        ↓
-INVESTMENT THESIS
-        ↓
-PORTFOLIO DECISION
-        ↓
-DETERMINISTIC RISK GATE
-        ↓
-LIVE APPROVAL PACKET (human APPROVE required)
-        ↓
-SEND-TIME REVALIDATION + review_equity_order
-        ↓
-LiveOrderExecutor place (only if AGENTIC_LIVE_ORDER_PLACEMENT=true)
-        ↓
-BROKER RECONCILE / POSITIONS / JOURNAL
-```
-
-Discovery must not skip later stages. A candidate cannot become a BUY `ProposedAction`. Research cannot either. A favorable `ResearchReport` is not permission to trade.
-
-## Responsibility split
-
-| Stage | Owns |
-|---|---|
-| Data / Python | Retrieve, normalize, provenance, persist, portfolio/account facts, deterministic calculations, deterministic safety/risk |
-| AI Research | Interpret evidence, compare, judge dislocation vs deterioration, form research conclusions |
-| Thesis / Portfolio Decision | Form/update DRAFT thesis; choose action and desired % NAV vs cash/SPY/peers (not yet permitted) |
-| Risk Gate | Whether a proposed action is permitted (absolute authority on limits) |
-| Execution | Paper OrderPlan + paper fill for tests; LIVE human APPROVE → LiveOrderExecutor only when placement is explicitly enabled |
-
-AI cannot rewrite observed facts, override classification, alter NAV/positions, or modify risk limits.
-
-Holdings count is **observed**, not a cap.
-
-## Pipeline
-
-```
-MARKET DATA (NAV, SPY, session SOD NAV — America/New_York)
-  → REGIME (thin input; UNKNOWN if missing — never fabricated)
-  → CANDIDATE DISCOVERY (provisional sleeve + research queue; no BUY; overlap penalty not max-N reject)
-  → DEEP RESEARCH (ResearchEvidencePacket → ResearchReasoner → ResearchReport; no BUY)
-  → INVESTMENT THESIS + PORTFOLIO DECISION (DRAFT thesis; compare vs cash/SPY; ProposedAction; no execution)
-  → DETERMINISTIC RISK GATE
-  → LIVE APPROVAL PACKET (human APPROVE required; default does not place)
-  → SEND-TIME REVALIDATION + review_equity_order
-  → LiveOrderExecutor place (only if AGENTIC_LIVE_ORDER_PLACEMENT=true)
-  → BROKER RECONCILE / POSITIONS
-  → POSITION MONITORING (existing holdings; thesis reassessment; ProposedAction to Risk Gate; no broker stops)
-  → JOURNAL
-```
-
-## NAV
-
-Always `current_NAV` from the Agentic account in LIVE mode (`get_portfolio` → persisted `state/live_book`). Formulas in policy JSON. No encoded portfolio size. The paper $10,000 book is not a LIVE input.
-
-Runtime modes: `PAPER` (tests/dev) and `LIVE` (Robinhood Agentic account). Config: `config/runtime.json`. Env: `AGENTIC_RUNTIME_MODE` / `DASHBOARD_ENVIRONMENT`. Live order placement remains disabled in both modes.
-
-## MCP
-
-Read-only plus informational `review_equity_order` at send-time. `place_equity_order` is allowed only from `LiveOrderExecutor` after human APPROVE and `AGENTIC_LIVE_ORDER_PLACEMENT=true`. Never: option/crypto trading; any transfer/deposit/withdraw.
-
-## Config
-
-- Policy % / halt / HWM / class → `config/portfolio_policy.json`  
-- Account + execution flags → `config/account_rules.json`  
-- Discovery heuristics (not backtested) → `config/discovery.json`  
-- Research freshness + sleeve questions → `config/research.json`  
-- Thesis + portfolio decision (no buy thresholds) → `config/decision.json`  
-- Position monitoring + thesis reassessment (no investment-rule engine) → `config/monitoring.json`  
-- Paper Execution Controller / OrderPlan (no broker calls) → `config/execution.json`  
-- Paper fill + blotter reconciliation (isolated paper book; no broker calls) → `config/paper_fill.json`  
-- Human Approval Packet (no broker calls; APPROVED does not place) → `config/approval.json`  
-- Robinhood review-only (`review_equity_order` preflight; does not place) → `config/review.json`  
-- Pipeline stage flags → `config/pipeline.json`  
-- Runtime PAPER/LIVE → `config/runtime.json`  
-- AI Gateway / $10 monthly cap / model roles / scheduler → `config/ai.json`  
-
-## Kernel (permanent)
-
-`src/agentic_portfolio/` — portfolio context, session SOD, classification adapter, sleeve/thesis registries, candidate discovery, **AI Gateway (the only module that may call an AI provider)**, deep research, investment thesis + portfolio decision, position monitoring + thesis reassessment, deterministic risk gate, **paper Execution Controller**, **paper fill + blotter**, **human approval packet**, **Robinhood review-only**. LIVE AI artifacts live in `state/live_ai/` and never mix with PAPER thesis/approval artifacts. Theses created at Decision stay DRAFT until a future real execution. A paper BUY fill may mark an isolated paper thesis ACTIVE; live thesis/account state is untouched. Monitoring may mark an existing thesis WEAKENED/INVALIDATED; that is not a broker stop and not live trading. Execution Controller does not invent stop orders. Paper fill does not invent broker behavior. Approving a packet does not place an order while `LIVE_ORDER_PLACEMENT=false`. With the Pi env switch on, APPROVE is the only user action required; `LiveOrderExecutor` is the only module that may call `place_equity_order`.
-
-LIVE invariants: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, `LIVE_ORDER_PLACEMENT=false`. Combined AI spend across every provider and model is capped at **$10 USD per calendar month** (America/New_York). Restarting the app cannot reset the ledger.
-
-The Raspberry Pi scheduler (`scripts/run_scheduler.py`) runs PREMARKET / MARKET HOURS / POSTMARKET jobs without Cursor. Most ticks are deterministic. AI is invoked only for new shortlisted candidates, material new information, stored reassessment conditions, material portfolio-context changes, or a due research refresh.
-
-Facts (NAV, cash, positions) vs interpretation (research/thesis/monitoring) stay separated. Classification is deterministic. Discovery scores structured signals; crowded sector/sleeve names get `OVERLAP_PRIORITY_PENALTY` / `DEFERRED_DUE_TO_RESEARCH_QUEUE_OVERLAP` and a comparison group — they are not hard-rejected. Research interprets a `ResearchEvidencePacket` through `ResearchReasoner` (programmatic; Cursor is not the runtime). Tests in `tests/` prove **scale invariance** (same % → same verdict at $1k–$1M; identical opportunity → identical discovery score; research conclusions do not depend on a hardcoded NAV).
+| `adapters/` | Read-only Robinhood facts; account identity |
+| `live/` | Account snapshot (LIVE and PAPER labeling), HWM, session SOD |
+| `discovery/` | Universe → eligibility → scoring → research queue (no BUY) |
+| `ai/` | Gateway (sole AI caller), budget ledger, providers, reasoners |
+| `research/` | Evidence packet → AI report |
+| `decision/` | DRAFT thesis + portfolio decision / CORE committee → ProposedAction |
+| `monitoring/` | Holding triggers + AI reassessment → ProposedAction |
+| `risk_gate.py` | Deterministic permission (concentration, sector, liquidity, daily halt, HWM states, BP/cash) |
+| `autonomy/` | Execution policy, kill switch, OrderAuthority, ProposalIntake, send-time risk, PaperBroker, watch proposals |
+| `live_approval/` | Order proposal queue (PENDING / APPROVED / EXECUTED …) |
+| `live_execution/` | OrderExecutor, broker adapters, reconcile, audit |
+| `watch/` | Persistent watchlist and next-session conditional plans |
+| `agent/` | 24/7 runtime, orchestrator, job handlers |
+| `dashboard/` | Localhost control room (approve/reject, kill switch, status) |
+| `notify/` | Dashboard + Telegram notifications |

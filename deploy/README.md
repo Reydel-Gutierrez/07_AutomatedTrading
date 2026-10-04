@@ -210,7 +210,7 @@ sudo systemd-run --wait --collect --uid=agentic --gid=agentic \
   "import os; print('OPENAI_API_KEY_PRESENT=' + str(bool(os.environ.get('OPENAI_API_KEY'))))"
 ```
 
-### LIVE runtime selected and order placement off
+### LIVE runtime selected, execution mode, broker writes, kill switch
 
 ```bash
 sudo systemd-run --wait --collect --uid=agentic --gid=agentic \
@@ -218,26 +218,25 @@ sudo systemd-run --wait --collect --uid=agentic --gid=agentic \
   --property=EnvironmentFile=/etc/agentic-portfolio/env \
   --property=Environment=PYTHONPATH=src \
   /opt/agentic-portfolio/.venv/bin/python -c \
-  "from agentic_portfolio.runtime import get_active_runtime, LIVE_ORDER_PLACEMENT
-from agentic_portfolio.policy import load_account_rules
-exe = dict(load_account_rules().get('execution') or {})
+  "from agentic_portfolio.runtime import get_active_runtime, live_placement_enabled
+from agentic_portfolio.autonomy import load_execution_policy, KillSwitch
+from pathlib import Path
+p = load_execution_policy()
 print('runtime=' + get_active_runtime().value)
-print('LIVE_ORDER_PLACEMENT=' + str(LIVE_ORDER_PLACEMENT).lower())
-print('auto_execution=' + str(bool(exe.get('auto_execution'))).lower())
-print('live_trade_actions_allowed=' + str(bool(exe.get('live_trade_actions_allowed'))).lower())
+print('execution_mode=' + p.mode.value + ' (' + p.mode_source + ')')
+print('LIVE_ORDER_PLACEMENT=' + str(live_placement_enabled()).lower())
+print('kill_switch_engaged=' + str(KillSwitch(Path('/opt/agentic-portfolio')).engaged()).lower())
 assert get_active_runtime().value == 'LIVE'
-assert LIVE_ORDER_PLACEMENT is False
-assert exe.get('auto_execution') is False
-assert exe.get('live_trade_actions_allowed') is False"
+assert p.invalid_mode_value is None, 'AGENTIC_EXECUTION_MODE has a typo'"
 ```
 
-Expected:
+Expected for the first validation pass (before you enable autonomy):
 
 ```
 runtime=LIVE
+execution_mode=HUMAN_APPROVAL (env:AGENTIC_EXECUTION_MODE)
 LIVE_ORDER_PLACEMENT=false
-auto_execution=false
-live_trade_actions_allowed=false
+kill_switch_engaged=false
 ```
 
 ### One-cycle smoke test (no paid AI)
@@ -324,10 +323,19 @@ sudo systemctl status agentic-portfolio
 
 PID file: `state/runtime/agent.pid`
 
-## Execution (release candidate)
+## Execution: going from validation to autonomous operation
 
-`auto_execution=false`, `live_trade_actions_allowed=false`, committed `LIVE_ORDER_PLACEMENT=false` / `AGENTIC_LIVE_ORDER_PLACEMENT=false`.
+Committed defaults are safe: `AGENTIC_EXECUTION_MODE=HUMAN_APPROVAL`, `AGENTIC_LIVE_ORDER_PLACEMENT=false`, kill switch released.
+(The old `auto_execution=false` / `live_trade_actions_allowed=false` flags no longer exist; the three switches below replace them.)
 
-Human APPROVE is mandatory. With the switch off, APPROVE becomes `APPROVED_EXECUTION_DISABLED` and does not call `place_equity_order`.
+Recommended sequence, each step only after the previous one looks right on the dashboard:
 
-Do **not** set `AGENTIC_LIVE_ORDER_PLACEMENT=true` until this RC has been validated on the Pi (real discovery, research, approval cards). Then enable it only in `/etc/agentic-portfolio/env`, never in git. The only placement surface is `LiveOrderExecutor`.
+1. **Observe** — `AGENTIC_EXECUTION_MODE=OBSERVE`, placement `false`. Watch a few sessions of discovery → research → decision → Risk Gate. `logs/order_intake.jsonl` shows every proposal that *would* have been made.
+2. **Human approval, broker writes off** — `HUMAN_APPROVAL`, placement `false`. Approve a proposal; it must become `APPROVED_EXECUTION_DISABLED` and nothing reaches Robinhood.
+3. **Human approval, broker writes on** — set `AGENTIC_LIVE_ORDER_PLACEMENT=true`, restart. Approve one small proposal; confirm the fill, the reconcile, and the position on the dashboard.
+4. **Kill-switch drill** — engage from the System page (or `sudo -u agentic .venv/bin/python scripts/kill_switch.py engage --reason drill`), confirm the drain job reports `kill_switch_engaged`, then release with your name and a note.
+5. **Autonomous** — `AGENTIC_EXECUTION_MODE=AUTONOMOUS`, restart. Telegram/dashboard now show `ORDER AUTHORIZED` for clean PASS orders and `TRADE APPROVAL REQUIRED` for escalations. Review the circuit breakers in `config/execution_policy.json` first.
+
+Emergency stop at any time: dashboard **System → ENGAGE KILL SWITCH**, `scripts/kill_switch.py engage`, or `AGENTIC_KILL_SWITCH=1` in `/etc/agentic-portfolio/env` + restart. Releasing is always a named human action.
+
+The only placement surface is `OrderExecutor` (`live_execution/executor.py`); it re-runs the Risk Gate on fresh facts before every order.

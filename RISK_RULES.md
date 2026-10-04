@@ -78,13 +78,13 @@ Deposits/withdrawals **scale** HWM so they are not treated as performance. Formu
 | WARNING | −5% | Enhanced review; no auto-liq |
 | RISK_REDUCTION | −10% | No new Spec/Tactical; Core OK with validation; Opp enhanced review; SELL/REDUCE OK |
 | DEFENSIVE | −15% | No new Spec/Tactical; Opp add only if risk-reducing; new Core = validated broad-market ETF only |
-| HALTED | −20% | `auto_execution` false. May **recommend** SELL/REDUCE/HOLD/NO_ACTION. May **not** execute until explicit human authorization. No self-resume. No invented liquidation. |
+| HALTED | −20% | No autonomous authorization of anything. SELL/REDUCE/HOLD/NO_ACTION may be **recommended**; SELL/REDUCE proposals are escalated to the human queue and execute only after explicit human APPROVE. No self-resume. No invented liquidation. |
 
 ---
 
 ## Adds
 
-Increase = new `INVESTMENT_THESIS_REVIEW` + `RISK_REVIEW`. Not “because price fell.” One logical position per symbol.
+Increase = an ACTIVE thesis with a fresh AI thesis review (portfolio decision → `INVESTMENT_THESIS_REVIEW`, or position-monitor reassessment → `POSITION_MONITOR_REVIEW`) + the deterministic Risk Gate evaluation (the `RISK_REVIEW`, journaled). Not “because price fell” (`ADD_ONLY_TO_LOWER_COST` fails). One logical position per symbol.
 
 ---
 
@@ -94,6 +94,24 @@ Agentic account only. Long US equity/ETF. No options, crypto, shorts, margin bor
 
 ---
 
-## Execution (unchanged)
+## Execution
 
-`HUMAN_APPROVAL` · `auto_execution=false` · `live_trade_actions_allowed=false` · `require_human_approval=true` · stop after `review_equity_order` (does not place).
+Authorization mode: `config/execution_policy.json` / `AGENTIC_EXECUTION_MODE` (`OBSERVE` · `HUMAN_APPROVAL` · `AUTONOMOUS`; committed default `HUMAN_APPROVAL`). LIVE broker writes: `AGENTIC_LIVE_ORDER_PLACEMENT` (committed `false`).
+
+These limits apply in **every** mode and are evaluated **twice**: when the proposal is created and again, on fresh facts, immediately before the broker call. A human approval never bypasses them.
+
+Autonomous authorization is stricter than the gate — it only restricts:
+
+| Circuit breaker | Default |
+|---|---|
+| Risk verdict auto-authorized | `PASS` only (enhanced reviews / HALTED → human) |
+| Max orders per ET trading day | 6 |
+| Max BUY/ADD notional per day | 30% NAV |
+| Max single BUY/ADD | 20% NAV |
+| Cash reserve after a buy | 1% NAV |
+| Max send-time spread | 50 bps |
+| Send window | open + 5 min … close − 10 min |
+| Consecutive broker failures before the kill switch trips | 3 |
+| Authorization validity | first eligible session |
+
+Kill switch: engaged by any admin (dashboard / `scripts/kill_switch.py`) or automatically (ambiguous submission, repeated broker failures, account mismatch). While engaged nothing is sent. Release is a named human action.

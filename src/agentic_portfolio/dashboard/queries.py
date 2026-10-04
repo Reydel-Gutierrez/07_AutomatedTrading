@@ -207,18 +207,35 @@ def _metric(value: Any, display: str | None, *, available: bool | None = None) -
     }
 
 
-def execution_flags(rules: dict[str, Any] | None = None) -> dict[str, Any]:
-    rules = rules or load_account_rules()
-    exe = dict(rules.get("execution") or {})
+def execution_flags(rules: dict[str, Any] | None = None, *, root: Path | None = None) -> dict[str, Any]:
+    """Single display source: execution policy (who authorizes) + broker-write authority + kill switch."""
+    del rules
+    from agentic_portfolio.autonomy.policy import ExecutionMode, load_execution_policy
+
     auth = live_execution_authority()
+    policy = load_execution_policy()
+    kill = None
+    if root is not None:
+        try:
+            from agentic_portfolio.autonomy.kill_switch import KillSwitch
+
+            kill = KillSwitch(Path(root), policy=policy).status().as_dict()
+        except Exception:  # noqa: BLE001 — display only; executor enforces independently
+            kill = {"engaged": True, "reason": "kill_switch_status_unreadable"}
+    autonomous = policy.mode is ExecutionMode.AUTONOMOUS
     return {
-        "state": exe.get("state") or exe.get("mode") or "HUMAN_APPROVAL",
-        "mode": exe.get("mode") or "HUMAN_APPROVAL",
-        "auto_execution": False,
-        "require_human_approval": True,
+        "state": policy.mode.value,
+        "mode": policy.mode.value,
+        "authorization_mode": policy.mode.value,
+        "authorization_mode_source": policy.mode_source,
+        "auto_execution": autonomous,
+        "require_human_approval": policy.mode is ExecutionMode.HUMAN_APPROVAL,
         "live_trade_actions_allowed": auth.live_trade_actions_allowed,
-        "current_terminal_stage": exe.get("current_terminal_stage"),
-        "autonomous_trading_disabled": True,
+        "current_terminal_stage": "order_execution",
+        "autonomous_trading_disabled": not autonomous,
+        "autonomy_limits": policy.limits.as_dict(),
+        "kill_switch": kill,
+        "kill_switch_engaged": bool((kill or {}).get("engaged")),
         "approved_does_not_place_order": not auth.LIVE_ORDER_PLACEMENT,
         "live_order_placement_enabled": auth.LIVE_ORDER_PLACEMENT,
         "execution_mode": auth.execution_mode,
@@ -226,6 +243,34 @@ def execution_flags(rules: dict[str, Any] | None = None) -> dict[str, Any]:
         "placement_requested": auth.placement_requested,
         "write_transport_ready": auth.write_transport_ready,
     }
+
+
+def execution_status(state: DashboardState) -> dict[str, Any]:
+    """Execution policy, kill switch, today's autonomous usage, failure streak."""
+    try:
+        from agentic_portfolio.autonomy.authority import OrderAuthority
+        from agentic_portfolio.live_execution import ExecutionStore
+
+        store = ExecutionStore(state.root, runtime_mode=get_active_runtime())
+        return OrderAuthority(state.root, execution_store=store).status()
+    except Exception as exc:  # noqa: BLE001 — display only
+        return {"error": f"{type(exc).__name__}: {exc}"}
+
+
+def engage_kill_switch(state: DashboardState, *, reason: str, by: str) -> dict[str, Any]:
+    from agentic_portfolio.autonomy.kill_switch import KillSwitch
+    from agentic_portfolio.notify import NotificationEngine
+
+    ks = KillSwitch(state.root, notify=NotificationEngine(NotificationStore(state.root)))
+    return ks.engage(reason or "engaged from dashboard", by=by).as_dict()
+
+
+def release_kill_switch(state: DashboardState, *, by: str, note: str | None = None) -> dict[str, Any]:
+    from agentic_portfolio.autonomy.kill_switch import KillSwitch
+    from agentic_portfolio.notify import NotificationEngine
+
+    ks = KillSwitch(state.root, notify=NotificationEngine(NotificationStore(state.root)))
+    return ks.release(by=by, note=note).as_dict()
 
 
 def _dashboard_executor(state: DashboardState):
@@ -244,8 +289,19 @@ def _dashboard_executor(state: DashboardState):
 
     broker = None
     mode = state.runtime.value if hasattr(state.runtime, "value") else str(state.runtime)
+    account_number = str(load_account_rules()["account"]["account_number"])
     if live_placement_enabled() and str(mode).upper() == "LIVE":
-        broker = bind_live_write_broker(account_number=str(load_account_rules()["account"]["account_number"]))
+        broker = bind_live_write_broker(account_number=account_number)
+    elif str(mode).upper() == "PAPER":
+        # PAPER approvals fill against the same simulated account the runtime uses.
+        from agentic_portfolio.autonomy.paper_broker import PaperBroker
+        from agentic_portfolio.runtime import bootstrap_readonly_broker_runtime
+
+        def quotes(symbols):
+            fetcher = getattr(bootstrap_readonly_broker_runtime(), "fetcher", None)
+            return fetcher.get_equity_quotes(list(symbols)) if fetcher is not None else {}
+
+        broker = PaperBroker(state.root, account_number=account_number, quote_source=quotes)
     return LiveOrderExecutor(
         ExecutionStore(state.root, runtime_mode=state.runtime),
         broker,
@@ -500,6 +556,11 @@ def _live_approval_row(item: LiveApproval) -> dict[str, Any]:
         "ticker": item.ticker,
         "action": item.proposed_action,
         "status": item.status.value,
+        "origin": item.origin,
+        "decided_by": item.decided_by,
+        "authorized_autonomously": str(item.decided_by or "").startswith("autonomous_policy"),
+        "escalation_reasons": list(item.escalation_reasons or []),
+        "send_time_risk": dict(item.send_time_risk or {}),
         "sleeve": None,
         "current_allocation_pct": None,
         "desired_allocation_pct": item.proposed_allocation_pct,
@@ -1432,7 +1493,7 @@ def health_status(state: DashboardState) -> list[dict[str, Any]]:
 
 
 def system_view(state: DashboardState) -> dict[str, Any]:
-    flags = execution_flags()
+    flags = execution_flags(root=state.root)
     ui = resolve_ui_flags()
     runtime = get_active_runtime()
     env = get_active_artifact_environment()
@@ -1544,6 +1605,7 @@ def system_view(state: DashboardState) -> dict[str, Any]:
     risk_state = ctx.get("risk_state") if not unavailable else None
     return {
         "execution": flags,
+        "autonomy": execution_status(state),
         "account_nickname": (rules.get("account") or {}).get("nickname"),
         "live_observed": (rules.get("account") or {}).get("last_observed"),
         "hwm": hwm if not unavailable else {},

@@ -84,6 +84,9 @@ CSRF_ENDPOINTS = DECIDE_ENDPOINTS | {
     "notifications_read",
     "api_notifications_read",
     "refresh_live_state",
+    "kill_switch_engage",
+    "kill_switch_release",
+    "api_kill_switch_engage",
 }
 WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
@@ -236,7 +239,7 @@ def create_app(root: Path | None = None) -> Flask:
     def inject_flags():
         from agentic_portfolio.dashboard.queries import execution_flags
 
-        flags = execution_flags()
+        flags = execution_flags(root=app.config["ROOT"])
         ui = resolve_ui_flags()
         user = public_user(_current_user())
         name = str((user or {}).get("name") or (user or {}).get("username") or "").strip()
@@ -768,6 +771,63 @@ def create_app(root: Path | None = None) -> Flask:
     @app.get("/api/journal")
     def api_journal():
         return jsonify(journal_view(state()))
+
+    def _admin_or_forbidden():
+        user = _current_user()
+        if not user or user.get("role") != ROLE_ADMIN:
+            return None
+        return user
+
+    @app.post("/system/kill-switch/engage")
+    def kill_switch_engage():
+        """Any admin may stop all order submission immediately. No password needed to stop."""
+        from agentic_portfolio.dashboard.queries import engage_kill_switch
+
+        user = _admin_or_forbidden()
+        if user is None:
+            return _forbidden()
+        engage_kill_switch(state(), reason=_field("reason").strip() or "dashboard", by=str(user.get("username") or user.get("id")))
+        flash("Kill switch ENGAGED. No orders will be sent until a human releases it.")
+        return redirect(url_for("system_page"))
+
+    @app.post("/api/kill-switch/engage")
+    def api_kill_switch_engage():
+        from agentic_portfolio.dashboard.queries import engage_kill_switch
+
+        user = _admin_or_forbidden()
+        if user is None:
+            return _forbidden()
+        status = engage_kill_switch(state(), reason=_field("reason").strip() or "api", by=str(user.get("username") or user.get("id")))
+        return jsonify({"ok": True, "kill_switch": status})
+
+    @app.post("/system/kill-switch/release")
+    def kill_switch_release():
+        """Releasing requires the admin password and a note: resuming trading is a deliberate act."""
+        from agentic_portfolio.dashboard.queries import release_kill_switch
+
+        user = _admin_or_forbidden()
+        if user is None:
+            return _forbidden()
+        if not verify_password(user.get("password_hash"), _field("admin_password", "current_password")):
+            flash("Admin password is incorrect. Kill switch remains engaged.")
+            return redirect(url_for("system_page"))
+        note = _field("note").strip()
+        if not note:
+            flash("A note explaining why it is safe to resume is required.")
+            return redirect(url_for("system_page"))
+        try:
+            release_kill_switch(state(), by=str(user.get("username") or user.get("id")), note=note)
+        except PermissionError as exc:
+            flash(str(exc))
+            return redirect(url_for("system_page"))
+        flash("Kill switch released.")
+        return redirect(url_for("system_page"))
+
+    @app.get("/api/execution")
+    def api_execution():
+        from agentic_portfolio.dashboard.queries import execution_flags, execution_status
+
+        return jsonify({"flags": execution_flags(root=app.config["ROOT"]), "status": execution_status(state())})
 
     @app.get("/api/system")
     def api_system():

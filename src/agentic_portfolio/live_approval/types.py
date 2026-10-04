@@ -10,6 +10,12 @@ from agentic_portfolio.schemas import to_dict
 
 
 class LiveApprovalStatus(str, Enum):
+    """Lifecycle of one order proposal.
+
+    PENDING → (human APPROVE | autonomous authorization) → APPROVED → EXECUTED,
+    or REJECTED / EXPIRED / SUPERSEDED / REVALIDATION_REQUIRED / EXECUTION_FAILED.
+    """
+
     PENDING = "PENDING"
     APPROVED = "APPROVED"
     APPROVED_EXECUTION_DISABLED = "APPROVED_EXECUTION_DISABLED"
@@ -93,6 +99,12 @@ class LiveApproval:
     idempotency_key: str | None = None
     generation: int = 0
     superseded_by: str | None = None
+    # Unified order pipeline (autonomy): what was proposed, by which path, and who authorized it.
+    origin: str | None = None
+    proposed_action_snapshot: dict[str, Any] = field(default_factory=dict)
+    authorization: dict[str, Any] = field(default_factory=dict)
+    escalation_reasons: list[str] = field(default_factory=list)
+    send_time_risk: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         data = to_dict(self)

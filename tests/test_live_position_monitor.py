@@ -257,7 +257,7 @@ def test_07_due_sell_creates_live_approval(tmp_path):
     assert _approval_notes(services)
 
 
-def test_08_risk_gate_blocks_reduce(tmp_path):
+def test_08_halted_reduce_escalates_to_human(tmp_path):
     _, broker = _seed_holding(tmp_path, due=True)
     monitor = CountingMonitor(_ai("MSFT", action="REDUCE", alloc=12.0))
     services = _services(tmp_path, broker, monitor=monitor)
@@ -269,12 +269,15 @@ def test_08_risk_gate_blocks_reduce(tmp_path):
 
     services.refresh_fn = refresh
     row = _run_monitor(services)
-    assert row["approvals_created"] == 0
-    assert services.approvals.store.pending() == []
-    assert row["risk_blocked"] >= 1
+    # HALTED: risk-reducing exits may be recommended but only a human may authorize them.
+    pending = services.approvals.store.pending()
+    assert row["approvals_created"] == 1
+    assert len(pending) == 1 and pending[0].proposed_action == "REDUCE"
+    assert "risk_state_halted_requires_human" in pending[0].escalation_reasons
+    assert pending[0].status is LiveApprovalStatus.PENDING
 
 
-def test_09_risk_gate_blocks_sell(tmp_path):
+def test_09_halted_sell_escalates_to_human(tmp_path):
     _, broker = _seed_holding(tmp_path, due=True)
     monitor = CountingMonitor(_ai("MSFT", action="SELL", alloc=0.0))
     services = _services(tmp_path, broker, monitor=monitor)
@@ -288,8 +291,10 @@ def test_09_risk_gate_blocks_sell(tmp_path):
 
     services.refresh_fn = refresh
     row = _run_monitor(services)
-    assert row["approvals_created"] == 0
-    assert services.approvals.store.pending() == []
+    pending = services.approvals.store.pending()
+    assert row["approvals_created"] == 1
+    assert len(pending) == 1 and pending[0].proposed_action == "SELL"
+    assert "risk_state_halted_requires_human" in pending[0].escalation_reasons
 
 
 def test_10_pending_approval_not_duplicated(tmp_path):
@@ -557,7 +562,8 @@ def test_e2e_buy_hold_reduce_sell(monkeypatch, tmp_path):
     assert pending
     buy = pending[0]
     assert buy.proposed_action in {"BUY", "ADD"}
-    broker = FakeBroker(nav=1000, cash=1000, buying_power=1000, quotes={"QUAL": 100.0, "SPY": 500.0})
+    # Same price the research packet observed (the proposal's quote reference).
+    broker = FakeBroker(nav=1000, cash=1000, buying_power=1000, quotes={"QUAL": 120.0, "SPY": 500.0})
     clock = lambda: PIPE_NOW
     book = Book()
     store = ExecutionStore(tmp_path, runtime_mode="LIVE")

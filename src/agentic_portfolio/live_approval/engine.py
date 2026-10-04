@@ -1,4 +1,10 @@
-"""LIVE approval queue engine. APPROVE never auto-executes; LiveOrderExecutor is optional."""
+"""Order proposal queue engine.
+
+A proposal becomes APPROVED either by a human (dashboard APPROVE) or by the
+deterministic autonomous policy (``authorize``). Either way, the only path to
+the broker is LiveOrderExecutor, which re-validates and re-runs the Risk Gate
+at send time. AI never calls this module's decision methods.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Mapping
 from uuid import uuid4
 
-from agentic_portfolio.agent.safety import AgentSafetyError, assert_auto_execution_disabled
+from agentic_portfolio.agent.safety import AgentSafetyError
 from agentic_portfolio.journal import append_jsonl
 from agentic_portfolio.live_approval.store import LiveApprovalStore
 from agentic_portfolio.live_approval.types import (
@@ -40,7 +46,6 @@ class LiveApprovalEngine:
         self.journal = journal
         self._now = now_fn or (lambda: datetime.now(timezone.utc))
         self.executor = executor
-        self._assert_flags()
 
     def now(self) -> datetime:
         stamp = self._now()
@@ -49,11 +54,8 @@ class LiveApprovalEngine:
         return stamp
 
     def _assert_flags(self) -> None:
-        exec_cfg = dict(self.rules.get("execution") or {})
-        assert_auto_execution_disabled(
-            live_trade_actions_allowed=bool(exec_cfg.get("live_trade_actions_allowed")),
-            auto_execution=bool(exec_cfg.get("auto_execution")),
-        )
+        """Retained hook. Authorization policy now lives in autonomy.policy, not in flags."""
+        return None
 
     def create(
         self,
@@ -120,7 +122,6 @@ class LiveApprovalEngine:
         Concurrent validators, retries, and restarts reuse the same packet. This never
         approves, places, or weakens Risk Gate.
         """
-        self._assert_flags()
         ticker_u = str(ticker).upper()
         action_u = str(proposed_action).upper()
         lock = self.store.lock_for(ticker_u, action_u)
@@ -237,7 +238,6 @@ class LiveApprovalEngine:
         note: str | None = None,
     ) -> LiveApproval:
         """Mark a duplicate PENDING packet superseded. Never deletes history. Never places."""
-        self._assert_flags()
         packet = item if isinstance(item, LiveApproval) else self.store.get(str(item))
         if packet is None:
             raise KeyError(item if isinstance(item, str) else getattr(item, "approval_id", item))
@@ -263,7 +263,6 @@ class LiveApprovalEngine:
 
         Never places. Never mutates the packet into an executable approval.
         """
-        self._assert_flags()
         packet = item if isinstance(item, LiveApproval) else self.store.get(str(item))
         if packet is None:
             raise KeyError(item if isinstance(item, str) else getattr(item, "approval_id", item))
@@ -297,8 +296,9 @@ class LiveApprovalEngine:
         note: str | None = None,
         decided_by: str | None = None,
     ) -> LiveApproval:
-        """APPROVE/REJECT. Double APPROVE is idempotent. Placement goes through LiveOrderExecutor."""
-        self._assert_flags()
+        """Human APPROVE/REJECT. Double APPROVE is idempotent. Placement goes through LiveOrderExecutor."""
+        if decided_by and str(decided_by).startswith("autonomous_policy"):
+            raise AgentSafetyError("record_decision is the human path; use authorize() for the autonomous policy")
         item = self.store.get(approval_id)
         if item is None:
             raise KeyError(approval_id)
@@ -328,30 +328,56 @@ class LiveApprovalEngine:
             self.store.save(item)
             self._log("APPROVAL_REJECTED", item)
             return item
+        item, _outcome = self._approve_and_execute(item, kind="APPROVAL_APPROVED")
+        return item
+
+    def authorize(self, approval_id: str, *, decided_by: str, note: str | None = None):
+        """Autonomous authorization by the deterministic OrderAuthority (never by AI).
+
+        Returns (approval, execution_outcome_or_None).
+        """
+        if not str(decided_by or "").startswith("autonomous_policy"):
+            raise AgentSafetyError("authorize() is reserved for the deterministic autonomous policy")
+        item = self.store.get(approval_id)
+        if item is None:
+            raise KeyError(approval_id)
+        if item.status is not LiveApprovalStatus.PENDING:
+            return item, None
+        item.decided_at = self.now().isoformat()
+        item.decided_by = decided_by
+        item.decision_note = note
+        item.auto_execution = True
+        item.LIVE_ORDER_PLACEMENT = live_placement_enabled()
+        return self._approve_and_execute(item, kind="APPROVAL_AUTHORIZED_AUTONOMOUSLY")
+
+    def _approve_and_execute(self, item: LiveApproval, *, kind: str):
+        approval_id = item.approval_id
         item.status = LiveApprovalStatus.APPROVED
         item.broker_submitted = False
         item.placed_order = False
         item.execution_attempted = False
-        item.approved_does_not_place_order = not live_placement_enabled()
-        item.live_execution_blocked = not live_placement_enabled()
-        self.store.save(item)
-        self._log("APPROVAL_APPROVED", item)
-        if self.executor is not None:
-            outcome = self.executor.execute_approved(item)
-            item = self.store.get(approval_id) or item
-            item.status = _status_from_outcome(outcome, item)
-            item.execution_attempted = True
-            item.placed_order = bool(outcome.placed)
-            item.broker_submitted = bool(outcome.placed)
-            item.approved_does_not_place_order = not outcome.placed
-            item.live_execution_blocked = not outcome.placed
-            self.store.save(item)
-            return item
-        item.status = LiveApprovalStatus.APPROVED_EXECUTION_DISABLED
         item.approved_does_not_place_order = True
         item.live_execution_blocked = True
         self.store.save(item)
-        return item
+        self._log(kind, item)
+        if self.executor is None:
+            item.status = LiveApprovalStatus.APPROVED_EXECUTION_DISABLED
+            self.store.save(item)
+            return item, None
+        # The executor mutates this same object (status, send_time_risk, flags); do not re-read.
+        outcome = self.executor.execute_approved(item)
+        if getattr(outcome, "deferred", False):
+            self.store.save(item)
+            # Market closed / outside the send window: stays APPROVED for the drain job.
+            return item, outcome
+        item.status = _status_from_outcome(outcome, item)
+        item.execution_attempted = True
+        item.placed_order = bool(outcome.placed)
+        item.broker_submitted = bool(outcome.placed)
+        item.approved_does_not_place_order = not outcome.placed
+        item.live_execution_blocked = not outcome.placed
+        self.store.save(item)
+        return item, outcome
 
     def expire_due(self) -> list[LiveApproval]:
         now = self.now()

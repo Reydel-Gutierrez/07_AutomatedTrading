@@ -231,7 +231,7 @@ def test_buy_becomes_proposed_action_and_hits_risk_gate(tmp_path):
     assert action.expected_resulting_position_pct == pytest.approx(0.05)
     assert action.proposed_notional == pytest.approx(500.0)
     assert out.gated_actions[0].risk.verdict == GateVerdict.PASS
-    assert out.gated_actions[0].risk.execution_permitted is False
+    assert out.gated_actions[0].risk.execution_permitted is True  # PASS = permitted by policy; who authorizes is autonomy.OrderAuthority
     sleeve = SleeveRegistry(tmp_path / "sleeves.json").get("QUAL")
     assert sleeve is not None
     assert sleeve.status == SleeveAssignmentStatus.PROPOSED
@@ -469,7 +469,7 @@ def test_paper_existing_research_reports(tmp_path):
     assert by["CASH"] == Decision.HOLD
     nvda = next(g for g in out.gated_actions if g.proposed_action.symbol == "NVDA")
     assert nvda.proposed_action.decision == Decision.BUY
-    assert nvda.risk.execution_permitted is False
+    assert nvda.risk.execution_permitted is (nvda.risk.verdict == GateVerdict.PASS)  # PASS = permitted by policy; who authorizes is autonomy.OrderAuthority
     assert out.theses[0].status == ThesisStatus.DRAFT
     assert out.execution_attempted is False
     journal = (tmp_path / "journal.jsonl").read_text(encoding="utf-8")

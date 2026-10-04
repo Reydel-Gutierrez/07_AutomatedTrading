@@ -8,7 +8,8 @@ AI may reason and may **tighten**. AI may **never** loosen hard ceilings, skip c
 
 1. Intelligence — `STRATEGY.md`  
 2. Risk — `config/portfolio_policy.json` (hard veto)  
-3. Execution — paper OrderPlan + paper fill for tests; LIVE human APPROVE → LiveOrderExecutor only when placement is explicitly enabled  
+3. Authorization — `config/execution_policy.json` (human or deterministic autonomous policy; never AI)  
+4. Execution — `OrderExecutor` only (PAPER → PaperBroker, LIVE → Robinhood when `AGENTIC_LIVE_ORDER_PLACEMENT=true`)  
 
 `NO_ACTION` always valid. Never buy to fill sleeve targets.
 
@@ -18,23 +19,21 @@ Agentic `account_number` in `config/account_rules.json` only. Confirm via `get_a
 
 NAV is whatever `get_portfolio` returns on the configured Agentic account. It is **not** a policy input you hardcode. LIVE runtime must not use paper $10,000 NAV, paper positions, paper fills, or paper thesis activation.
 
-## Execution (do not flip)
+## Execution
 
-| Field | Value |
+| Question | Answer (single source) |
 |---|---|
-| state | `HUMAN_APPROVAL` |
-| `auto_execution` | `false` (never). Orders cannot place without explicit human APPROVE. |
-| `require_human_approval` | `true` |
-| `live_trade_actions_allowed` | runtime: true only after `AGENTIC_LIVE_ORDER_PLACEMENT=true` **and** the write transport is bound. Committed `account_rules` stays false so paper/autonomous jobs cannot place. |
-| stop | after send-time revalidation; place only via LiveOrderExecutor when the live execution authority reports placement ON |
+| Who may authorize an order? | `config/execution_policy.json` / `AGENTIC_EXECUTION_MODE`: `OBSERVE` (nobody), `HUMAN_APPROVAL` (a human), `AUTONOMOUS` (the deterministic OrderAuthority for clean PASS proposals within limits; everything else → human). Committed default `HUMAN_APPROVAL`. |
+| May the executor write to Robinhood? | `AGENTIC_LIVE_ORDER_PLACEMENT=true` **and** the write transport is bound (LIVE). PAPER always writes to the PaperBroker. |
+| Is everything stopped? | Kill switch (dashboard / `scripts/kill_switch.py` / `AGENTIC_KILL_SWITCH`). Human release only. |
 
-`HALTED` → keep/force `auto_execution` false. No self-resume.
+`HALTED` → no autonomous authorization of anything; SELL/REDUCE are escalated to a human. No self-resume.
 
 ## Forbidden
 
-Never: AI self-approval, `cancel_equity_order`, option/crypto trading, deposit/withdraw/transfer.
+Never: AI self-approval or authorization, AI access to any broker client, `cancel_equity_order`, option/crypto trading, deposit/withdraw/transfer.
 
-`place_equity_order` is allowed only from `LiveOrderExecutor` after human APPROVE, send-time revalidation, and `AGENTIC_LIVE_ORDER_PLACEMENT=true`. `review_equity_order` is allowed on that same path.
+`place_equity_order` / `review_equity_order` are called only by `OrderExecutor` (`live_execution/executor.py`), after authorization (human APPROVE or the deterministic autonomous policy), kill-switch check, send-time revalidation, and a full Risk Gate re-run on fresh facts.
 
 ## Never (hard)
 
@@ -67,25 +66,25 @@ Thesis/Decision output is a DRAFT `InvestmentThesis` plus a `ProposedAction` sen
 
 Position monitoring output is a monitoring state plus HOLD/ADD/REDUCE/SELL/NO_ACTION. Do not call execution tools. Do not treat an exit condition as a broker stop. Price movement alone must not invalidate CORE. Python detects facts/triggers; AI interprets. Reuse Research, Thesis, Portfolio Decision, and Risk Gate — do not add a separate stock-picking rule engine.
 
-Execution Controller output is a paper `OrderPlan` for BUY/ADD/REDUCE/SELL. HOLD/WATCH/REJECT/NO_ACTION create no plan. Do not call `review_equity_order` / `place_equity_order` / `cancel_equity_order`. Do not invent stop orders. Status remains `PAPER_ONLY` / `BLOCKED_FROM_LIVE`. `live_trade_actions_allowed` and `auto_execution` must remain false.
+Execution Controller output is a paper `OrderPlan` for BUY/ADD/REDUCE/SELL. HOLD/WATCH/REJECT/NO_ACTION create no plan. Do not call `review_equity_order` / `place_equity_order` / `cancel_equity_order`. Do not invent stop orders. Status remains `PAPER_ONLY` / `BLOCKED_FROM_LIVE`. (Legacy offline tool; the runtime uses ProposalIntake → OrderExecutor.)
 
 Paper fill output is a `PaperFill`, blotter line, updated isolated paper book, and reconciliation result. Fill at the eligible quote/reference price. Do not apply invented broker behavior. Do not call execution tools. Do not move money. Do not modify live thesis/account state. A paper BUY fill may mark an isolated paper thesis ACTIVE.
 
-Human Approval Packet output is an `ApprovalPacket` (`PENDING_HUMAN_APPROVAL` / `APPROVED` / `REJECTED` / `EXPIRED` / `SUPERSEDED`). Assemble it from the OrderPlan plus thesis, research, decision, risk gate, context, and optional monitoring state. `APPROVED` still must not place or cancel a live order. Expire or supersede when the quote, thesis/research, book, or risk state is no longer the one frozen in the packet, or when a newer decision replaces it.
+Order proposals (runtime) go through `autonomy.ProposalIntake` only: Risk-Gate-permitted `ProposedAction` → persisted snapshot → `OrderAuthority` → `PENDING` (human) or `APPROVED` (autonomous) → `OrderExecutor`. OBSERVE mode journals the proposal and creates no order.
 
-Robinhood review-only output is a persisted `ReviewResult` (`REVIEW_READY` / `REVIEW_ACCEPTED` / `REVIEW_REJECTED` / `REVIEW_EXPIRED` / `REVIEW_FAILED`). Revalidate quote, portfolio, thesis/research, and risk state. Re-check Risk Gate. Call only `review_equity_order`. Fail closed if the approval is no longer valid, facts drifted, Risk Gate no longer permits, or Robinhood differs materially from the approved OrderPlan. Do not place or cancel. Do not convert `REVIEW_ACCEPTED` into execution.
+The `ApprovalPacket` / `ReviewResult` objects of the legacy offline paper toolchain (`approval/`, `review/`, `scripts/run_paper_*.py`) are not part of the runtime. They never place.
 
 Python collects facts and calculates deterministic values. AI Research interprets evidence. AI Thesis/Decision allocates and chooses action. AI Monitoring reassesses existing theses. Execution is mechanical. Do not expand Python with large qualitative stock-picking rule sets.
 
 ## Production AI runtime
 
-Cursor = development agent. Raspberry Pi application = 24/7 autonomous production runtime (`scripts/run_service.py`). The scheduler is internal orchestration, not process lifetime. AI providers (OpenAI, Anthropic) = reasoning services used only through the AI Gateway. Risk Gate = deterministic authority. Broker = authoritative account/execution state.
+Cursor = development agent. Raspberry Pi application = 24/7 autonomous production runtime (`scripts/run_service.py`). The scheduler is internal orchestration, not process lifetime. AI providers (OpenAI, Anthropic) = reasoning services used only through the AI Gateway. Risk Gate = deterministic permission. OrderAuthority = deterministic authorization. Broker = authoritative account/execution state.
 
-The process stays alive on weekends and holidays. Off-hours work must not treat stale liquidity as executable. Human APPROVE is mandatory. Default `LIVE_ORDER_PLACEMENT=false` transitions to `APPROVED_EXECUTION_DISABLED` and does not place. Placement is only allowed through `LiveOrderExecutor` after send-time revalidation and broker review, when the switch is explicitly on.
+The process stays alive on weekends and holidays. Off-hours work must not treat stale liquidity as executable; off-hours authorizations wait for the next send window and are valid for that session only. With `AGENTIC_LIVE_ORDER_PLACEMENT=false` an approved order becomes `APPROVED_EXECUTION_DISABLED` and nothing is placed.
 
-AI must **never** be described as having unrestricted trading authority.
+AI must **never** be described as having trading authority. Autonomy is the deterministic policy acting on AI *proposals*, inside hard limits, with a kill switch.
 
-LIVE: `LIVE_AI_ALLOWED=true`, `LIVE_PROPOSALS_ALLOWED=true`, committed `LIVE_ORDER_PLACEMENT=false`. AI never calls `place_equity_order` or `cancel_equity_order`. The only placement surface is `src/agentic_portfolio/live_execution/executor.py`. Any unapproved placement attempt fails closed and writes an audit event.
+AI never calls `place_equity_order`, `review_equity_order`, or `cancel_equity_order`, and never calls an approve/authorize method. The only placement surface is `src/agentic_portfolio/live_execution/executor.py`. Any blocked attempt fails closed and writes an audit event.
 
 All external AI calls go through `src/agentic_portfolio/ai/gateway.py`. Model names live in `config/ai.json`. Combined spend across every provider and model must never exceed **$10 USD per calendar month**. Structured JSON only. Application facts are assembled in Python; the model interprets them and must not replace NAV/cash/positions.
 

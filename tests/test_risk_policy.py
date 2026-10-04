@@ -37,7 +37,7 @@ def test_scale_invariance_12pct_core_equity(nav):
         ),
     )
     assert r.verdict == GateVerdict.PASS
-    assert r.execution_permitted is False
+    assert r.execution_permitted is True  # PASS = permitted by policy; who authorizes is autonomy.OrderAuthority
 
 
 @pytest.mark.parametrize("nav", NAVS)

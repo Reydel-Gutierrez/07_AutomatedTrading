@@ -1,15 +1,16 @@
 {
-  "version": "1.0.0",
-  "updated_at": "2026-08-30",
-  "description": "PAPER uses the isolated paper book for tests/dev. LIVE uses the configured Agentic Robinhood account as the single source of truth for NAV, cash, buying power, positions, allocations, HWM/drawdown, daily P/L, dashboard, monitoring, and Risk Gate inputs. Live order placement remains disabled. review_equity_order stays behind the existing approval/review gate.",
+  "version": "2.0.0",
+  "updated_at": "2026-10-03",
+  "description": "PAPER and LIVE run the same pipeline. LIVE: the Agentic Robinhood account is the single source of truth (state at the project root). PAPER: a simulated PaperBroker account fed by real read-only market data (state under var/paper or AGENTIC_STATE_ROOT). Broker writes in LIVE need AGENTIC_LIVE_ORDER_PLACEMENT=true; who authorizes orders is config/execution_policy.json.",
   "mode": "PAPER",
   "live_order_placement_enabled": false,
-  "require_human_approval": true,
-  "auto_execution": false,
-  "ai_monthly_hard_cap_usd": 10.00,
+  "ai_monthly_hard_cap_usd": 10.0,
   "fail_closed_if_placement_ambiguous": true,
   "env": {
-    "mode": ["AGENTIC_RUNTIME_MODE", "DASHBOARD_ENVIRONMENT"]
+    "mode": [
+      "AGENTIC_RUNTIME_MODE",
+      "DASHBOARD_ENVIRONMENT"
+    ]
   },
   "live": {
     "source_of_truth": "robinhood_agentic_account",
@@ -31,22 +32,34 @@
       "place_equity_order",
       "cancel_equity_order",
       "review_equity_order"
-    ]
+    ],
+    "mcp_note": "mcp_read_tools/mcp_forbidden apply to the read-only observation transport. Order tools are only reachable through the separate executor write adapter."
   },
   "readonly_mcp": {
     "url": "https://agent.robinhood.com/mcp/trading",
     "mode": "READ_ONLY",
     "source": "shared production transport",
     "env": {
-      "url": ["AGENTIC_READONLY_MCP_URL"],
-      "token": ["AGENTIC_READONLY_MCP_TOKEN"],
-      "token_file": ["AGENTIC_READONLY_MCP_TOKEN_FILE"],
-      "oauth_home": ["AGENTIC_READONLY_MCP_HOME"]
+      "url": [
+        "AGENTIC_READONLY_MCP_URL"
+      ],
+      "token": [
+        "AGENTIC_READONLY_MCP_TOKEN"
+      ],
+      "token_file": [
+        "AGENTIC_READONLY_MCP_TOKEN_FILE"
+      ],
+      "oauth_home": [
+        "AGENTIC_READONLY_MCP_HOME"
+      ]
     }
   },
   "paper": {
-    "source_of_truth": "isolated_paper_book",
-    "snapshot_dir": "state/paper_book",
-    "retained_for": ["tests", "dev"]
-  }
+    "source_of_truth": "paper_broker",
+    "state_root_env": "AGENTIC_STATE_ROOT",
+    "default_state_root": "var/paper",
+    "starting_cash_env": "AGENTIC_PAPER_STARTING_CASH",
+    "market_data": "read-only Robinhood quotes (same transport as LIVE observation)"
+  },
+  "execution_policy": "config/execution_policy.json"
 }

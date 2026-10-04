@@ -33,7 +33,7 @@ from agentic_portfolio.cash_flow import (
 from agentic_portfolio.context import build_context, portfolio_context_from_dict
 from agentic_portfolio.journal import append_jsonl
 from agentic_portfolio.live.isolation import assert_live_isolated, detect_paper_contamination
-from agentic_portfolio.live.safety import assert_no_forbidden_tools, assert_placement_disabled
+from agentic_portfolio.live.safety import assert_no_forbidden_tools
 from agentic_portfolio.live.store import LivePortfolioStore
 from agentic_portfolio.paper_fill.store import PaperFillStore
 from agentic_portfolio.paths import project_root
@@ -188,16 +188,16 @@ def refresh_live_portfolio(
     account_rules: dict | None = None,
     journal: Path | None = None,
     sources_observed: list[str] | None = None,
+    runtime_mode: RuntimeMode = RuntimeMode.LIVE,
 ) -> LiveRefreshResult:
-    """Fetch Agentic Robinhood facts, build LIVE context, persist snapshot. Never places."""
+    """Fetch account facts from the broker, build context, persist snapshot. Never places.
+
+    LIVE: the Agentic Robinhood account. PAPER: the simulated PaperBroker account
+    (same code path, separate state root, labeled PAPER, no live-isolation checks).
+    """
+    is_paper_runtime = runtime_mode is RuntimeMode.PAPER
     rules = account_rules or load_account_rules()
-    exe = dict(rules.get("execution") or {})
     placement_enabled = bool(live_placement_enabled())
-    assert_placement_disabled(
-        live_trade_actions_allowed=bool(exe.get("live_trade_actions_allowed")),
-        auto_execution=bool(exe.get("auto_execution")),
-        live_order_placement_enabled=False,
-    )
     used = list(sources_observed or [])
     assert_no_forbidden_tools(used)
     for tool in FORBIDDEN_NOW:
@@ -208,7 +208,7 @@ def refresh_live_portfolio(
     base = root or project_root()
     store = store or LivePortfolioStore(base)
     expected = str(rules["account"]["account_number"])
-    paper_book = PaperFillStore(base).current_book() or {}
+    paper_book = {} if is_paper_runtime else (PaperFillStore(base).current_book() or {})
     paper_ctx = dict(paper_book.get("context") or {})
 
     try:
@@ -280,7 +280,7 @@ def refresh_live_portfolio(
     theses = theses or ThesisRegistry(base / "state" / "thesis_registry.json")
     try:
         positions = parse_positions(positions_payload, quotes=quotes_payload, sleeves=sleeves, theses=theses)
-        _overlay_live_position_links(positions, base)
+        _overlay_live_position_links(positions, base, mode=runtime_mode)
     except LiveDataUnavailable as exc:
         if "market value unavailable" in str(exc).lower():
             raise LiveDataUnavailable(str(exc), code=LiveErrorCode.MCP_QUOTES_FAILED) from exc
@@ -354,9 +354,9 @@ def refresh_live_portfolio(
     snapshot = {
         "snapshot_id": snapshot_id,
         "created_at": stamp.isoformat(),
-        "runtime_mode": RuntimeMode.LIVE.value,
-        "source_of_truth": LIVE_SOURCE_OF_TRUTH,
-        "paper_environment": False,
+        "runtime_mode": runtime_mode.value,
+        "source_of_truth": "paper_broker" if is_paper_runtime else LIVE_SOURCE_OF_TRUTH,
+        "paper_environment": is_paper_runtime,
         "live_order_placement_enabled": placement_enabled,
         "account": {
             "account_number": expected,
@@ -371,10 +371,11 @@ def refresh_live_portfolio(
         "session": session.to_dict(),
         "market": market_session_state(stamp),
     }
-    leaks = detect_paper_contamination(snapshot, paper_book, runtime_mode=RuntimeMode.LIVE)
-    if leaks:
-        raise LiveDataUnavailable("paper state leaked into LIVE runtime: " + ", ".join(leaks))
-    assert_live_isolated(snapshot, paper_book)
+    if not is_paper_runtime:
+        leaks = detect_paper_contamination(snapshot, paper_book, runtime_mode=RuntimeMode.LIVE)
+        if leaks:
+            raise LiveDataUnavailable("paper state leaked into LIVE runtime: " + ", ".join(leaks))
+        assert_live_isolated(snapshot, paper_book)
 
     if persist:
         try:
@@ -433,13 +434,13 @@ def refresh_live_portfolio(
     )
 
 
-def _overlay_live_position_links(positions, root: Path) -> None:
+def _overlay_live_position_links(positions, root: Path, *, mode: RuntimeMode = RuntimeMode.LIVE) -> None:
     """Preserve thesis/sleeve from filled-order links when the broker book has only a symbol."""
     try:
         from agentic_portfolio.live_execution.positions import load_links
         from dataclasses import replace
 
-        links = load_links(root, mode=RuntimeMode.LIVE)
+        links = load_links(root, mode=mode)
     except Exception:  # noqa: BLE001 — missing links must not fail the refresh
         return
     if not links:

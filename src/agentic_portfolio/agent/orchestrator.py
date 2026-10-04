@@ -8,7 +8,6 @@ from typing import Any, Callable, Mapping
 
 from agentic_portfolio.agent.jobs import JobSpec, specs_by_name, specs_for_phase
 from agentic_portfolio.agent.persist import atomic_write_json, read_json
-from agentic_portfolio.agent.safety import assert_execution_disabled
 from agentic_portfolio.agent.session import MarketPhase, SessionSnapshot, classify_market_phase
 from agentic_portfolio.ai.scheduler import JobLock
 from agentic_portfolio.calendar import EASTERN
@@ -140,7 +139,6 @@ class JobOrchestrator:
     ) -> dict[str, Any]:
         stamp = now or self.now()
         snap = session or classify_market_phase(stamp)
-        assert_execution_disabled()
         spec = self.specs.get(job) or JobSpec(job, frozenset({snap.phase}), "interval", every_minutes=1)
         lock = JobLock(self.lock_dir / f"{job}.lock", stale_seconds=int(self.config.get("job_timeout_seconds") or 900))
         if not lock.acquire(job=job, now=stamp):

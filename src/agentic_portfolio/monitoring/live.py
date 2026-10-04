@@ -252,12 +252,19 @@ def run_live_position_monitor(services, ctx: dict[str, Any]) -> dict[str, Any]:
             "core_committee": committee_status,
             "core_holdings": [p.symbol for p in core_positions],
             "placement_attempted": False,
-            "auto_execution": False,
+            "auto_execution": _autonomous(),
+            "orders_authorized": int(applied.get("authorized") or 0),
             "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
             "execution_attempted": False,
         }
     )
     return refresh
+
+
+def _autonomous() -> bool:
+    from agentic_portfolio.autonomy.policy import ExecutionMode, load_execution_policy
+
+    return load_execution_policy().mode is ExecutionMode.AUTONOMOUS
 
 
 def _monitoring_reasoner(services, worker):
@@ -272,18 +279,21 @@ def _monitoring_reasoner(services, worker):
 
 
 def _apply_monitor_actions(services, worker, context: PortfolioContext, result) -> dict[str, int]:
+    """Send permitted HOLD→ADD/REDUCE/SELL reassessments through the single ProposalIntake."""
     created = 0
     reused = 0
     risk_blocked = 0
+    authorized = 0
     if worker.approvals is None:
-        return {"created": 0, "reused": 0, "risk_blocked": 0}
+        return {"created": 0, "reused": 0, "risk_blocked": 0, "authorized": 0}
     for row in result.positions:
         for gated in row.gated_actions:
             action = gated.proposed_action.decision
             if action not in ACTIONABLE:
                 continue
             verdict = gated.risk.verdict
-            if verdict not in RISK_PERMIT:
+            halted_exit = verdict is GateVerdict.HALTED and action in {Decision.REDUCE, Decision.SELL}
+            if verdict not in RISK_PERMIT and not halted_exit:
                 risk_blocked += 1
                 worker._notify(
                     NotificationKind.RISK_GATE_BLOCKED,
@@ -292,37 +302,27 @@ def _apply_monitor_actions(services, worker, context: PortfolioContext, result) 
                     payload={"symbol": row.symbol, "verdict": str(verdict)},
                 )
                 continue
-            existing = worker.approvals.canonical_pending(ticker=row.symbol, proposed_action=action.value)
-            if existing is not None:
-                reused += 1
+            intake = _submit_monitor_proposal(worker, context, row, gated)
+            if intake.approval is None:
                 continue
-            item, is_new = _create_monitor_approval(worker, context, row, gated)
-            if item is None:
-                continue
-            if is_new:
+            if intake.created:
                 created += 1
-                worker._notify(
-                    NotificationKind.APPROVAL_REQUIRED,
-                    title=f"TRADE APPROVAL REQUIRED — {row.symbol}",
-                    body=f"{row.symbol} {action.value}. Approving does not place an order.",
-                    payload={
-                        "ticker": row.symbol,
-                        "approval_id": item.approval_id,
-                        "action": item.proposed_action,
-                        "proposed_dollar_amount": item.proposed_dollar_amount,
-                        "proposed_allocation_pct": item.proposed_allocation_pct,
-                        "sleeve": item.sleeve,
-                        "reason": item.reason,
-                        "expires_at": item.expires_at,
-                    },
+                log_activity(
+                    services.root,
+                    "ORDER_AUTHORIZED" if intake.status == "AUTHORIZED" else "APPROVAL_CREATED",
+                    ticker=row.symbol,
+                    approval_id=intake.approval.approval_id,
+                    job="POSITION_MONITOR",
+                    intake_status=intake.status,
                 )
-                log_activity(services.root, "APPROVAL_CREATED", ticker=row.symbol, approval_id=item.approval_id, job="POSITION_MONITOR")
             else:
                 reused += 1
-    return {"created": created, "reused": reused, "risk_blocked": risk_blocked}
+            if intake.status == "AUTHORIZED":
+                authorized += 1
+    return {"created": created, "reused": reused, "risk_blocked": risk_blocked, "authorized": authorized}
 
 
-def _create_monitor_approval(worker, context: PortfolioContext, row, gated):
+def _submit_monitor_proposal(worker, context: PortfolioContext, row, gated):
     action = gated.proposed_action
     nav = float(context.current_nav or 0)
     dollars = float(action.proposed_notional or 0)
@@ -334,32 +334,29 @@ def _create_monitor_approval(worker, context: PortfolioContext, row, gated):
         pct = raw * 100.0 if 0.0 <= raw <= 1.0 else raw
     if pct is not None and not dollars and nav:
         current_mv = sum(p.market_value for p in context.positions if p.symbol.upper() == row.symbol.upper())
-        dollars = max(0.0, current_mv - (pct / 100.0) * nav)
+        target = (pct / 100.0) * nav
+        dollars = max(0.0, target - current_mv) if action.decision is Decision.ADD else max(0.0, current_mv - target)
     impact = {
         "nav": nav,
         "cash": context.cash,
         "buying_power": context.buying_power,
-        "source_of_truth": LIVE_SOURCE_OF_TRUTH if worker.runtime_mode is RuntimeMode.LIVE else "isolated_paper_book",
+        "source_of_truth": LIVE_SOURCE_OF_TRUTH if worker.runtime_mode is RuntimeMode.LIVE else "paper_broker",
         "proposed_notional": dollars,
         "desired_allocation_pct": pct,
         "expected_resulting_position_pct": action.expected_resulting_position_pct,
-        "LIVE_ORDER_PLACEMENT": live_placement_enabled(),
-        "auto_execution": False,
     }
-    item, is_new = worker.approvals.get_or_create(
+    return worker.intake().submit(
         ticker=row.symbol,
-        proposed_action=action.decision.value,
-        proposed_dollar_amount=dollars or None,
-        proposed_allocation_pct=None if pct is None else float(pct),
+        action=action.decision.value,
+        risk=gated.risk,
+        proposed_action=action,
+        dollars=dollars or None,
+        pct=None if pct is None else float(pct),
+        context=context,
         reason=(row.reassessment.rationale if row.reassessment else None) or f"{row.symbol} position monitor {action.decision.value}",
         supporting_thesis=(row.thesis.thesis_summary if row.thesis else None),
-        current_quote=action.current_price or (row.facts.current_price if row.facts else None),
-        risk_gate_result={
-            "verdict": gated.risk.verdict.value if hasattr(gated.risk.verdict, "value") else str(gated.risk.verdict),
-            "reasons": [str(r) for r in (gated.risk.reasons or [])],
-        },
+        quote=action.current_price or (row.facts.current_price if row.facts else None),
         portfolio_impact=impact,
-        expected_order_type="market",
         metadata={
             "sleeve": action.sleeve.value if action.sleeve else None,
             "thesis_id": gated.thesis_id or (row.thesis.thesis_id if row.thesis else None),
@@ -367,5 +364,5 @@ def _create_monitor_approval(worker, context: PortfolioContext, row, gated):
             "nav_at_proposal": nav,
             "quote_at_proposal": action.current_price,
         },
+        origin="position_monitor",
     )
-    return item, is_new

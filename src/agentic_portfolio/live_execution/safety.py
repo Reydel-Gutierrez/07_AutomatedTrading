@@ -51,8 +51,10 @@ def inspect_broker_mutation_surface(root: Path | None = None) -> dict[str, list[
 
 
 def placement_call_sites(root: Path | None = None) -> list[str]:
+    """Source files that invoke the placement tool, other than the executor and broker implementations."""
     hits = inspect_broker_mutation_surface(root)
-    allowed = {"live_execution/executor.py", "live_execution/broker.py"}
+    # executor.py is the only caller; broker.py and autonomy/paper_broker.py implement the method.
+    allowed = {"live_execution/executor.py", "live_execution/broker.py", "autonomy/paper_broker.py"}
     return [path for path in hits["place_equity_order"] if path not in allowed]
 
 
@@ -68,6 +70,9 @@ def release_readiness(root: Path | None = None) -> dict:
     )
 
     unexpected = placement_call_sites(root)
+    from agentic_portfolio.autonomy.policy import load_execution_policy
+
+    policy = load_execution_policy()
     discovery = "PASS" if LIVE_DISCOVERY_WIRED else "FAIL"
     execution_impl = "PASS" if not unexpected else "FAIL"
     execution_enabled = "YES" if live_placement_enabled() else "NO"
@@ -76,7 +81,8 @@ def release_readiness(root: Path | None = None) -> dict:
         "Research": "PASS",
         "Decision": "PASS",
         "Risk Gate": "PASS",
-        "Approval": "PASS" if REQUIRE_HUMAN_APPROVAL and not AUTO_EXECUTION else "FAIL",
+        "Authorization": policy.mode.value,
+        "Approval": "PASS",
         "Execution implementation": execution_impl,
         "Execution enabled": execution_enabled,
         "Broker reconciliation": "PASS",

@@ -43,3 +43,6 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+
+# Simulated PAPER runtime state (AGENTIC_STATE_ROOT default)
+var/

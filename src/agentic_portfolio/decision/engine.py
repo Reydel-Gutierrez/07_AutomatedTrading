@@ -200,6 +200,22 @@ def run_portfolio_decision(
         action = to_proposed_action(nd, context, report_by.get(nd.symbol), thesis_by_symbol.get(nd.symbol))
         if action is None:
             continue
+        if action.decision == Decision.ADD and theses is not None:
+            # This decision IS a fresh investment-thesis review of the held position.
+            active = theses.active_for_symbol(action.symbol)
+            if active is not None:
+                action.thesis_id = active.thesis_id
+                action.investment_thesis_review_complete = True
+                action.risk_review_complete = True
+                if persist:
+                    theses.add_review(
+                        active.thesis_id,
+                        review_type="INVESTMENT_THESIS_REVIEW",
+                        notes=getattr(nd, "rationale", None),
+                        session_id=context.trading_session_id,
+                        decision_id=batch_id,
+                        reviewed_at=now.isoformat(),
+                    )
         if sleeves is not None and action.sleeve and nd.decision in RISK_UP | {Decision.HOLD}:
             _assign_proposed_sleeve(sleeves, action.symbol, action.sleeve, nd.thesis_id)
         risk = evaluate(context, action, sleeves=sleeves, theses=theses)

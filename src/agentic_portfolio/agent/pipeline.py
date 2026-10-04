@@ -193,14 +193,19 @@ def inspect_research_queues(root: Path, *, runtime_mode: RuntimeMode | str) -> d
 
 def load_live_context(root: Path, *, runtime_mode: RuntimeMode | str) -> PortfolioContext | None:
     mode = runtime_mode.value if isinstance(runtime_mode, RuntimeMode) else str(runtime_mode).upper()
-    if mode != RuntimeMode.LIVE.value:
-        return None
     book = LivePortfolioStore(root).current_book()
     if not isinstance(book, dict):
         return None
     raw = book.get("context")
     if not isinstance(raw, dict):
         return None
+    if mode != RuntimeMode.LIVE.value:
+        # PAPER runtime: the broker book in this (separate) state root is the PaperBroker account.
+        if str(book.get("runtime_mode") or "").upper() != RuntimeMode.PAPER.value:
+            return None
+        return portfolio_context_from_dict(raw)
+    if str(book.get("runtime_mode") or RuntimeMode.LIVE.value).upper() != RuntimeMode.LIVE.value:
+        raise RuntimeError("PAPER broker snapshot found where the LIVE account book was expected")
     ctx = portfolio_context_from_dict(raw)
     paper = PaperFillStore(root).current_book()
     leaks = detect_paper_contamination(book, paper, runtime_mode=RuntimeMode.LIVE)
@@ -1051,9 +1056,25 @@ class ResearchQueueWorker:
             )
             return row
         approval = self._create_approval(gated, report, candidate, context, thesis, name)
+        intake_status = getattr(self, "_last_intake_status", None)
         if approval is None:
             row["reason"] = "approval_not_created"
+            row["intake_status"] = intake_status
+            row["decision"] = name.decision.value
+            if intake_status == "OBSERVED":
+                self._watch_from_research(
+                    candidate,
+                    report,
+                    thesis=thesis,
+                    status=WatchStatus.WATCH,
+                    reason="observe_mode_proposal",
+                    proposed_notional=notional,
+                    desired_allocation_pct=alloc_pct,
+                    reconsideration=name.reconsideration,
+                )
+                row["watches_created"] = 1
             return row
+        row["intake_status"] = intake_status
         watch = self._watch_from_research(
             candidate,
             report,
@@ -1072,25 +1093,7 @@ class ResearchQueueWorker:
         row["desired_allocation_pct"] = alloc_pct
         row["risk_verdict"] = verdict.value if hasattr(verdict, "value") else str(verdict)
         self.candidates.set_status(candidate.candidate_id, CandidateStatus.RESEARCH_COMPLETE)
-        self._notify(
-            NotificationKind.APPROVAL_REQUIRED,
-            title=f"TRADE APPROVAL REQUIRED — {report.symbol}",
-            body=(
-                f"{report.symbol} {name.decision.value} "
-                f"{name.desired_allocation_pct or 0:.2f}% NAV. Approving does not place an order."
-            ),
-            payload={
-                "symbol": report.symbol,
-                "ticker": report.symbol,
-                "approval_id": approval.approval_id,
-                "action": approval.proposed_action,
-                "proposed_dollar_amount": approval.proposed_dollar_amount,
-                "proposed_allocation_pct": approval.proposed_allocation_pct,
-                "sleeve": approval.sleeve,
-                "reason": approval.reason,
-                "expires_at": approval.expires_at,
-            },
-        )
+        # Notifications (APPROVAL_REQUIRED / ORDER_AUTHORIZED) are emitted once by ProposalIntake.
         return row
 
     def _decision_operational_failure(self, report: ResearchReport, row: dict[str, Any], reason: str) -> dict[str, Any]:
@@ -1151,6 +1154,7 @@ class ResearchQueueWorker:
         thesis: ThesisRecord | None,
         name: Any,
     ):
+        self._last_intake_status = None
         if self.approvals is None:
             return None
         action = gated.proposed_action
@@ -1176,21 +1180,6 @@ class ResearchQueueWorker:
             gw = getattr(self._decision(), "last_result", None)
         if gw is None and (self.research_reasoner is not None or self.gateway is not None):
             gw = getattr(self._reasoner(), "last_result", None)
-        item = self.approvals.create(
-            ticker=report.symbol,
-            proposed_action=action.decision.value,
-            proposed_dollar_amount=dollars or None,
-            proposed_allocation_pct=None if alloc_raw is None else pct,
-            reason=name.rationale or report.executive_summary,
-            ai_rationale=report.executive_summary,
-            supporting_thesis=(thesis.thesis_summary if thesis else report.executive_summary),
-            current_quote=action.current_price or candidate.current_price or report.market_price,
-            risk_gate_result={
-                "verdict": gated.risk.verdict.value if hasattr(gated.risk.verdict, "value") else str(gated.risk.verdict),
-                "reasons": [str(r) for r in (gated.risk.reasons or [])],
-            },
-            portfolio_impact=impact,
-        )
         extras = {
             "sleeve": action.sleeve.value if action.sleeve else (candidate.provisional_sleeve.value if candidate.provisional_sleeve else None),
             "research_id": report.research_id,
@@ -1210,12 +1199,34 @@ class ResearchQueueWorker:
             "bear_case": report.bear_case.summary if report.bear_case else None,
             "expected_order_type": "market",
         }
-        for key, value in extras.items():
-            if hasattr(item, key):
-                setattr(item, key, value)
-        item.portfolio_impact = {**impact, **{k: v for k, v in extras.items() if v is not None}}
-        self.approvals.store.save(item)
-        return item
+        result = self.intake().submit(
+            ticker=report.symbol,
+            action=action.decision.value,
+            risk=gated.risk,
+            proposed_action=action,
+            dollars=dollars or None,
+            pct=None if alloc_raw is None else pct,
+            context=context,
+            reason=name.rationale or report.executive_summary,
+            ai_rationale=report.executive_summary,
+            supporting_thesis=(thesis.thesis_summary if thesis else report.executive_summary),
+            quote=action.current_price or candidate.current_price or report.market_price,
+            portfolio_impact={**impact, **{k: v for k, v in extras.items() if v is not None}},
+            metadata={k: v for k, v in extras.items() if v is not None},
+            origin="portfolio_decision",
+        )
+        self._last_intake_status = result.status
+        return result.approval
+
+    def intake(self):
+        """The single proposal → order-queue door (autonomy.ProposalIntake)."""
+        existing = getattr(self, "_intake", None)
+        if existing is not None:
+            return existing
+        from agentic_portfolio.autonomy.intake import build_intake
+
+        self._intake = build_intake(self.approvals, root=self.root, notify=self.notify, now_fn=self._now)
+        return self._intake
 
     def _watch_from_research(
         self,
@@ -1418,7 +1429,9 @@ class ResearchQueueWorker:
                 if bp_at is not None and abs(float(ctx.buying_power) - float(bp_at)) / max(abs(float(bp_at)), 1.0) >= 0.10:
                     reasons.append("buying_power_changed")
                 risk_now = ctx.risk_state.value if ctx.risk_state else None
-                if risk_now and str(risk_now).upper() in {"HALTED", "CRITICAL"}:
+                risk_reducing = str(item.proposed_action).upper() in {"SELL", "REDUCE"}
+                if risk_now and str(risk_now).upper() in {"HALTED", "CRITICAL"} and not risk_reducing:
+                    # HALTED still allows a human to authorize exits; only risk-increasing proposals die.
                     reasons.append("risk_state_changed")
             if not reasons:
                 continue

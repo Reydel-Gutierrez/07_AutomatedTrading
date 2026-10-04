@@ -523,6 +523,40 @@ Committed defaults unchanged: `auto_execution=false`, `require_human_approval=tr
 
 ---
 
+## 2026-10-03 — Unified autonomous order pipeline
+
+**Type:** `architecture` / `execution` / `config_change`
+
+Diagnosis: the system found and researched opportunities, but nothing could execute without a dashboard click, and the safety layers had drifted apart. Every BUY/ADD/REDUCE/SELL became a PENDING approval. `auto_execution` / `require_human_approval` / `live_trade_actions_allowed` were duplicated across about 8 config files and about 45 modules, and several modules raised errors if any of them changed, including the live account refresh. The watch → approval path wrote a hard-coded `{"verdict": "PASS"}` without running the Risk Gate, and its `risk_fn` was never wired. The executor trusted the saved Risk Gate verdict instead of re-running it at send time. ADD could never pass, because the required registry reviews were never recorded. PAPER runtime mode refreshed the real Robinhood account. 14 scheduled jobs were aliases of other jobs. There was no kill switch.
+
+Change: one loop for PAPER and LIVE with three switches.
+- `AGENTIC_EXECUTION_MODE` (OBSERVE / HUMAN_APPROVAL / AUTONOMOUS; committed HUMAN_APPROVAL; typos fail safe).
+- `AGENTIC_LIVE_ORDER_PLACEMENT` (LIVE broker writes; committed false).
+- A persistent kill switch with human-only release that auto-trips on ambiguous submissions, repeated broker failures, or an account mismatch.
+
+New `autonomy/` package:
+- `ProposalIntake` is the single door for all proposal sources and persists the full ProposedAction.
+- `OrderAuthority` authorizes PASS-only proposals within daily/size/cash/spread/window limits and escalates everything else to a human.
+- `send_risk` re-runs the full Risk Gate on fresh facts before every order.
+- `PaperBroker` is the simulated account so PAPER runs the identical pipeline under `var/paper`.
+- `watch_proposal` gives the watch path the real Risk Gate.
+
+Other changes:
+- ADD needs an ACTIVE thesis plus a fresh AI thesis review; the gate evaluation itself is the RISK_REVIEW.
+- HALTED exits are escalated to a human instead of being dropped.
+- Research reports take their price from the fresh research quote, not the discovery price.
+- The catalog went from 41 to 27 jobs.
+- The dashboard has kill-switch controls and an execution status panel.
+- New scripts: `scripts/kill_switch.py`; `diagnose_pipeline.py` now prints execution status.
+
+The AI budget is unchanged ($10/month). Autonomy adds no AI calls. AI has no broker access and cannot authorize orders; this is enforced by tests.
+
+**MCP NOT called:** no live review/place/cancel during development. LIVE tests use FakeBroker; PAPER tests use PaperBroker with injected quotes.
+
+Committed defaults: `AGENTIC_EXECUTION_MODE=HUMAN_APPROVAL`, `AGENTIC_LIVE_ORDER_PLACEMENT=false`.
+
+---
+
 ## Template
 
 ```
