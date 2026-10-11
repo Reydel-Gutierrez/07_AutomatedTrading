@@ -149,6 +149,7 @@ cmd_activate() {
   local deps_changed=0
   cmp -s "$code/pyproject.toml" "$APP/pyproject.toml" || deps_changed=1
 
+  main_pid >"$RELEASES/$sha/old_pid"
   svc stop
   rsync -a --delete --checksum "${RSYNC_EXCLUDES[@]}" "$code/" "$APP/"
   if (( deps_changed )); then
@@ -173,24 +174,21 @@ PY
 }
 
 cmd_verify() {
-  local sha=$1 code="$RELEASES/$1/code" since
-  since=$(cat "$RELEASES/$sha/activated_at") || die "release $sha was not activated"
+  local sha=$1 code="$RELEASES/$1/code" old_pid
+  [[ -f "$RELEASES/$sha/activated_at" ]] || die "release $sha was not activated"
+  old_pid=$(cat "$RELEASES/$sha/old_pid" 2>/dev/null || echo 0)
   local pid="" ok=0
   for _ in $(seq 1 30); do
     sleep 2
     pid=$(main_pid)
-    [[ $(systemctl is-active "$SERVICE") == active && $pid != 0 ]] || continue
-    if python3 - "$APP/state/runtime/health.json" "$since" "$pid" <<'PY'
-import json, sys
-from datetime import datetime
-health = json.load(open(sys.argv[1]))
-since, pid = float(sys.argv[2]), int(sys.argv[3])
-started = datetime.fromisoformat(str(health.get("started_at"))).timestamp()
-sys.exit(0 if health.get("agent") == "ONLINE" and int(health.get("pid") or 0) == pid and started >= since else 1)
-PY
-    then ok=1; break; fi
+    [[ $(systemctl is-active "$SERVICE") == active && $pid != 0 && $pid != "$old_pid" ]] || continue
+    if curl -fsS -m 5 http://127.0.0.1:3100/healthz | python3 -c 'import json,sys; sys.exit(0 if json.load(sys.stdin).get("agent") == "ONLINE" else 1)' 2>/dev/null; then
+      # Still the same process a few seconds later: not a crash loop.
+      sleep 5
+      [[ $(main_pid) == "$pid" && $(systemctl is-active "$SERVICE") == active ]] && { ok=1; break; }
+    fi
   done
-  (( ok )) || die "service did not report ONLINE on a fresh process within 60s (pid=$pid)"
+  (( ok )) || die "service did not report ONLINE on a fresh, stable process within 60s (pid=$pid, previous=$old_pid)"
   echo "service ONLINE pid=$pid"
   # Every file in the release must be byte-identical in APP.
   local mismatched
