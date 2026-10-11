@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS managers (
@@ -163,6 +163,74 @@ CREATE TABLE IF NOT EXISTS legacy_import (
     imported_at TEXT NOT NULL,
     summary_json TEXT NOT NULL
 );
+
+-- Phase 2: CIO office
+CREATE TABLE IF NOT EXISTS cio_conversations (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    summary TEXT,
+    summarized_through INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS cio_messages (
+    id INTEGER PRIMARY KEY,
+    conversation_id INTEGER NOT NULL REFERENCES cio_conversations(id),
+    role TEXT NOT NULL CHECK (role IN ('user','assistant','notice')),
+    content TEXT NOT NULL,
+    citations_json TEXT NOT NULL DEFAULT '[]',
+    tools_json TEXT NOT NULL DEFAULT '[]',
+    proposals_json TEXT NOT NULL DEFAULT '[]',
+    flags_json TEXT NOT NULL DEFAULT '[]',
+    model TEXT,
+    cost TEXT,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS cio_messages_conv ON cio_messages (conversation_id, id);
+CREATE TABLE IF NOT EXISTS cio_memory (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    text TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    conversation_id INTEGER,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+-- Structured proposals: the only way the CIO's advice becomes an action, and only on owner approval.
+CREATE TABLE IF NOT EXISTS proposals (
+    id INTEGER PRIMARY KEY,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    rationale TEXT NOT NULL,
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL CHECK (status IN ('PENDING','APPLIED','REJECTED','EXPIRED','FAILED')),
+    created_by TEXT NOT NULL,
+    conversation_id INTEGER,
+    created_at TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    decided_by TEXT,
+    decided_at TEXT,
+    decision_note TEXT,
+    result_json TEXT
+);
+CREATE INDEX IF NOT EXISTS proposals_status ON proposals (status, id);
+CREATE TABLE IF NOT EXISTS ai_usage (
+    id INTEGER PRIMARY KEY,
+    ts TEXT NOT NULL,
+    month TEXT NOT NULL,
+    agent TEXT NOT NULL,
+    provider TEXT NOT NULL,
+    model TEXT NOT NULL,
+    purpose TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    cost TEXT NOT NULL,
+    ok INTEGER NOT NULL,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS ai_usage_month ON ai_usage (month, agent);
 
 CREATE TABLE IF NOT EXISTS market_bars (
     symbol TEXT NOT NULL,

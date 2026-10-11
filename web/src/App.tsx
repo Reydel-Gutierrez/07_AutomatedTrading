@@ -4,6 +4,7 @@ import { api, type FirmEvent, type Overview } from "./api";
 import { useEventStream, useResource } from "./hooks";
 import Activity from "./pages/Activity";
 import CapitalPage from "./pages/Capital";
+import CioOffice from "./pages/CIO";
 import HQ from "./pages/HQ";
 import Login from "./pages/Login";
 import ManagerPage from "./pages/Manager";
@@ -45,7 +46,7 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
               Agentic <span className="text-gold-400">Capital</span>
             </NavLink>
             <nav className="flex gap-1 text-sm">
-              {[["/", "Headquarters"], ["/capital", "Capital"], ["/activity", "Activity"], ["/system", "System"]].map(([to, label]) => (
+              {[["/", "Headquarters"], ["/cio", "CIO Office"], ["/capital", "Capital"], ["/activity", "Activity"], ["/system", "System"]].map(([to, label]) => (
                 <NavLink key={to} to={to} end className={({ isActive }) => `rounded-lg px-3 py-1.5 ${isActive ? "bg-ink-800 text-slate-50" : "text-slate-400 hover:text-slate-200"}`}>
                   {label}
                 </NavLink>
@@ -66,6 +67,7 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
           <Routes>
             <Route path="/" element={<HQ />} />
             <Route path="/managers/:id" element={<ManagerPage />} />
+            <Route path="/cio" element={<CioOffice />} />
             <Route path="/capital" element={<CapitalPage />} />
             <Route path="/activity" element={<Activity />} />
             <Route path="/system" element={<SystemPage />} />

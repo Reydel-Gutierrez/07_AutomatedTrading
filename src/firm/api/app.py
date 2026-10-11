@@ -79,6 +79,25 @@ class NoteBody(BaseModel):
     note: str
 
 
+class ChatBody(BaseModel):
+    content: str = Field(min_length=1, max_length=8000)
+
+
+class TitleBody(BaseModel):
+    title: str = "New conversation"
+
+
+class DecisionBody(BaseModel):
+    confirm: bool = False
+    note: str = ""
+
+
+class MemoryBody(BaseModel):
+    kind: str = "fact"
+    text: str | None = None
+    active: bool | None = None
+
+
 def create_app(host: Host) -> FastAPI:
     firm = host.firm
     sessions = Sessions(firm.db, firm.settings)
@@ -296,6 +315,81 @@ def create_app(host: Host) -> FastAPI:
     def ack_foreign(broker_order_id: str, body: NoteBody, who: str = Depends(user)) -> dict[str, Any]:
         firm.reconciler.acknowledge_foreign_order(broker_order_id, by=who, note=body.note)
         return {"ok": True}
+
+    # -- CIO office ----------------------------------------------------------
+    def cio():
+        office = getattr(host, "cio", None)
+        if office is None:
+            raise HTTPException(503, "the CIO office is not configured")
+        return office
+
+    @app.get("/api/cio/conversations")
+    def cio_conversations(_: str = Depends(user)) -> dict[str, Any]:
+        return {"conversations": cio().conversations(), "provider_ready": cio().provider.available()}
+
+    @app.post("/api/cio/conversations")
+    def cio_new(body: TitleBody, _: str = Depends(user)) -> dict[str, Any]:
+        return cio().create_conversation(body.title)
+
+    @app.get("/api/cio/conversations/{cid}")
+    def cio_conversation(cid: int, _: str = Depends(user)) -> dict[str, Any]:
+        try:
+            return cio().conversation(cid)
+        except KeyError:
+            raise HTTPException(404, "no such conversation") from None
+
+    @app.post("/api/cio/conversations/{cid}/messages")
+    def cio_ask(cid: int, body: ChatBody, _: str = Depends(user)) -> dict[str, Any]:
+        try:
+            return cio().ask(cid, body.content)
+        except KeyError:
+            raise HTTPException(404, "no such conversation") from None
+
+    @app.get("/api/cio/proposals")
+    def cio_proposals(status: str | None = None, _: str = Depends(user)) -> dict[str, Any]:
+        return {"proposals": cio().proposals.list(status)}
+
+    @app.post("/api/cio/proposals/{pid}/approve")
+    def cio_approve(pid: int, body: DecisionBody, who: str = Depends(user)) -> dict[str, Any]:
+        if not body.confirm:
+            raise HTTPException(422, "approving a proposal requires confirm=true")
+        from firm.cio.proposals import ProposalError
+
+        try:
+            return cio().proposals.approve(pid, by=who, note=body.note)
+        except ProposalError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.post("/api/cio/proposals/{pid}/reject")
+    def cio_reject(pid: int, body: DecisionBody, who: str = Depends(user)) -> dict[str, Any]:
+        from firm.cio.proposals import ProposalError
+
+        try:
+            return cio().proposals.reject(pid, by=who, note=body.note)
+        except ProposalError as exc:
+            raise HTTPException(409, str(exc)) from None
+
+    @app.get("/api/cio/memory")
+    def cio_memory(_: str = Depends(user)) -> dict[str, Any]:
+        rows = firm.db.query("SELECT * FROM cio_memory ORDER BY active DESC, id DESC LIMIT 200")
+        return {"memories": [dict(r) for r in rows]}
+
+    @app.post("/api/cio/memory")
+    def cio_memory_add(body: MemoryBody, who: str = Depends(user)) -> dict[str, Any]:
+        if not body.text:
+            raise HTTPException(422, "text is required")
+        return cio().memory.add(body.kind, body.text, by=who)
+
+    @app.put("/api/cio/memory/{mid}")
+    def cio_memory_edit(mid: int, body: MemoryBody, who: str = Depends(user)) -> dict[str, Any]:
+        try:
+            return cio().memory.update(mid, by=who, text=body.text, active=body.active, kind=body.kind)
+        except KeyError:
+            raise HTTPException(404, "no such memory") from None
+
+    @app.get("/api/cio/usage")
+    def cio_usage(_: str = Depends(user)) -> dict[str, Any]:
+        return cio().budget.summary()
 
     # -- static frontend -------------------------------------------------------
     @app.get("/{path:path}", include_in_schema=False)

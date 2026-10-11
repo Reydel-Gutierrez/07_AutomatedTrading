@@ -110,6 +110,7 @@ class Service:
             sinks=[sink] if sink else [],
         )
         self.scheduler = Scheduler(clock=clock, on_failure=self._job_failed)
+        self.cio = build_cio(self.firm, self.health, self.environ)
         self._last_failure_event: dict[str, datetime] = {}
         self._install_jobs()
 
@@ -268,6 +269,25 @@ class Service:
                 log.exception("scheduler tick failed")
             stop.wait(interval)
         self.scheduler.shutdown()
+
+
+def build_cio(firm: Firm, health, environ: Mapping[str, str], provider=None):
+    """The CIO office, using the provider and models chosen in settings.ai_models."""
+    from firm.ai.budget import Budget
+    from firm.ai.providers import OpenAIResponses
+    from firm.cio.agent import CIO
+
+    cfg = (firm.settings.get("ai_models") or {}).get("cio") or {}
+    if provider is None:
+        provider = OpenAIResponses(api_key=str(environ.get("OPENAI_API_KEY") or ""))
+    return CIO(
+        firm,
+        provider=provider,
+        budget=Budget(firm.db, firm.settings, clock=firm.clock),
+        health=health,
+        model=cfg.get("model", "gpt-5.6-terra"),
+        summary_model=cfg.get("summary_model", "gpt-5.6-luna"),
+    )
 
 
 def _every(now: datetime, st: JobState, seconds: float) -> bool:

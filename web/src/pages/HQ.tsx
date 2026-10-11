@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { useLive } from "../App";
-import { type FirmEvent, type ManagerCard, type Overview } from "../api";
+import { type FirmEvent, type ManagerCard, type Overview, type Proposal } from "../api";
+import { useResource } from "../hooks";
 import { Donut, PerformanceChart } from "../components/charts";
 import { Feed } from "../components/Feed";
 import { AGENTS, Avatar, Badge, Card, Empty, Stat } from "../components/ui";
@@ -87,8 +88,10 @@ export default function HQ() {
 }
 
 function CioCard() {
+  const { bump } = useLive();
+  const open = useResource<{ proposals: Proposal[] }>("/api/cio/proposals?status=PENDING", { every: 60000, bump }).data?.proposals.length ?? 0;
   return (
-    <div className="card flex flex-col border-gold-500/30 bg-gradient-to-br from-ink-900 to-ink-850">
+    <Link to="/cio" className="card flex flex-col border-gold-500/30 bg-gradient-to-br from-ink-900 to-ink-850 transition hover:border-gold-500/60">
       <div className="flex items-center gap-3">
         <Avatar id="cio" />
         <div>
@@ -97,8 +100,11 @@ function CioCard() {
         </div>
       </div>
       <p className="mt-4 flex-1 text-sm text-slate-400">{AGENTS.cio.blurb}</p>
-      <div className="mt-4 rounded-lg bg-ink-800/80 px-3 py-2 text-xs text-slate-400">Executive office opens in Phase 2.</div>
-    </div>
+      <div className="mt-4 flex items-center justify-between rounded-lg bg-ink-800/80 px-3 py-2 text-xs">
+        <span className="text-gold-400">Enter the executive office →</span>
+        {open > 0 && <span className="rounded-full bg-gold-500 px-2 py-0.5 font-semibold text-ink-950">{open} to decide</span>}
+      </div>
+    </Link>
   );
 }
 

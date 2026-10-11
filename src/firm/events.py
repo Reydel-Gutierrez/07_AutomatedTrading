@@ -34,6 +34,8 @@ ALERT_TYPES = frozenset(
         "MANAGER_DEGRADED",
         "DRAWDOWN_BRAKE",
         "DRAWDOWN_ALERT",
+        "PROPOSAL_CREATED",
+        "AI_PROVIDER_UNAVAILABLE",
         "TURNOVER_LIMIT",
         "BACKUP_FAILED",
         "SERVICE_STARTED",

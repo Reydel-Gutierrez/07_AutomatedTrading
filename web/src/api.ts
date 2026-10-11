@@ -130,3 +130,35 @@ export const api = {
   post: <T = { ok: boolean },>(path: string, body?: unknown) => request<T>("POST", path, body ?? {}),
   put: <T = { ok: boolean },>(path: string, body?: unknown) => request<T>("PUT", path, body ?? {}),
 };
+
+export type Citation = { type: "event" | "order" | "proposal" | "memory"; id: number; label?: string };
+export type CioMessage = {
+  id: number;
+  role: "user" | "assistant" | "notice";
+  content: string;
+  citations: Citation[];
+  tools: { tool: string; args: string }[];
+  proposals: number[];
+  flags: string[];
+  model: string | null;
+  cost: string | null;
+  created_at: string;
+};
+export type Conversation = { id: number; title: string; created_at: string; updated_at: string; summary?: string | null; messages?: CioMessage[] };
+export type Proposal = {
+  id: number;
+  kind: "reallocate" | "mandate_change" | "mode_change" | "deposit_split";
+  title: string;
+  payload: Record<string, any>;
+  rationale: string;
+  status: "PENDING" | "APPLIED" | "REJECTED" | "EXPIRED" | "FAILED";
+  created_by: string;
+  created_at: string;
+  expires_at: string;
+  decided_by: string | null;
+  decided_at: string | null;
+  decision_note: string | null;
+  result: Record<string, any> | null;
+};
+export type Memory = { id: number; kind: string; text: string; created_by: string; active: number; created_at: string };
+export type Usage = { month: string; monthly_usd: number; agents: Record<string, { cap: number; spent: number; remaining: number }>; total_spent: number };
