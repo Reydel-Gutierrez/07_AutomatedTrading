@@ -31,7 +31,10 @@ KEEP_BACKUPS=5
 # Paths in APP that a code sync must never create, overwrite, or delete.
 RSYNC_EXCLUDES=(
   --exclude=/.venv/ --exclude=/state/ --exclude=/logs/ --exclude=/reports/ --exclude=/var/
-  --exclude=/src/*.egg-info/ --exclude=__pycache__/ --exclude=/DEPLOYED_COMMIT
+  --exclude=/src/*.egg-info/ --exclude=/DEPLOYED_COMMIT
+  # Perishable: bytecode caches are never shipped or synced, but they do not keep
+  # a deleted module's directory alive.
+  "--filter=-p __pycache__/"
 )
 
 mkdir -p "$RELEASES" "$BACKUPS"

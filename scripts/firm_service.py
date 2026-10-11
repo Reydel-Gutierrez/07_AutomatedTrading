@@ -20,6 +20,24 @@ from firm.config import firm_config  # noqa: E402
 from firm.runtime import Service  # noqa: E402
 
 
+LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+
+def bind_host(environ, cfg) -> tuple[str, str | None]:
+    """HQ binds loopback only; remote access goes through Cloudflare Access or an SSH tunnel.
+
+    A legacy DASHBOARD_HOST pointing elsewhere is ignored (with a warning) rather
+    than exposing HQ on the network or refusing to start.
+    """
+    host = str(cfg.get("host") or "127.0.0.1")
+    if host not in LOOPBACK:
+        host = "127.0.0.1"
+    requested = str(environ.get("DASHBOARD_HOST") or "").strip()
+    if requested and requested not in LOOPBACK:
+        return host, f"DASHBOARD_HOST={requested} ignored: HQ binds {host} only (use Cloudflare Access or an SSH tunnel)"
+    return (requested or host), None
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--once", action="store_true")
@@ -37,10 +55,10 @@ def main(argv: list[str] | None = None) -> int:
     from firm.api.app import create_app
 
     cfg = firm_config()["dashboard"]
-    host = os.environ.get("DASHBOARD_HOST") or cfg["host"]
-    if host not in ("127.0.0.1", "localhost", "::1"):
-        print("refusing to bind HQ to a non-loopback address", file=sys.stderr)
-        return 2
+    host, warning = bind_host(os.environ, cfg)
+    if warning:
+        logging.warning(warning)
+        service.firm.events.emit("CONFIG_WARNING", warning, actor="system", severity="warning")
     stop = threading.Event()
     worker = threading.Thread(target=service.run_scheduler, args=(stop,), name="firm-scheduler", daemon=True)
     worker.start()

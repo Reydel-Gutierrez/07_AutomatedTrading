@@ -42,3 +42,22 @@ def test_remote_script_never_syncs_runtime_state_or_reads_secrets():
     assert "AGENTIC_LIVE_ORDER_PLACEMENT" not in script
     assert "AGENTIC_EXECUTION_MODE" not in script
     assert b"\r\n" not in (ROOT / "deploy" / "pi_remote.sh").read_bytes()
+
+
+def test_hq_never_binds_beyond_loopback():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("firm_service", ROOT / "scripts" / "firm_service.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    cfg = {"host": "127.0.0.1", "port": 3100}
+    assert mod.bind_host({}, cfg) == ("127.0.0.1", None)
+    host, warning = mod.bind_host({"DASHBOARD_HOST": "0.0.0.0"}, cfg)
+    assert host == "127.0.0.1" and "ignored" in warning
+    assert mod.bind_host({}, {"host": "0.0.0.0"})[0] == "127.0.0.1"
+
+
+def test_bytecode_caches_cannot_block_module_removal():
+    script = (ROOT / "deploy" / "pi_remote.sh").read_text(encoding="utf-8")
+    assert '"--filter=-p __pycache__/"' in script
+    assert "--exclude=__pycache__/" not in script
