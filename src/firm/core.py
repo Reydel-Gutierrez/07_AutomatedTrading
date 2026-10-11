@@ -124,15 +124,40 @@ class Firm:
         rerun = result.rerun_after_minutes or (15 if deferred else None)
         return RunOutcome(manager_id, True, result.summary, orders, rerun)
 
+    # -- run requests (outside the daily schedule) ---------------------------
+    def request_run(self, manager_id: str, reason: str, *, after_minutes: int = 0) -> None:
+        """Ask for an extra run (allocation changed, rerun after sells, manual). Persisted across restarts."""
+        pending = self.settings.get("manager_requests") or {}
+        at = self.clock() + timedelta(minutes=after_minutes)
+        current = pending.get(manager_id)
+        if current and parse(current["at"]) <= at:
+            current["reasons"] = sorted(set(current["reasons"]) | {reason})
+        else:
+            pending[manager_id] = {"at": at.isoformat(), "reasons": [reason]}
+        self.settings.put("manager_requests", pending, by="firm")
+
+    def due_request(self, manager_id: str) -> list[str] | None:
+        req = (self.settings.get("manager_requests") or {}).get(manager_id)
+        if req and parse(req["at"]) <= self.clock():
+            return list(req["reasons"])
+        return None
+
+    def clear_request(self, manager_id: str) -> None:
+        pending = self.settings.get("manager_requests") or {}
+        if pending.pop(manager_id, None) is not None:
+            self.settings.put("manager_requests", pending, by="firm")
+
     # -- capital (owner actions) ---------------------------------------------
     def allocate(self, manager_id: str, amount: Decimal, *, by: str, note: str = "") -> None:
         self.registry.get(manager_id)
         self.ledger.allocate(manager_id, amount, by=by, memo=note or None)
         self.events.emit("CAPITAL_ALLOCATED", f"${cents(amount)} allocated to {self.registry.get(manager_id).display_name}" + (f": {note}" if note else ""), actor=by, manager_id=manager_id, payload={"amount": str(cents(amount))})
+        self.request_run(manager_id, "allocation_changed")
 
     def deallocate(self, manager_id: str, amount: Decimal, *, by: str, note: str = "") -> None:
         self.ledger.deallocate(manager_id, amount, by=by, memo=note or None)
         self.events.emit("CAPITAL_DEALLOCATED", f"${cents(amount)} returned from {self.registry.get(manager_id).display_name} to unallocated" + (f": {note}" if note else ""), actor=by, manager_id=manager_id, payload={"amount": str(cents(amount))})
+        self.request_run(manager_id, "allocation_changed")
 
     def firm_nav(self, book: str = "LIVE") -> dict[str, Decimal]:
         balances = self.ledger.balances(book)
