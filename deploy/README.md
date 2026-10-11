@@ -312,6 +312,36 @@ Verify after restart:
 | No duplicate jobs | single PID; `state/runtime/locks/` held by this process only |
 | No PAPER contamination | `"runtime_mode": "LIVE"`; LIVE watch/approvals stay under `state/live_ai/` |
 
+## Deploying updates
+
+From the development machine (needs SSH to the Pi as the deploy user, with
+passwordless `systemctl start|stop|restart|status agentic-portfolio.service` and
+`sudo -u agentic` for the venv's `python`/`pip`):
+
+```bash
+python scripts/deploy_pi.py --status     # deployed commit, service, in-flight orders
+python scripts/deploy_pi.py --dry-run    # all gates, no activation
+python scripts/deploy_pi.py [<ref>]      # deploy (default HEAD)
+python scripts/deploy_pi.py --rollback   # restore the code the last deploy replaced
+```
+
+A deploy ships a `git archive` of a pushed commit, so uncommitted files never
+reach the Pi. It refuses to run during regular market hours or while any
+execution intent is in flight. Before the service is touched, the full test
+suite passes locally and on the Pi (production venv, scratch copy; tests never
+run inside `/opt/agentic-portfolio`), and a baseline production smoke test is
+recorded. It then backs up the current code to `~/agentic-deploys/backups/`
+(newest 5 kept), stops the service, syncs code with `state/`, `logs/`,
+`reports/`, `.venv/` and `var/` excluded, installs declared dependencies if
+`pyproject.toml` changed, writes `/opt/agentic-portfolio/DEPLOYED_COMMIT`, and
+starts the service. Verification requires a fresh process reporting ONLINE,
+every released file byte-identical, `/healthz` answering, and no smoke check
+that passed before failing after. Any failure rolls back automatically.
+
+The deploy never reads `/etc/agentic-portfolio/env` and never changes
+`AGENTIC_EXECUTION_MODE`, `AGENTIC_LIVE_ORDER_PLACEMENT`, or the kill switch.
+History: `~/agentic-deploys/history.jsonl`. Pi side: `deploy/pi_remote.sh`.
+
 ## Lifecycle
 
 ```bash
