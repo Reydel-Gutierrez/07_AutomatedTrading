@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer components {
+  .card { @apply rounded-2xl border border-ink-700/70 bg-ink-900/80 p-5 shadow-[0_1px_0_0_rgba(255,255,255,0.03)_inset]; }
+  .label { @apply text-[11px] font-medium uppercase tracking-[0.12em] text-slate-500; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40; }
+  .btn-primary { @apply btn bg-gold-500 text-ink-950 hover:bg-gold-400; }
+  .btn-ghost { @apply btn border border-ink-600 text-slate-200 hover:bg-ink-800; }
+  .btn-danger { @apply btn bg-rose-600 text-white hover:bg-rose-500; }
+  .input { @apply w-full rounded-lg border border-ink-600 bg-ink-950 px-3 py-2 text-sm text-slate-100 placeholder-slate-600 outline-none focus:border-gold-500; }
+  .tbl { @apply w-full text-left text-sm; }
+  .tbl th { @apply pb-2 pr-3 text-[11px] font-medium uppercase tracking-wider text-slate-500; }
+  .tbl td { @apply border-t border-ink-800 py-2.5 pr-3 tabular-nums; }
+}
+
+@keyframes working {
+  0%, 100% { box-shadow: 0 0 0 0 var(--ring); }
+  50% { box-shadow: 0 0 0 7px transparent; }
+}
+.agent-working { animation: working 1.6s ease-out infinite; }
+@media (prefers-reduced-motion: reduce) { .agent-working { animation: none; } }
