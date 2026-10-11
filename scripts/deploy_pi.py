@@ -186,17 +186,20 @@ def deploy(args: argparse.Namespace) -> int:
             local_tests(tar)
         pi.put(tar, f"{REMOTE_DIR}/{sha}.tar")
     pi.remote("stage", sha, f"{sha}.tar")
-    if not args.skip_pi_tests:
-        log("running test suite on the Pi (production venv, scratch copy)")
-        if pi.remote("test", sha, check=False).returncode != 0:
-            raise DeployError("Pi test suite failed; nothing was changed")
-
-    baseline = smoke(pi, "before")
-    if args.dry_run:
+    try:
+        if not args.skip_pi_tests:
+            log("running test suite on the Pi (production venv, scratch copy)")
+            if pi.remote("test", sha, check=False).returncode != 0:
+                raise DeployError("Pi test suite failed; nothing was changed")
+        baseline = smoke(pi, "before")
+        if args.dry_run:
+            log(f"DRY RUN passed for {sha[:12]}; the service was not touched")
+            pi.remote("cleanup", sha, check=False)
+            return 0
+        preflight(pi, allow_market_hours=args.allow_market_hours)  # re-check right before touching the service
+    except BaseException:
         pi.remote("cleanup", sha, check=False)
-        log(f"DRY RUN passed for {sha[:12]}; the service was not touched")
-        return 0
-    preflight(pi, allow_market_hours=args.allow_market_hours)  # re-check right before touching the service
+        raise
     meta = {
         "sha": sha,
         "ref": args.ref,
