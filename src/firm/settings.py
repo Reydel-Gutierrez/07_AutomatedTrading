@@ -19,6 +19,13 @@ DEFAULTS: dict[str, Any] = {
         "max_quote_age_seconds": 15,
         "rounding_trueup_usd": "0.50",  # unexplained cash diffs below this, with no open orders, are booked as rounding
         "dividend_max_pct_of_position": 0.02,
+        # Operational circuit breaker: LIVE notional traded per day across all managers.
+        "max_daily_turnover_pct_nav": 1.0,
+        # Who the investment drawdown brake stops: "all" managers, or only
+        # "active_strategies" (managers whose mandate is not drawdown_policy=stay_invested).
+        "drawdown_brake_scope": "all",
+        # Informational alerts (firm and each sleeve) as drawdowns deepen.
+        "drawdown_alert_levels": [0.10, 0.20, 0.30],
     },
     # How newly detected deposits are split (fractions of the deposit; remainder stays unallocated).
     "deposit_split": {"tim": 0.90},
@@ -35,9 +42,14 @@ class Settings:
 
     def get(self, key: str) -> Any:
         row = self.db.one("SELECT value_json FROM settings WHERE key = ?", (key,))
+        default = json.loads(json.dumps(DEFAULTS.get(key)))
         if row is None:
-            return json.loads(json.dumps(DEFAULTS.get(key)))
-        return json.loads(row["value_json"])
+            return default
+        stored = json.loads(row["value_json"])
+        # New keys added to a dict default stay in force even if an older copy was saved.
+        if isinstance(default, dict) and isinstance(stored, dict) and key == "firm_limits":
+            return {**default, **stored}
+        return stored
 
     def put(self, key: str, value: Any, *, by: str) -> int:
         body = json.dumps(value, sort_keys=True, default=str)

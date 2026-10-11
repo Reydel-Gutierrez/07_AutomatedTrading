@@ -111,3 +111,10 @@ def test_login_lockout(client):
     for _ in range(8):
         client.post("/api/login", json={"username": "reydel", "password": "nope-nope-nope"})
     assert client.post("/api/login", json={"username": "reydel", "password": PASSWORD}).status_code == 401
+
+
+def test_session_cookie_is_secure_behind_https_proxy(client):
+    res = client.post("/api/login", json={"username": "reydel", "password": PASSWORD}, headers={"X-Forwarded-Proto": "https"})
+    cookies = res.headers.get_list("set-cookie")
+    session = next(c for c in cookies if c.startswith("firm_session="))
+    assert "Secure" in session and "HttpOnly" in session and "SameSite=strict" in session.replace("samesite", "SameSite")

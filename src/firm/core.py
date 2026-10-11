@@ -90,6 +90,7 @@ class Firm:
                 mandate=mandate,
                 view=self.view(manager_id, row.book, impl.symbols(mandate)),
                 last_run=(last.payload.get("detail") if last else None),
+                drawdown=self.performance.drawdown(self.performance.marks(row.book, manager_id)),
             )
             result = impl.run(ctx)
         except BrokerUnavailable as exc:
@@ -182,4 +183,33 @@ class Firm:
                 closes[sym] = q.close
             elif q.last is not None:
                 closes[sym] = q.last
-        return self.performance.take_marks(today, closes=closes, benchmark_close=closes.get(BENCHMARK))
+        written = self.performance.take_marks(today, closes=closes, benchmark_close=closes.get(BENCHMARK))
+        self._drawdown_alerts()
+        return written
+
+    def _drawdown_alerts(self) -> None:
+        """Inform (never block) as the firm or a sleeve crosses a drawdown level."""
+        levels = sorted(float(x) for x in (self.settings.get("firm_limits").get("drawdown_alert_levels") or []))
+        if not levels:
+            return
+        state = self.settings.get("drawdown_alerts") or {}
+        targets = [("_firm", "LIVE", "The firm")] + [(m.id, m.book, m.display_name) for m in self.registry.all() if m.book]
+        changed = False
+        for bucket, book, name in targets:
+            dd = self.performance.drawdown(self.performance.marks(book, bucket))
+            key = f"{book}:{bucket}"
+            crossed = max((lvl for lvl in levels if dd >= lvl), default=0.0)
+            if crossed > float(state.get(key, 0.0)):
+                self.events.emit(
+                    "DRAWDOWN_ALERT",
+                    f"{name}{' (simulated)' if book == 'SIM' else ''} is {dd:.1%} below its peak. Information only: nothing is paused by this alert.",
+                    actor="risk",
+                    manager_id=None if bucket == "_firm" else bucket,
+                    severity="warning",
+                    payload={"book": book, "drawdown": dd, "level": crossed},
+                )
+                state[key], changed = crossed, True
+            elif dd < levels[0] / 2 and state.get(key):
+                state[key], changed = 0.0, True
+        if changed:
+            self.settings.put("drawdown_alerts", state, by="risk")

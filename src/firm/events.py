@@ -33,6 +33,8 @@ ALERT_TYPES = frozenset(
         "BROKER_APPROVAL_REQUIRED",
         "MANAGER_DEGRADED",
         "DRAWDOWN_BRAKE",
+        "DRAWDOWN_ALERT",
+        "TURNOVER_LIMIT",
         "BACKUP_FAILED",
         "SERVICE_STARTED",
     }

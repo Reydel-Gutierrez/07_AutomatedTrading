@@ -83,6 +83,20 @@ class Tim:
         if missing:
             return RunResult(f"Waiting for prices on {', '.join(missing)}; no trades.", activity="waiting for market data", detail={"missing_prices": missing})
 
+        pause = m.get("volatility_pause_pct")
+        if pause:
+            wild = sorted(
+                f"{sym} {float(q.last / q.close - 1):+.1%}"
+                for sym in targets
+                if (q := view.quotes.get(sym)) and q.last and q.close and abs(q.last / q.close - 1) >= D(pause)
+            )
+            if wild:
+                return RunResult(
+                    f"Extreme market day ({', '.join(wild)} vs. yesterday's close); waiting for calmer prices before trading.",
+                    activity="waiting out an extreme market day",
+                    detail={"volatility": wild},
+                )
+
         values = {sym: view.holdings.get(sym, ZERO) * prices[sym] for sym in set(targets) | set(view.holdings)}
         total = view.cash + sum(values.values(), ZERO)
         detail: dict[str, Any] = {
@@ -130,6 +144,7 @@ class Tim:
                     qty = held if sym in strays or excess >= values[sym] else min(held, shares_floor(excess / prices[sym]))
                     if qty > 0:
                         sells.append(OrderIntent(ctx.manager_id, ctx.book, sym, "sell", quantity=qty, reason=f"rebalance: {'; '.join(why)}"))
+            sells, paced = self._pace(sells, ctx, total, prices)
             if sells:
                 names = ", ".join(f"{i.symbol} ({i.quantity} sh)" for i in sells)
                 return RunResult(
@@ -143,6 +158,11 @@ class Tim:
         available = view.cash - buffer_pct * total
         deficits = {sym: desired[sym] - values.get(sym, ZERO) for sym in targets if desired[sym] - values.get(sym, ZERO) > 0}
         buys = self._allocate(available, deficits, min_trade)
+        if buys:
+            paced_intents, paced = self._pace(
+                [OrderIntent(ctx.manager_id, ctx.book, sym, "buy", notional=amt, reason="") for sym, amt in buys.items()], ctx, total, prices
+            )
+            buys = {i.symbol: i.notional for i in paced_intents if i.notional and i.notional >= min_trade}
         if buys:
             intents = [OrderIntent(ctx.manager_id, ctx.book, sym, "buy", notional=amt, reason="invest toward targets" + (f" ({'; '.join(why)})" if why else "")) for sym, amt in sorted(buys.items())]
             names = ", ".join(f"${amt} {sym}" for sym, amt in sorted(buys.items()))
@@ -158,6 +178,23 @@ class Tim:
             detail={**detail, "rebalance_reasons": why},
             activity="holding",
         )
+
+    @staticmethod
+    def _pace(intents: list[OrderIntent], ctx: ManagerContext, total: Decimal, prices: dict[str, Decimal]) -> tuple[list[OrderIntent], bool]:
+        """Crash pacing: deep in a drawdown, cap each trade so rebalancing is spread over several days."""
+        pacing = ctx.mandate.get("crash_pacing") or {}
+        if not pacing or ctx.drawdown < float(pacing.get("threshold", 1.0)):
+            return intents, False
+        cap = total * D(pacing.get("max_trade_pct_of_sleeve", 0.10))
+        out = []
+        for i in intents:
+            if i.side == "buy":
+                out.append(OrderIntent(i.manager_id, i.book, i.symbol, "buy", notional=min(i.notional, cap).quantize(D("0.01")), reason=i.reason + " (crash pacing)"))
+            else:
+                qty = min(i.quantity, shares_floor(cap / prices[i.symbol]))
+                if qty > 0:
+                    out.append(OrderIntent(i.manager_id, i.book, i.symbol, "sell", quantity=qty, reason=i.reason + " (crash pacing)"))
+        return out, True
 
     @staticmethod
     def _allocate(available: Decimal, deficits: dict[str, Decimal], min_trade: Decimal) -> dict[str, Decimal]:

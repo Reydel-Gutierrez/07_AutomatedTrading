@@ -62,6 +62,7 @@ class ManagerContext:
     mandate: Mapping[str, Any]
     view: BookView
     last_run: Mapping[str, Any] | None = None  # this manager's previous run summary
+    drawdown: float = 0.0  # this sleeve's flow-adjusted decline from its peak, in this book
 
 
 @dataclass

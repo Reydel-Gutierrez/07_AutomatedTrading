@@ -96,6 +96,17 @@ class Performance:
         return growth - 1 if started else None
 
     @staticmethod
+    def drawdown(marks: list[Mark]) -> float:
+        """Current decline of the flow-adjusted growth index from its peak (0.0 at a new high)."""
+        growth, peak, prev = Decimal(1), Decimal(1), None
+        for m in marks:
+            if prev is not None and prev.nav > 0:
+                growth *= (m.nav - m.net_flow) / prev.nav
+                peak = max(peak, growth)
+            prev = m
+        return float(1 - growth / peak) if peak > 0 else 0.0
+
+    @staticmethod
     def benchmark_return(marks: list[Mark]) -> Decimal | None:
         """SPY return over the span where the bucket had capital."""
         live = [m for m in marks if m.nav > 0 and m.benchmark_close]

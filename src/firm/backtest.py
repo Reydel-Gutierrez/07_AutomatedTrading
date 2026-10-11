@@ -19,6 +19,7 @@ from firm.calendar import EASTERN
 from firm.core import Firm
 from firm.db import Database
 from firm.managers.registry import TIM_DEFAULT_MANDATE
+from firm.managers.tim import Tim
 from firm.money import ZERO, D, cents
 
 
@@ -66,6 +67,7 @@ class BacktestResult:
     rebalance_days: int
     max_abs_drift: float
     invariant_failures: list[str]
+    braked_days: int = 0
 
     def as_dict(self) -> dict[str, Any]:
         return {k: (str(v) if isinstance(v, Decimal) else v) for k, v in self.__dict__.items()}
@@ -79,7 +81,10 @@ def run_tim_backtest(
     mandate: dict[str, Any] | None = None,
     spread_bps: Decimal = D("4"),
     workdir: Path | None = None,
+    brake_at: float | None = None,
 ) -> BacktestResult:
+    """``brake_at`` emulates a firm drawdown brake on this sleeve: no buys while the
+    sleeve is at least that far below its peak (released once it recovers above it)."""
     mandate = mandate or TIM_DEFAULT_MANDATE
     symbols = sorted(mandate["targets"])
     by_day = {s: {b.date: b for b in bars[s]} for s in symbols}
@@ -90,7 +95,8 @@ def run_tim_backtest(
     clock = _Clock(_at(days[0], time(10, 6)))
     reader = ReplayReader(by_day, clock, spread_bps)
     db = Database(tmp / "backtest.db")
-    firm = Firm(db, reader=reader, writer=lambda: None, clock=clock, environ={})
+    managers = {"tim": _BrakedTim(brake_at) if brake_at else Tim()}
+    firm = Firm(db, reader=reader, writer=lambda: None, clock=clock, environ={}, managers=managers)
     firm.registry.update_mandate("tim", dict(mandate), by="backtest", note="backtest mandate")
     firm.ledger.opening_balance(initial, by="backtest")
     firm.ledger.allocate("tim", initial, by="backtest")
@@ -99,6 +105,7 @@ def run_tim_backtest(
     contributions = initial
     peak, max_dd, max_drift = ZERO, 0.0, 0.0
     rebalance_days = 0
+    braked_days = 0
     failures: list[str] = []
     last_month = days[0][:7]
     for day in days:
@@ -112,6 +119,7 @@ def run_tim_backtest(
             contributions += monthly_contribution
         clock.now = _at(day, time(10, 6))
         out = firm.run_manager("tim")
+        braked_days += int(bool(brake_at) and managers["tim"].braked)
         sold = any(o["side"] == "sell" and o["status"] == "FILLED" for o in out.orders)
         if sold:
             rebalance_days += 1
@@ -158,7 +166,21 @@ def run_tim_backtest(
         rebalance_days=rebalance_days,
         max_abs_drift=max_drift,
         invariant_failures=failures,
+        braked_days=braked_days,
     )
+
+
+class _BrakedTim(Tim):
+    def __init__(self, threshold: float) -> None:
+        self.threshold = threshold
+        self.braked = False
+
+    def run(self, ctx):
+        result = super().run(ctx)
+        self.braked = ctx.drawdown >= self.threshold
+        if self.braked:
+            result.intents = [i for i in result.intents if i.side != "buy"]
+        return result
 
 
 def _at(day: str, t: time) -> datetime:

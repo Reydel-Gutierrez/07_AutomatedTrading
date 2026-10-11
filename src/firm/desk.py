@@ -107,15 +107,19 @@ class Desk:
         # 1 firm
         if self.controls.kill_switch().engaged:
             return ["KILL_SWITCH"], None
+        _, mandate = self.registry.mandate(intent.manager_id)
         if intent.side == "buy" and intent.book == "LIVE":
             blocked = [r for r in self.controls.buys_blocked() if r != "KILL_SWITCH"]
+            if "DRAWDOWN_BRAKE" in blocked and _exempt_from_brake(limits, mandate):
+                blocked.remove("DRAWDOWN_BRAKE")
             if blocked:
                 return blocked, None
+        if intent.book == "LIVE" and (over := self._turnover_exceeded(intent, limits)):
+            return [over], None
         # 2 manager
         manager = self.registry.get(intent.manager_id)
         if manager.book != intent.book:
             return [f"MODE_MISMATCH: manager is {manager.mode}, intent is {intent.book}"], None
-        _, mandate = self.registry.mandate(intent.manager_id)
         universe = set((mandate.get("targets") or {}).keys()) | set(mandate.get("universe") or [])
         if intent.symbol not in universe:
             return [f"NOT_IN_MANDATE: {intent.symbol}"], None
@@ -156,6 +160,36 @@ class Desk:
         if intent.side == "buy" and intent.notional and intent.notional / quote.ask < D("0.000001"):
             return ["BELOW_MIN_TRADE"], None
         return [], quote
+
+    def _turnover_exceeded(self, intent: OrderIntent, limits: dict[str, Any]) -> str | None:
+        """Operational breaker: total LIVE notional sent today must stay under a share of firm NAV."""
+        cap = limits.get("max_daily_turnover_pct_nav")
+        snap = self.db.one("SELECT nav FROM broker_snaps ORDER BY id DESC LIMIT 1")
+        if not cap or snap is None:
+            return None
+        start = et(self.clock()).replace(hour=0, minute=0, second=0, microsecond=0)
+        rows = self.db.query(
+            "SELECT notional, quantity, filled_quantity, average_price FROM orders WHERE book = 'LIVE' AND created_at >= ?"
+            " AND status IN ('PENDING','SUBMITTED','UNKNOWN','FILLED','CANCELED')",
+            (iso(start),),
+        )
+        traded = ZERO
+        for r in rows:
+            if r["average_price"] and D(r["filled_quantity"]) > 0:
+                traded += D(r["filled_quantity"]) * D(r["average_price"])
+            elif r["notional"]:
+                traded += D(r["notional"])
+        price = self.market.quotes([intent.symbol]).get(intent.symbol)
+        this = intent.notional if intent.side == "buy" else (intent.quantity or ZERO) * ((price.bid if price else None) or ZERO)
+        limit = D(snap["nav"]) * D(str(cap))
+        if traded + (this or ZERO) > limit:
+            self.events.emit(
+                "TURNOVER_LIMIT",
+                f"Daily trading limit reached (${cents(traded)} of ${cents(limit)} today). Orders resume tomorrow.",
+                actor="desk", manager_id=intent.manager_id, symbol=intent.symbol, severity="critical",
+            )
+            return f"TURNOVER_LIMIT: ${cents(traded)} traded today, limit ${cents(limit)}"
+        return None
 
     def _orders_today(self, manager_id: str, book: str) -> int:
         start = et(self.clock()).replace(hour=0, minute=0, second=0, microsecond=0)
@@ -431,6 +465,10 @@ class Desk:
             self.apply_broker_order(row["id"], remote)
             updated += 1
         return updated
+
+
+def _exempt_from_brake(limits: dict[str, Any], mandate: dict[str, Any]) -> bool:
+    return limits.get("drawdown_brake_scope") == "active_strategies" and mandate.get("drawdown_policy") == "stay_invested"
 
 
 def _intent_dict(intent: OrderIntent) -> dict[str, Any]:
