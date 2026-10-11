@@ -207,3 +207,21 @@ def test_crash_between_submit_and_ack_becomes_unknown(db, clock, rh):
     firm.desk.poll(rh)
     assert firm.desk.order(oid)["status"] == "UNKNOWN"
     assert firm.controls.kill_switch().engaged
+
+
+def test_drawdown_brake_ignores_opening_allocations_and_deposits_but_catches_real_losses(db, clock, rh):
+    firm = _firm(db, clock, rh)
+    _open(firm, rh)  # opening balance + allocation to Tim
+    assert firm.reconciler.run(rh).status == "OK"
+    assert not firm.controls.brake().get("engaged")
+    firm.desk.submit(buy("900"))
+    rh.deposit("500")
+    rh.pending_deposits = D("500")
+    firm.reconciler.run(rh)
+    assert not firm.controls.brake().get("engaged")
+    assert D(firm.settings.get("hwm")["value"]) >= D("1509")
+    # A real 50% fall in the holdings is ~30% of the firm: the brake engages.
+    rh.prices["VTI"] = rh.prices["VTI"] / 2
+    firm.market._cache.clear()
+    firm.reconciler.run(rh)
+    assert firm.controls.brake().get("engaged")

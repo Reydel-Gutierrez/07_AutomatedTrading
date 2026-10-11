@@ -81,7 +81,8 @@ class Reconciler:
             with self.db.tx() as conn:
                 self.ledger._post(conn, book="LIVE", kind="SUSPENSE_IN", entries=[Entry(SUSPENSE, ZERO, symbol=symbol, quantity=qty)], by="reconciler", memo="position held at opening; owner must assign")
         self.settings.put("reconcile_watermark", iso(self.clock()), by="reconciler")
-        self.settings.put("hwm", {"value": s(facts.nav)}, by="reconciler")
+        last = self.db.one("SELECT MAX(id) AS id FROM ledger WHERE book = 'LIVE'")
+        self.settings.put("hwm", {"value": s(facts.nav), "ledger_id": int(last["id"] or 0)}, by="reconciler")
         self.events.emit(
             "BOOKS_OPENED",
             f"Books opened from Robinhood: cash ${cents(facts.cash)}, {len(positions)} position(s).",
@@ -282,7 +283,9 @@ class Reconciler:
         limits = self.settings.get("firm_limits")
         state = self.settings.get("hwm") or {}
         hwm = D(state.get("value") or nav)
-        flows = self.ledger.net_capital("LIVE", FIRM, since_id=int(state.get("ledger_id") or 0))
+        # Only money entering or leaving the firm moves the high-water mark; allocations
+        # between the firm and its managers are internal and net to zero.
+        flows = self._external_flows(since_id=int(state.get("ledger_id") or 0))
         hwm = max(hwm + flows, nav)
         last = self.db.one("SELECT MAX(id) AS id FROM ledger WHERE book = 'LIVE'")
         self.settings.put("hwm", {"value": s(hwm), "ledger_id": int(last["id"] or 0)}, by="reconciler")
@@ -290,6 +293,13 @@ class Reconciler:
             dd = float(1 - nav / hwm)
             if dd >= float(limits.get("drawdown_brake_pct") or 0.2):
                 self.controls.engage_brake(nav=s(nav), hwm=s(hwm), drawdown=dd)
+
+    def _external_flows(self, *, since_id: int) -> Decimal:
+        rows = self.db.query(
+            "SELECT cash FROM ledger WHERE book = 'LIVE' AND kind IN ('EXTERNAL_IN','EXTERNAL_OUT') AND id > ?",
+            (since_id,),
+        )
+        return sum((D(r["cash"]) for r in rows), ZERO)
 
     def _snapshot(self, facts, positions: dict[str, Decimal], result: ReconcileResult) -> None:
         with self.db.tx() as conn:
