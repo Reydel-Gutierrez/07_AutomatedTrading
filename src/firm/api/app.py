@@ -110,7 +110,7 @@ def create_app(host: Host) -> FastAPI:
     @app.get("/healthz")
     def healthz() -> dict[str, Any]:
         h = host.health()
-        return {k: h.get(k) for k in ("agent", "heartbeat", "broker_connected", "books_open", "kill_switch", "reconcile_hold", "live_writes_enabled", "managers", "deployed")}
+        return {k: h.get(k) for k in ("agent", "heartbeat", "broker_connected", "books_open", "kill_switch", "reconcile_hold", "live_writes_enabled", "managers", "deployed", "market", "open_live_orders")}
 
     @app.post("/api/login")
     def login(body: LoginBody, request: Request, response: Response) -> dict[str, Any]:

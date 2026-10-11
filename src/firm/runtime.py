@@ -249,6 +249,8 @@ class Service:
             "kill_switch": ks.engaged,
             "reconcile_hold": bool(self.firm.controls.reconcile_hold().get("active")),
             "live_writes_enabled": live_writes_enabled(self.environ),
+            "market": {"regular_hours_open": is_regular_hours(self.clock()), "trading_day": CALENDAR.session_for(self.clock()) is not None},
+            "open_live_orders": len(self.firm.desk.open_live_orders()),
             "managers": {m.id: m.mode for m in self.firm.registry.all()},
             "deployed": deployed_commit(),
         }

@@ -67,13 +67,19 @@ try:
     market = health.get("market") or {}
     out["health"] = {
         "agent": health.get("agent"),
-        "phase": market.get("phase"),
         "regular_hours_open": bool(market.get("regular_hours_open")),
-        "execution_mode": health.get("execution_mode"),
-        "live_order_placement": health.get("LIVE_ORDER_PLACEMENT"),
+        "live_writes_enabled": health.get("live_writes_enabled", health.get("LIVE_ORDER_PLACEMENT")),
+        "managers": health.get("managers"),
+        "open_live_orders": health.get("open_live_orders"),
     }
-except Exception as exc:  # health is advisory here; the caller decides
+except Exception as exc:  # health unreadable: fall back to the clock below
     out["health"] = {"error": str(exc)}
+# Independent of the service: never trust a missing health field to mean "closed".
+from datetime import datetime, time as _t
+from zoneinfo import ZoneInfo
+now_et = datetime.now(ZoneInfo("America/New_York"))
+if now_et.weekday() < 5 and _t(9, 25) <= now_et.time() < _t(16, 5):
+    out["health"]["regular_hours_open"] = True
 # Any execution intent that is not terminal may be mid-submission. Restarting
 # under it is exactly the ambiguity the executor's kill switch exists for.
 terminal = {"FILLED", "REJECTED", "CANCELED", "BLOCKED_DISABLED", "BLOCKED", "REVALIDATION_REQUIRED"}
@@ -86,6 +92,8 @@ for path in sorted((app / "state" / "live_execution" / "intents").glob("*.json")
         continue
     if str(intent.get("status")) not in terminal:
         inflight.append({"file": path.name, "status": intent.get("status"), "symbol": intent.get("symbol")})
+if (out["health"].get("open_live_orders") or 0) > 0:
+    inflight.append({"file": "firm.db", "status": f"{out['health']['open_live_orders']} open LIVE order(s)"})
 out["inflight_intents"] = inflight
 ks = app / "state" / "runtime" / "kill_switch.json"
 out["kill_switch_file"] = json.loads(ks.read_text(encoding="utf-8")) if ks.is_file() else None

@@ -61,3 +61,9 @@ def test_bytecode_caches_cannot_block_module_removal():
     script = (ROOT / "deploy" / "pi_remote.sh").read_text(encoding="utf-8")
     assert '"--filter=-p __pycache__/"' in script
     assert "--exclude=__pycache__/" not in script
+
+
+def test_preflight_guards_do_not_depend_on_the_service_reporting_market_hours():
+    script = (ROOT / "deploy" / "pi_remote.sh").read_text(encoding="utf-8")
+    assert 'ZoneInfo("America/New_York")' in script
+    assert "open_live_orders" in script
