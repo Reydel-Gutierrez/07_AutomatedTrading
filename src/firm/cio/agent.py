@@ -126,7 +126,11 @@ class CIO:
         except ProviderError as exc:
             if exc.account_problem:
                 self.firm.events.emit("AI_PROVIDER_UNAVAILABLE", f"The CIO's AI provider rejected the request ({exc.account_problem}). Check the API key or credits.", actor="cio", severity="critical", payload={"problem": exc.account_problem})
-            return self._save(cid, "notice", f"The CIO couldn't reach its AI provider: {exc}", flags=["provider_error"], tools=trace)
+            plain = {
+                "billing": "The CIO's AI account is out of credits. Add credits with the provider (OpenAI: platform.openai.com → Billing); nothing else needs to change.",
+                "auth": "The CIO's AI provider rejected the API key. Check the key in /etc/agentic-portfolio/env on the Pi.",
+            }.get(exc.account_problem or "", f"The CIO couldn't reach its AI provider right now ({str(exc)[:160]}). Please try again shortly.")
+            return self._save(cid, "notice", plain, flags=["provider_error"], tools=trace)
 
         flags: list[str] = []
         if tools.final is not None:
