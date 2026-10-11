@@ -20,19 +20,26 @@ from agentic_portfolio.dashboard.safety import (
 from agentic_portfolio.dashboard.settings import resolve_bind, resolve_ui_flags
 from agentic_portfolio.paths import project_root
 
-PENDING_ID = "55123138-6dbe-4554-a92b-de57b21f1873"
+from tests.dashboard_fixtures import PENDING_ID, build_paper_workspace, pending_packet_raw
+
 PAGES = ["/", "/approvals", "/research", "/orders", "/journal", "/system", "/ai", "/watchlist", "/notifications", "/positions", "/discovery"]
 API = ["/api/dashboard", "/api/approvals", "/api/research", "/api/orders", "/api/journal", "/api/system", "/api/ai", "/api/watchlist", "/api/notifications", "/api/agent"]
 
 
+# Default root for ``_client()``: a seeded temporary PAPER workspace, never the
+# developer's gitignored ``state/``. Set per test by ``_paper_workspace``.
+_DEFAULT_ROOT: Path | None = None
+
+
+@pytest.fixture(autouse=True)
+def _paper_workspace(tmp_path_factory, monkeypatch):
+    root = build_paper_workspace(tmp_path_factory.mktemp("dashboard_root"))
+    monkeypatch.setattr(f"{__name__}._DEFAULT_ROOT", root)
+    return root
+
+
 def _pending_raw() -> dict:
-    path = project_root() / "state" / "approval_packets" / f"{PENDING_ID}.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["status"] = ApprovalStatus.PENDING_HUMAN_APPROVAL.value
-    payload["decided_at"] = None
-    payload["decided_by"] = None
-    payload["decision_note"] = None
-    return payload
+    return pending_packet_raw()
 
 
 def _csrf(client) -> str:
@@ -54,7 +61,7 @@ def _login(client, username=DEFAULT_ADMIN_USERNAME, password=DEFAULT_ADMIN_PASSW
 
 
 def _client(root=None):
-    client = create_app(root).test_client()
+    client = create_app(root if root is not None else _DEFAULT_ROOT).test_client()
     _login(client)
     return client
 
@@ -249,7 +256,13 @@ def test_no_execution_tools_reachable():
 
 
 def test_research_orders_journal_system_payloads():
-    client = _client()
+    # Exercises the legacy offline paper toolchain's artifacts (reports, theses,
+    # OrderPlans, fills, reviews, journal). Those exist only in a local workspace
+    # produced by scripts/run_paper_*.py, so this stays an opt-in local check.
+    legacy = project_root() / "state"
+    if not all(any((legacy / name).glob("*.json")) for name in ("order_plans", "paper_fills", "robinhood_reviews")):
+        pytest.skip("requires a local legacy paper workspace (scripts/run_paper_*.py)")
+    client = _client(project_root())
     research = client.get("/api/research").get_json()
     assert research["candidates"]
     assert research["reports"]

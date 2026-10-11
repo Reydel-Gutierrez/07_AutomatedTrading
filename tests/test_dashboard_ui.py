@@ -18,8 +18,16 @@ from agentic_portfolio.dashboard.history import (
 from agentic_portfolio.dashboard.labels import HISTORY_COLLECTING, UNAVAILABLE
 from agentic_portfolio.dashboard.queries import dashboard_state, dashboard_view
 
+from tests.dashboard_fixtures import build_paper_workspace
 from tests.test_dashboard import _client
 from tests.test_family import _admin, _app, _csrf, _login
+
+
+@pytest.fixture(autouse=True)
+def _paper_workspace(tmp_path_factory, monkeypatch):
+    root = build_paper_workspace(tmp_path_factory.mktemp("dashboard_root"))
+    monkeypatch.setattr("tests.test_dashboard._DEFAULT_ROOT", root)
+    return root
 
 
 def _write_book(root: Path, nav: float, *, stamp: str, spy=None) -> None:
