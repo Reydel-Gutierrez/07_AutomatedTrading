@@ -37,6 +37,7 @@ ALERT_TYPES = frozenset(
         "PROPOSAL_CREATED",
         "AI_PROVIDER_UNAVAILABLE",
         "TURNOVER_LIMIT",
+        "SLEEVE_PAUSED",
         "BACKUP_FAILED",
         "SERVICE_STARTED",
     }

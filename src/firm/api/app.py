@@ -277,6 +277,18 @@ def create_app(host: Host) -> FastAPI:
         firm.request_run(manager_id, "mandate_changed")
         return {"ok": True, "version": version}
 
+    @app.post("/api/managers/{manager_id}/risk/resume")
+    def resume_sleeve(manager_id: str, body: NoteBody, who: str = Depends(user)) -> dict[str, Any]:
+        if not body.note.strip():
+            raise HTTPException(422, "a note is required")
+        pauses = firm.settings.get("sleeve_pauses") or {}
+        if not (pauses.get(manager_id) or {}).get("engaged"):
+            raise HTTPException(409, "this manager is not paused")
+        pauses[manager_id] = {"engaged": False, "resumed_by": who, "note": body.note}
+        firm.settings.put("sleeve_pauses", pauses, by=who)
+        firm.events.emit("SLEEVE_RESUMED", f"{firm.registry.get(manager_id).display_name}'s buying resumed by {who}: {body.note}", actor=who, manager_id=manager_id)
+        return {"ok": True}
+
     @app.post("/api/managers/{manager_id}/run")
     def run_now(manager_id: str, who: str = Depends(user)) -> dict[str, Any]:
         firm.registry.get(manager_id)

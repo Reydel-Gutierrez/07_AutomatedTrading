@@ -15,27 +15,31 @@ from firm.db import Database
 from firm.money import ZERO, D
 from firm.settings import Settings
 
-# USD per million tokens (input, output). Unknown models are priced at the most expensive rate.
-PRICES: dict[str, tuple[Decimal, Decimal]] = {
-    "gpt-5.6-luna": (D("0.20"), D("1.20")),
-    "gpt-5.6-terra": (D("2.00"), D("12.00")),
-    "gpt-5.6-sol": (D("4.00"), D("20.00")),
-    "scripted": (ZERO, ZERO),
+# USD per million tokens: (input, output, cache read, cache write). Unknown models are
+# priced at the most expensive rate so an unpriced model can never under-spend the cap.
+PRICES: dict[str, tuple[Decimal, Decimal, Decimal, Decimal]] = {
+    "claude-opus-5-5": (D("4.00"), D("20.00"), D("0.20"), D("5.00")),
+    "claude-sonnet-5-5": (D("2.00"), D("10.00"), D("0.20"), D("2.50")),
+    "claude-haiku-5-5": (D("0.10"), D("0.50"), D("0.01"), D("0.125")),
+    "gpt-5.6-luna": (D("0.20"), D("1.20"), D("0.02"), D("0.20")),
+    "gpt-5.6-terra": (D("2.00"), D("12.00"), D("0.20"), D("2.00")),
+    "gpt-5.6-sol": (D("4.00"), D("20.00"), D("0.40"), D("4.00")),
+    "scripted": (ZERO, ZERO, ZERO, ZERO),
 }
-DEFAULT_PRICE = (D("15.00"), D("75.00"))
+DEFAULT_PRICE = (D("15.00"), D("75.00"), D("15.00"), D("18.75"))
 MILLION = D(1_000_000)
 
 
-def price(model: str) -> tuple[Decimal, Decimal]:
+def price(model: str) -> tuple[Decimal, Decimal, Decimal, Decimal]:
     for key, value in PRICES.items():
         if model == key or model.startswith(key + "-"):
             return value
     return DEFAULT_PRICE
 
 
-def cost(model: str, input_tokens: int, output_tokens: int) -> Decimal:
-    pin, pout = price(model)
-    return (pin * input_tokens + pout * output_tokens) / MILLION
+def cost(model: str, input_tokens: int, output_tokens: int, cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> Decimal:
+    pin, pout, pread, pwrite = price(model)
+    return (pin * input_tokens + pout * output_tokens + pread * cache_read_tokens + pwrite * cache_write_tokens) / MILLION
 
 
 @dataclass(frozen=True)
@@ -73,19 +77,20 @@ class Budget:
 
     def authorize(self, agent: str, model: str, *, input_tokens_estimate: int, max_output_tokens: int) -> None:
         st = self.status(agent)
-        worst = cost(model, input_tokens_estimate, max_output_tokens)
+        # Worst case: every input token is a fresh cache write.
+        worst = cost(model, 0, max_output_tokens, cache_write_tokens=input_tokens_estimate)
         if worst > st.remaining:
             raise BudgetExceeded(
                 f"{agent.upper()} AI budget for {st.month}: ${st.spent:.2f} of ${st.cap:.2f} used; "
                 f"this request could cost up to ${worst:.3f}."
             )
 
-    def record(self, agent: str, *, provider: str, model: str, purpose: str, input_tokens: int, output_tokens: int, ok: bool, error: str | None = None) -> Decimal:
-        amount = cost(model, input_tokens, output_tokens)
+    def record(self, agent: str, *, provider: str, model: str, purpose: str, input_tokens: int, output_tokens: int, ok: bool, error: str | None = None, cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> Decimal:
+        amount = cost(model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
         with self.db.tx() as conn:
             conn.execute(
                 "INSERT INTO ai_usage (ts, month, agent, provider, model, purpose, input_tokens, output_tokens, cost, ok, error) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-                (iso(self.clock()), self.month(), agent, provider, model, purpose, input_tokens, output_tokens, str(amount), 1 if ok else 0, error),
+                (iso(self.clock()), self.month(), agent, provider, model, purpose, input_tokens + cache_read_tokens + cache_write_tokens, output_tokens, str(amount), 1 if ok else 0, error),
             )
         return amount
 

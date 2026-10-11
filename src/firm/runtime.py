@@ -274,19 +274,27 @@ class Service:
 def build_cio(firm: Firm, health, environ: Mapping[str, str], provider=None):
     """The CIO office, using the provider and models chosen in settings.ai_models."""
     from firm.ai.budget import Budget
-    from firm.ai.providers import OpenAIResponses
     from firm.cio.agent import CIO
 
     cfg = (firm.settings.get("ai_models") or {}).get("cio") or {}
+    name = str(cfg.get("provider") or "anthropic")
     if provider is None:
-        provider = OpenAIResponses(api_key=str(environ.get("OPENAI_API_KEY") or ""))
+        if name == "openai":
+            from firm.ai.providers import OpenAIResponses
+
+            provider = OpenAIResponses(api_key=str(environ.get("OPENAI_API_KEY") or ""))
+        else:
+            from firm.ai.anthropic_provider import AnthropicMessages
+
+            provider = AnthropicMessages(api_key=str(environ.get("ANTHROPIC_API_KEY") or ""), effort=str(cfg.get("effort") or "high"))
+    defaults = {"openai": ("gpt-5.6-terra", "gpt-5.6-luna")}.get(name, ("claude-opus-5-5", "claude-haiku-5-5"))
     return CIO(
         firm,
         provider=provider,
         budget=Budget(firm.db, firm.settings, clock=firm.clock),
         health=health,
-        model=cfg.get("model", "gpt-5.6-terra"),
-        summary_model=cfg.get("summary_model", "gpt-5.6-luna"),
+        model=cfg.get("model", defaults[0]),
+        summary_model=cfg.get("summary_model", defaults[1]),
     )
 
 

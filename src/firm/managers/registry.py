@@ -28,9 +28,22 @@ TIM_DEFAULT_MANDATE: dict[str, Any] = {
     "run_time_et": "10:05",
     "max_orders_per_day": 6,
     "max_spread_bps": 25,
+    # Long-term policy: keep investing through declines; pace big trades in a crash;
+    # never sell into an extreme day (postpone rebalancing sales one day; buying continues).
+    "drawdown_policy": "stay_invested",
+    "crash_pacing": {"threshold": 0.15, "max_trade_pct_of_sleeve": 0.10},
+    "extreme_day_pct": 0.05,
 }
 
-DEFAULT_MANDATES = {"tim": TIM_DEFAULT_MANDATE, "alex": {"status": "activates in Phase 3"}, "max": {"status": "activates in Phase 4"}}
+# Active strategies get their own sleeve stops (enforced by the Execution Desk).
+ALEX_RISK_POLICY = {"drawdown_policy": "sleeve_pause", "sleeve_drawdown_pause": 0.20}
+MAX_RISK_POLICY = {"drawdown_policy": "sleeve_stop", "sleeve_drawdown_pause": 0.10, "daily_loss_pause": 0.03, "per_trade_stop_required": True}
+
+DEFAULT_MANDATES = {
+    "tim": TIM_DEFAULT_MANDATE,
+    "alex": {"status": "activates in Phase 3", **ALEX_RISK_POLICY},
+    "max": {"status": "activates in Phase 4", **MAX_RISK_POLICY},
+}
 
 
 @dataclass(frozen=True)

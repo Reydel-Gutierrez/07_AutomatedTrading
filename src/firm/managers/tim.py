@@ -14,7 +14,7 @@ Each run:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import ROUND_DOWN, Decimal
 from typing import Any, Mapping
 
@@ -83,19 +83,7 @@ class Tim:
         if missing:
             return RunResult(f"Waiting for prices on {', '.join(missing)}; no trades.", activity="waiting for market data", detail={"missing_prices": missing})
 
-        pause = m.get("volatility_pause_pct")
-        if pause:
-            wild = sorted(
-                f"{sym} {float(q.last / q.close - 1):+.1%}"
-                for sym in targets
-                if (q := view.quotes.get(sym)) and q.last and q.close and abs(q.last / q.close - 1) >= D(pause)
-            )
-            if wild:
-                return RunResult(
-                    f"Extreme market day ({', '.join(wild)} vs. yesterday's close); waiting for calmer prices before trading.",
-                    activity="waiting out an extreme market day",
-                    detail={"volatility": wild},
-                )
+        extreme = self._extreme_moves(m, targets, view)
 
         values = {sym: view.holdings.get(sym, ZERO) * prices[sym] for sym in set(targets) | set(view.holdings)}
         total = view.cash + sum(values.values(), ZERO)
@@ -105,6 +93,7 @@ class Tim:
             "targets": {k: float(v) for k, v in targets.items()},
             "weights": {k: float(values.get(k, ZERO) / total) if total > 0 else 0.0 for k in sorted(values)},
             "last_quarterly": (ctx.last_run or {}).get("last_quarterly"),
+            "sales_postponed_on": (ctx.last_run or {}).get("sales_postponed_on"),
         }
         if total < min_trade:
             return RunResult(f"Sleeve holds ${cents(total)}, below the ${min_trade} minimum trade; nothing to do.", activity="idle", detail=detail)
@@ -145,6 +134,13 @@ class Tim:
                     if qty > 0:
                         sells.append(OrderIntent(ctx.manager_id, ctx.book, sym, "sell", quantity=qty, reason=f"rebalance: {'; '.join(why)}"))
             sells, paced = self._pace(sells, ctx, total, prices)
+            today = et(ctx.now).date().isoformat()
+            if sells and extreme and detail["sales_postponed_on"] != today and not self._postponed_last_session(detail["sales_postponed_on"], ctx.now):
+                # Don't sell into a dislocated day; buying new cash below still happens.
+                detail["sales_postponed_on"] = today
+                detail["extreme_moves"] = extreme
+                why.append(f"rebalancing sales postponed one day (extreme day: {', '.join(extreme)})")
+                sells = []
             if sells:
                 names = ", ".join(f"{i.symbol} ({i.quantity} sh)" for i in sells)
                 return RunResult(
@@ -167,17 +163,36 @@ class Tim:
             intents = [OrderIntent(ctx.manager_id, ctx.book, sym, "buy", notional=amt, reason="invest toward targets" + (f" ({'; '.join(why)})" if why else "")) for sym, amt in sorted(buys.items())]
             names = ", ".join(f"${amt} {sym}" for sym, amt in sorted(buys.items()))
             return RunResult(
-                f"Investing ${sum(buys.values(), ZERO)} of free cash toward targets: {names}.",
+                f"Investing ${sum(buys.values(), ZERO)} of free cash toward targets: {names}.{_postponed_note(why)}",
                 intents=intents,
                 detail={**detail, "rebalance_reasons": why},
                 activity="investing",
             )
         status = "within bands" if not why else "nothing large enough to trade"
         return RunResult(
-            f"Holding: portfolio {status}; ${cents(max(available, ZERO))} free cash above the buffer.",
+            f"Holding: portfolio {status}; ${cents(max(available, ZERO))} free cash above the buffer.{_postponed_note(why)}",
             detail={**detail, "rebalance_reasons": why},
             activity="holding",
         )
+
+    @staticmethod
+    def _extreme_moves(m: Mapping[str, Any], targets: Mapping[str, Decimal], view) -> list[str]:
+        threshold = m.get("extreme_day_pct")
+        if not threshold:
+            return []
+        return sorted(
+            f"{sym} {float(q.last / q.close - 1):+.1%}"
+            for sym in targets
+            if (q := view.quotes.get(sym)) and q.last and q.close and abs(q.last / q.close - 1) >= D(threshold)
+        )
+
+    @staticmethod
+    def _postponed_last_session(postponed_on: str | None, now: datetime) -> bool:
+        """True if sales were already postponed on the previous trading day (never postpone twice in a row)."""
+        if not postponed_on:
+            return False
+        previous = CALENDAR.current_or_last_session(now - timedelta(days=1))
+        return previous is not None and previous.session_id == postponed_on
 
     @staticmethod
     def _pace(intents: list[OrderIntent], ctx: ManagerContext, total: Decimal, prices: dict[str, Decimal]) -> tuple[list[OrderIntent], bool]:
@@ -212,3 +227,8 @@ class Tim:
             # Drop the smallest deficit and retry so the cash concentrates where it matters most.
             live.pop(min(small, key=lambda x: live[x]))
         return {}
+
+
+def _postponed_note(why: list[str]) -> str:
+    notes = [w for w in why if w.startswith("rebalancing sales postponed")]
+    return f" {notes[0][0].upper()}{notes[0][1:]}; buying continues." if notes else ""

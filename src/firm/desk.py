@@ -116,6 +116,8 @@ class Desk:
                 return blocked, None
         if intent.book == "LIVE" and (over := self._turnover_exceeded(intent, limits)):
             return [over], None
+        if intent.side == "buy" and (risk := self._sleeve_risk(intent, mandate)):
+            return [risk], None
         # 2 manager
         manager = self.registry.get(intent.manager_id)
         if manager.book != intent.book:
@@ -169,26 +171,69 @@ class Desk:
             return None
         start = et(self.clock()).replace(hour=0, minute=0, second=0, microsecond=0)
         rows = self.db.query(
-            "SELECT notional, quantity, filled_quantity, average_price FROM orders WHERE book = 'LIVE' AND created_at >= ?"
+            "SELECT side, notional, quantity, filled_quantity, average_price FROM orders WHERE book = 'LIVE' AND created_at >= ?"
             " AND status IN ('PENDING','SUBMITTED','UNKNOWN','FILLED','CANCELED')",
             (iso(start),),
         )
-        traded = ZERO
+        # One-sided turnover: buys and sells are measured separately, so a rebalance that
+        # sells X and buys X back counts as X, not 2X.
+        traded = {"buy": ZERO, "sell": ZERO}
         for r in rows:
             if r["average_price"] and D(r["filled_quantity"]) > 0:
-                traded += D(r["filled_quantity"]) * D(r["average_price"])
+                traded[r["side"]] += D(r["filled_quantity"]) * D(r["average_price"])
             elif r["notional"]:
-                traded += D(r["notional"])
+                traded[r["side"]] += D(r["notional"])
         price = self.market.quotes([intent.symbol]).get(intent.symbol)
         this = intent.notional if intent.side == "buy" else (intent.quantity or ZERO) * ((price.bid if price else None) or ZERO)
-        limit = D(snap["nav"]) * D(str(cap))
-        if traded + (this or ZERO) > limit:
-            self.events.emit(
-                "TURNOVER_LIMIT",
-                f"Daily trading limit reached (${cents(traded)} of ${cents(limit)} today). Orders resume tomorrow.",
-                actor="desk", manager_id=intent.manager_id, symbol=intent.symbol, severity="critical",
-            )
-            return f"TURNOVER_LIMIT: ${cents(traded)} traded today, limit ${cents(limit)}"
+        nav = max(D(snap["nav"]), sum(self.ledger.balances("LIVE").values(), ZERO))  # a fresh deposit raises the base at once
+        limit = nav * D(str(cap))
+        side_total = traded[intent.side] + (this or ZERO)
+        if side_total > limit:
+            today = et(self.clock()).date().isoformat()
+            if (self.settings.get("turnover_alerted") or {}).get("date") != today:
+                self.settings.put("turnover_alerted", {"date": today}, by="desk")
+                self.events.emit(
+                    "TURNOVER_LIMIT",
+                    f"Daily trading limit reached: ${cents(side_total)} of {intent.side}s would exceed ${cents(limit)} "
+                    f"({float(cap):.0%} of firm value). Further {intent.side}s wait until tomorrow; this usually means a bug or an unusually large change.",
+                    actor="desk", manager_id=intent.manager_id, symbol=intent.symbol, severity="critical",
+                )
+            return f"TURNOVER_LIMIT: {intent.side}s today ${cents(traded[intent.side])}, limit ${cents(limit)}"
+        return None
+
+    def _sleeve_risk(self, intent: OrderIntent, mandate: dict[str, Any]) -> str | None:
+        """Per-manager investment risk policy (active strategies): pauses new buys, never exits."""
+        from firm.performance import Performance
+
+        perf = Performance(self.db, self.ledger, self.market, self.settings)
+        marks = perf.marks(intent.book, intent.manager_id)
+        pauses = self.settings.get("sleeve_pauses") or {}
+        if (pauses.get(intent.manager_id) or {}).get("engaged"):
+            return f"SLEEVE_DRAWDOWN_PAUSE: since {pauses[intent.manager_id]['at']}; resume from the manager page"
+        limit = mandate.get("sleeve_drawdown_pause")
+        if limit:
+            dd = perf.drawdown(marks)
+            if dd >= float(limit):
+                pauses[intent.manager_id] = {"engaged": True, "at": iso(self.clock()), "drawdown": dd, "book": intent.book}
+                self.settings.put("sleeve_pauses", pauses, by="risk")
+                name = self.registry.get(intent.manager_id).display_name
+                self.events.emit(
+                    "SLEEVE_PAUSED",
+                    f"{name}'s sleeve is {dd:.1%} below its peak (limit {float(limit):.0%}). New buys paused; exits continue. Resume after review.",
+                    actor="risk", manager_id=intent.manager_id, severity="critical", payload={"drawdown": dd, "limit": float(limit)},
+                )
+                return f"SLEEVE_DRAWDOWN_PAUSE: {dd:.1%} below peak"
+        daily = mandate.get("daily_loss_pause")
+        if daily and marks:
+            last = marks[-1]
+            holdings = self.ledger.holdings(intent.book, intent.manager_id).get(intent.manager_id, {})
+            quotes = self.market.quotes(sorted(holdings)) if holdings else {}
+            now_nav = self.ledger.cash(intent.book, intent.manager_id) + sum((q * (quotes[s].mid or ZERO) for s, q in holdings.items() if s in quotes), ZERO)
+            flows = self.ledger.net_capital(intent.book, intent.manager_id, since_id=int((self.settings.get(f"marks_watermark_{intent.book}") or {}).get("ledger_id") or 0))
+            if last.nav > 0:
+                change = float((now_nav - flows) / last.nav - 1)
+                if change <= -float(daily):
+                    return f"DAILY_LOSS_PAUSE: sleeve {change:+.1%} today (limit -{float(daily):.0%})"
         return None
 
     def _orders_today(self, manager_id: str, book: str) -> int:

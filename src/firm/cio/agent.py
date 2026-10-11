@@ -30,9 +30,9 @@ class CIO:
         provider: Provider,
         budget: Budget,
         health: Callable[[], dict[str, Any]],
-        model: str = "gpt-5.6-terra",
-        summary_model: str = "gpt-5.6-luna",
-        max_output_tokens: int = 2500,
+        model: str = "claude-opus-5-5",
+        summary_model: str = "claude-haiku-5-5",
+        max_output_tokens: int = 16000,
         owner: str = "Reydel",
     ) -> None:
         self.firm = firm
@@ -89,6 +89,8 @@ class CIO:
             with self.firm.db.tx() as conn:
                 conn.execute("UPDATE cio_conversations SET title = ? WHERE id = ?", (text[:80], cid))
         self._save(cid, "user", text)
+        if not self.provider.available():
+            return self._save(cid, "notice", "The CIO's AI provider isn't configured on the Pi yet (no API key). Nothing was sent anywhere.", flags=["provider_not_configured"])
         tools = CIOTools(self.firm, self.proposals, self.memory, health=self.health, conversation_id=cid)
         instructions = self._instructions(tools, conv)
         history = [{"role": m["role"], "content": m["content"]} for m in self.conversation(cid)["messages"] if m["role"] in ("user", "assistant")][-RECENT_MESSAGES:]
@@ -108,7 +110,11 @@ class CIO:
                     self.budget.record(AGENT, provider=self.provider.name, model=self.model, purpose="conversation", input_tokens=0, output_tokens=0, ok=False, error=str(exc)[:300])
                     raise
                 model = step.model or self.model
-                spent += float(self.budget.record(AGENT, provider=self.provider.name, model=model, purpose="conversation", input_tokens=step.input_tokens, output_tokens=step.output_tokens, ok=True))
+                spent += float(self.budget.record(
+                    AGENT, provider=self.provider.name, model=model, purpose="conversation",
+                    input_tokens=step.input_tokens, output_tokens=step.output_tokens,
+                    cache_read_tokens=step.cache_read_tokens, cache_write_tokens=step.cache_write_tokens, ok=True,
+                ))
                 if not step.tool_calls:
                     last_text = step.text
                     break
@@ -175,9 +181,13 @@ class CIO:
             return
         text = (conv.get("summary") or "") + "\n\n" + "\n".join(f"{m['role'].upper()}: {m['content']}" for m in older)
         try:
-            self.budget.authorize(AGENT, self.summary_model, input_tokens_estimate=len(text) // 3, max_output_tokens=400)
-            step = self.provider.step(model=self.summary_model, instructions=SUMMARY_INSTRUCTIONS, messages=[{"role": "user", "content": text[-30000:]}], tool_results=None, tools=[], state=None, max_output_tokens=400)
-            self.budget.record(AGENT, provider=self.provider.name, model=step.model or self.summary_model, purpose="summary", input_tokens=step.input_tokens, output_tokens=step.output_tokens, ok=True)
+            self.budget.authorize(AGENT, self.summary_model, input_tokens_estimate=len(text) // 3, max_output_tokens=4000)
+            step = self.provider.step(model=self.summary_model, instructions=SUMMARY_INSTRUCTIONS, messages=[{"role": "user", "content": text[-30000:]}], tool_results=None, tools=[], state=None, max_output_tokens=4000)
+            self.budget.record(
+                AGENT, provider=self.provider.name, model=step.model or self.summary_model, purpose="summary",
+                input_tokens=step.input_tokens, output_tokens=step.output_tokens,
+                cache_read_tokens=step.cache_read_tokens, cache_write_tokens=step.cache_write_tokens, ok=True,
+            )
         except (BudgetExceeded, ProviderError):
             return
         if step.text:

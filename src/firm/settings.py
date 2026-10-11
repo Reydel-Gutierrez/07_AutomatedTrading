@@ -30,7 +30,10 @@ DEFAULTS: dict[str, Any] = {
     # How newly detected deposits are split (fractions of the deposit; remainder stays unallocated).
     "deposit_split": {"tim": 0.90},
     "ai_budget": {"monthly_usd": 25.0, "per_agent": {"cio": 0.5, "alex": 0.35, "max": 0.1, "tim": 0.05}},
-    "ai_models": {"cio": {"provider": "openai", "model": "gpt-5.6-terra", "summary_model": "gpt-5.6-luna"}},
+    # Provider is configurable: "anthropic" (default) or "openai". Keys live only in the Pi env file.
+    "ai_models": {
+        "cio": {"provider": "anthropic", "model": "claude-opus-5-5", "summary_model": "claude-haiku-5-5", "effort": "high"},
+    },
     "kill_switch": {"engaged": False, "reason": None, "by": None, "at": None},
     "drawdown_brake": {"engaged": False, "hwm": None, "at": None},
 }

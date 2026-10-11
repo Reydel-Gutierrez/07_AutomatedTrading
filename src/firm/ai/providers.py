@@ -47,6 +47,8 @@ class Step:
     text: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_write_tokens: int = 0
+    cache_read_tokens: int = 0
     model: str = ""
     state: Any = None  # provider continuation handle
 
