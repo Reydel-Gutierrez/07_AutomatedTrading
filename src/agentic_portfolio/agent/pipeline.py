@@ -18,7 +18,7 @@ from uuid import uuid4
 
 from agentic_portfolio.ai.config import load_ai_config, pipeline_limits
 from agentic_portfolio.ai.context import assemble_context
-from agentic_portfolio.ai.errors import AIError, BudgetDenied, BudgetExhausted
+from agentic_portfolio.ai.errors import AIError, BudgetDenied, BudgetExhausted, provider_account_problem
 from agentic_portfolio.ai.gateway import AIGateway
 from agentic_portfolio.ai.reasoners import GatewayDecisionReasoner, GatewayResearchReasoner
 from agentic_portfolio.ai.schemas import SCREENING_SCHEMA
@@ -96,6 +96,7 @@ RISK_PERMIT = {GateVerdict.PASS, GateVerdict.REQUIRES_ENHANCED_REVIEW}
 ACTIONABLE = {Decision.BUY, Decision.ADD, Decision.REDUCE, Decision.SELL}
 PAPER_NAV_LEAK = 10_000.0
 STALE_CLAIM_SECONDS = 900
+PROVIDER_ALERT_INTERVAL_SECONDS = 86_400
 
 
 def _named_decision_reason(reason: str) -> str:
@@ -553,6 +554,7 @@ class ResearchQueueWorker:
             result.rejections += int(row.get("rejected") or 0)
             if row.get("status") in {"FAILED", "DEGRADED"}:
                 result.status = "DEGRADED"
+        self._alert_provider_account_problem(result.details, job=job)
         committee_row = self._finish_core_committee(context, result)
         if committee_row is not None:
             result.details.append(committee_row)
@@ -1373,6 +1375,49 @@ class ResearchQueueWorker:
             pass
         except Exception:  # noqa: BLE001
             pass
+
+    def _alert_provider_account_problem(self, details: list[dict[str, Any]], *, job: str) -> None:
+        """Alert once per day when the AI provider refuses calls for billing or auth.
+
+        These failures never heal by retrying, and they otherwise surface only as
+        DEGRADED research cycles. The persisted notification store is the throttle,
+        so restarts do not re-alert.
+        """
+        if self.notify is None:
+            return
+        failure = next(
+            (
+                (problem, row)
+                for row in details
+                if (problem := provider_account_problem(row.get("reason")))
+            ),
+            None,
+        )
+        if failure is None:
+            return
+        problem, row = failure
+        now = self._now()
+        for prior in self.notify.store.all():
+            if prior.kind is not NotificationKind.AI_PROVIDER_UNAVAILABLE:
+                continue
+            try:
+                age = now - datetime.fromisoformat(str(prior.created_at))
+            except ValueError:
+                continue
+            if age.total_seconds() < PROVIDER_ALERT_INTERVAL_SECONDS:
+                return
+        if problem == "billing":
+            title = "AI provider out of credits"
+            body = "The AI provider rejected calls for billing/quota. Research, screening, and thesis work are stalled until credits are added. Broker, risk, and dashboard continue."
+        else:
+            title = "AI provider rejected the API key"
+            body = "The AI provider rejected calls for authentication. Research, screening, and thesis work are stalled until the key is fixed. Broker, risk, and dashboard continue."
+        self._notify(
+            NotificationKind.AI_PROVIDER_UNAVAILABLE,
+            title=title,
+            body=body,
+            payload={"job": job, "problem": problem, "symbol": row.get("symbol"), "reason": str(row.get("reason"))[:300]},
+        )
 
     def _notify(self, kind: NotificationKind, *, title: str, body: str, payload: dict[str, Any] | None = None) -> None:
         if self.notify is None:

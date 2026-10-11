@@ -27,6 +27,25 @@ def is_incomplete_max_output_tokens(exc: BaseException) -> bool:
     return "incomplete" in text and "max_output_tokens" in text
 
 
+_BILLING_MARKERS = ("insufficient_quota", "credit_balance_exhausted", "billing_hard_limit", "credit balance is too low")
+_AUTH_MARKERS = ("http 401", "http 403", "invalid_api_key", "authentication_error", "permission_error", "api key is not configured")
+
+
+def provider_account_problem(reason: str | None) -> str | None:
+    """Classify a provider failure that will not heal by retrying.
+
+    Returns ``"billing"`` (no credits / quota) or ``"auth"`` (missing, invalid,
+    or unauthorized key), else ``None``. Rate limits, timeouts, and 5xx outages
+    are transient and return ``None``.
+    """
+    text = str(reason or "").lower()
+    if any(marker in text for marker in _BILLING_MARKERS):
+        return "billing"
+    if any(marker in text for marker in _AUTH_MARKERS):
+        return "auth"
+    return None
+
+
 class SchemaViolation(AIError):
     """Structured output did not match the required schema."""
 

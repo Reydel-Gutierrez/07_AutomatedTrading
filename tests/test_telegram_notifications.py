@@ -38,6 +38,7 @@ ALLOWED = (
     NotificationKind.BROKER_CONNECTION_LOST,
     NotificationKind.AI_BUDGET_CRITICAL,
     NotificationKind.AI_BUDGET_EXHAUSTED,
+    NotificationKind.AI_PROVIDER_UNAVAILABLE,
     # Autonomy: autonomous authorizations, kill-switch changes and execution blocks reach the phone.
     NotificationKind.ORDER_AUTHORIZED,
     NotificationKind.KILL_SWITCH,
