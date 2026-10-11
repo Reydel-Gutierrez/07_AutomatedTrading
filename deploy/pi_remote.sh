@@ -110,9 +110,12 @@ cmd_test() {
   fi
   cd "$dir"
   # The venv's editable install points at APP/src; the release must shadow it.
-  local loaded
-  loaded=$(PYTHONPATH=src "$VENV_PY" -c 'import agentic_portfolio, os; print(os.path.realpath(agentic_portfolio.__file__))')
-  [[ $loaded == "$(realpath "$dir")"/* ]] || die "tests would import $loaded instead of the release"
+  local loaded pkg
+  for pkg in src/*/__init__.py; do
+    pkg=$(basename "$(dirname "$pkg")")
+    loaded=$(PYTHONPATH=src "$VENV_PY" -c "import $pkg, os; print(os.path.realpath($pkg.__file__))")
+    [[ $loaded == "$(realpath "$dir")"/* ]] || die "tests would import $loaded instead of the release"
+  done
   env -u AGENTIC_RUNTIME_MODE -u DASHBOARD_ENVIRONMENT -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
     "$VENV_PY" -m pytest -q -p no:cacheprovider
 }
