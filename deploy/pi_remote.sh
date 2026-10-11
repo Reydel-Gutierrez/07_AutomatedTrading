@@ -102,9 +102,11 @@ cmd_stage() {
 cmd_test() {
   local dir="$RELEASES/$1/test"
   [[ -d $dir ]] || die "release $1 is not staged"
-  if ! "$VENV_PY" -c 'import pytest' 2>/dev/null; then
-    echo "installing pytest into the service venv (dev dependency)"
-    sudo -n -u "$SERVICE_USER" "$VENV_PIP" install --quiet 'pytest>=8.0'
+  # Declared runtime + dev dependencies of the release. Additive only: the running
+  # service keeps working, and activation never has to wait on a download.
+  mapfile -t deps < <(python3 -c 'import sys,tomllib; p=tomllib.load(open(sys.argv[1],"rb"))["project"]; print("\n".join(p.get("dependencies",[])+p.get("optional-dependencies",{}).get("dev",[])))' "$dir/pyproject.toml")
+  if [[ -n ${deps[0]:-} ]]; then
+    sudo -n -u "$SERVICE_USER" "$VENV_PIP" install --quiet "${deps[@]}"
   fi
   cd "$dir"
   # The venv's editable install points at APP/src; the release must shadow it.

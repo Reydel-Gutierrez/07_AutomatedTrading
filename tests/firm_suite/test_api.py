@@ -4,9 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from firm.api.app import create_app
-from firm.api.auth import CSRF_COOKIE, set_password
+from firm.api.auth import set_password
 from firm.core import Firm
-from firm.money import D
 
 from tests.firm_suite.fakes import FakeRobinhood
 

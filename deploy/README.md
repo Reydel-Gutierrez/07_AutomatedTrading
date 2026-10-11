@@ -1,322 +1,36 @@
-# Raspberry Pi deployment (LIVE)
+# Raspberry Pi deployment
 
-The application is a 24/7 service, not a market-hours script.
+The firm runs 24/7 as `agentic-portfolio.service`, user `agentic`, from
+`/opt/agentic-portfolio` with the venv at `.venv/`. HQ binds `127.0.0.1:3100`;
+remote access is through Cloudflare Access (`portfolio.reydelgutierrez.com`)
+or `ssh -L 3100:127.0.0.1:3100 <pi>`.
 
-This machine is not assumed to be available during development. Copy the
-repo to the Pi, install as a dedicated non-root user, then enable systemd.
+## Environment (`/etc/agentic-portfolio/env`, root:agentic 640)
 
-Do **not** run the application as root.
-Do **not** install into global system Python.
-Do **not** store `OPENAI_API_KEY` in Git, source, the systemd unit, logs, or state.
-Do **not** expose the dashboard publicly. It stays on `127.0.0.1:3100`.
-
-Order placement remains off until you set `AGENTIC_LIVE_ORDER_PLACEMENT=true` in
-`/etc/agentic-portfolio/env`. Committed default: `auto_execution=false`,
-`LIVE_ORDER_PLACEMENT=false`. Approving a proposal does not place an order
-while that switch is false.
-
-## Boot path
-
-Raspberry Pi boots
-→ `agentic-portfolio.service` starts as user `agentic` (or the username you set)
-→ `/opt/agentic-portfolio/.venv/bin/python scripts/run_service.py` starts
-→ dashboard binds localhost (`127.0.0.1:3100`)
-→ Agent Runtime stays alive
-→ Robinhood read-only transport loads that **same user's** persisted OAuth and reconnects
-→ persisted watch / approval / notification / AI-budget state is resumed
-
-## Service user
-
-The production unit is:
-
-```
-User=agentic
-Group=agentic
-```
-
-If this Pi already has a dedicated service account, replace those two lines in
-`deploy/systemd/agentic-portfolio.service` with the actual username **before**
-installing the unit. Robinhood OAuth is user-specific. The login script and
-systemd must run as the **same** account.
-
-Create the documented example user (once):
-
-```bash
-sudo useradd --system --create-home --home-dir /home/agentic \
-  --shell /usr/sbin/nologin --comment "Agentic Portfolio service" agentic
-sudo chmod 700 /home/agentic
-```
-
-`--create-home` is required. OAuth tokens are written under
-`~/.agentic-portfolio/readonly-mcp/oauth.json` for that user
-(`/home/agentic/.agentic-portfolio/readonly-mcp/oauth.json` for the example
-account). A system user without a home directory cannot persist OAuth.
-
-## Install (on the Pi)
-
-```bash
-sudo mkdir -p /opt/agentic-portfolio
-sudo rsync -a --exclude .venv --exclude __pycache__ --exclude .git ./ /opt/agentic-portfolio/
-sudo chown -R agentic:agentic /opt/agentic-portfolio
-sudo chmod 750 /opt/agentic-portfolio
-
-cd /opt/agentic-portfolio
-sudo -u agentic python3 -m venv /opt/agentic-portfolio/.venv
-sudo -u agentic /opt/agentic-portfolio/.venv/bin/python -m pip install --upgrade pip
-sudo -u agentic /opt/agentic-portfolio/.venv/bin/pip install -e .
-```
-
-Do not run `pip install` with system `python3` or as root into global site-packages.
-
-### Secret environment file
-
-```bash
-sudo mkdir -p /etc/agentic-portfolio
-sudo cp /opt/agentic-portfolio/deploy/env.example /etc/agentic-portfolio/env
-sudo editor /etc/agentic-portfolio/env
-```
-
-The systemd unit loads it with:
-
-```
-EnvironmentFile=/etc/agentic-portfolio/env
-```
-
-Set `OPENAI_API_KEY` on the Pi only. The file may contain:
-
-```
-OPENAI_API_KEY=...
-AGENTIC_RUNTIME_MODE=LIVE
-DASHBOARD_ENVIRONMENT=LIVE
-```
-
-Then:
-
-```bash
-sudo chown root:agentic /etc/agentic-portfolio/env
-sudo chmod 640 /etc/agentic-portfolio/env
-```
-
-Confirm the key is present without printing it:
-
-```bash
-sudo -u agentic /opt/agentic-portfolio/.venv/bin/python -c \
-  "from pathlib import Path
-keys=set()
-for line in Path('/etc/agentic-portfolio/env').read_text().splitlines():
-    line=line.strip()
-    if line and not line.startswith('#') and '=' in line:
-        keys.add(line.split('=',1)[0].strip())
-print('OPENAI_API_KEY_PRESENT=' + str('OPENAI_API_KEY' in keys))"
-```
-
-### Writable directories (no root needed at runtime)
-
-The service user must own and write `state/`, `logs/`, and `reports/`. It does
-not need root after install.
-
-```bash
-sudo mkdir -p /opt/agentic-portfolio/state /opt/agentic-portfolio/logs /opt/agentic-portfolio/reports
-sudo chown -R agentic:agentic \
-  /opt/agentic-portfolio/state \
-  /opt/agentic-portfolio/logs \
-  /opt/agentic-portfolio/reports
-sudo chmod 770 \
-  /opt/agentic-portfolio/state \
-  /opt/agentic-portfolio/logs \
-  /opt/agentic-portfolio/reports
-```
-
-If you later tighten ownership so root owns source and `agentic` only owns
-runtime dirs, keep `.venv` executable by `agentic` and keep these three trees
-writable by `agentic`. Never run the unit as root to "fix permissions".
-
-### Install the systemd unit
-
-```bash
-sudo cp /opt/agentic-portfolio/deploy/systemd/agentic-portfolio.service /etc/systemd/system/
-sudo systemctl daemon-reload
-```
-
-Do **not** enable the unit until startup validation and the one-cycle smoke
-test below have passed.
-
-## OAuth bootstrap (same user as systemd)
-
-Robinhood OAuth is stored outside the repo, per OS user. Cursor's MCP login is
-a different credential store and is not reused.
-
-```bash
-sudo -u agentic \
-  /opt/agentic-portfolio/.venv/bin/python \
-  scripts/login_readonly_mcp.py
-```
-
-Complete the browser flow on the Pi (or via SSH with X11/Wayland forwarding if
-needed). Then:
-
-```bash
-sudo -u agentic \
-  /opt/agentic-portfolio/.venv/bin/python \
-  scripts/login_readonly_mcp.py --status
-```
-
-Expected: `status: authenticated (valid)` and a store path under that user's
-home. The token value is not printed. The systemd `User=` must be this same
-account so the service can read `~/.agentic-portfolio/readonly-mcp/oauth.json`.
-
-The service never stores a Robinhood username or password.
-
-## Dashboard binding
-
-The dashboard binds `127.0.0.1:3100` only. Do not set `DASHBOARD_HOST=0.0.0.0`.
-Do not add Cloudflare, Tailscale, or any public exposure as part of this
-install.
-
-From a laptop, forward the port:
-
-```bash
-ssh -L 3100:127.0.0.1:3100 <pi>
-```
-
-Then open `http://127.0.0.1:3100` on the laptop. Traffic stays on localhost at
-both ends.
-
-## Startup validation (before enable)
-
-Run these as checks. None of them should print `OPENAI_API_KEY`.
-
-### Python >= 3.11
-
-```bash
-/opt/agentic-portfolio/.venv/bin/python -c \
-  "import sys; assert sys.version_info >= (3, 11), sys.version; print(sys.version.split()[0])"
-```
-
-### Robinhood OAuth valid (service user)
-
-```bash
-sudo -u agentic \
-  /opt/agentic-portfolio/.venv/bin/python \
-  scripts/login_readonly_mcp.py --status
-```
-
-### OPENAI key visible to the service environment (presence only)
-
-```bash
-sudo systemd-run --wait --collect --uid=agentic --gid=agentic \
-  --property=EnvironmentFile=/etc/agentic-portfolio/env \
-  /opt/agentic-portfolio/.venv/bin/python -c \
-  "import os; print('OPENAI_API_KEY_PRESENT=' + str(bool(os.environ.get('OPENAI_API_KEY'))))"
-```
-
-### LIVE runtime selected, execution mode, broker writes, kill switch
-
-```bash
-sudo systemd-run --wait --collect --uid=agentic --gid=agentic \
-  --working-directory=/opt/agentic-portfolio \
-  --property=EnvironmentFile=/etc/agentic-portfolio/env \
-  --property=Environment=PYTHONPATH=src \
-  /opt/agentic-portfolio/.venv/bin/python -c \
-  "from agentic_portfolio.runtime import get_active_runtime, live_placement_enabled
-from agentic_portfolio.autonomy import load_execution_policy, KillSwitch
-from pathlib import Path
-p = load_execution_policy()
-print('runtime=' + get_active_runtime().value)
-print('execution_mode=' + p.mode.value + ' (' + p.mode_source + ')')
-print('LIVE_ORDER_PLACEMENT=' + str(live_placement_enabled()).lower())
-print('kill_switch_engaged=' + str(KillSwitch(Path('/opt/agentic-portfolio')).engaged()).lower())
-assert get_active_runtime().value == 'LIVE'
-assert p.invalid_mode_value is None, 'AGENTIC_EXECUTION_MODE has a typo'"
-```
-
-Expected for the first validation pass (before you enable autonomy):
-
-```
-runtime=LIVE
-execution_mode=HUMAN_APPROVAL (env:AGENTIC_EXECUTION_MODE)
-LIVE_ORDER_PLACEMENT=false
-kill_switch_engaged=false
-```
-
-### One-cycle smoke test (no paid AI)
-
-`--once` runs one orchestration cycle and exits. Production `run_service.py`
-does not wire a paid AI provider callback, so this cycle must not spend OpenAI
-budget. It does load LIVE mode, OAuth, and writable state dirs.
-
-```bash
-sudo -u agentic bash -c '
-set -a
-. /etc/agentic-portfolio/env
-set +a
-cd /opt/agentic-portfolio
-/opt/agentic-portfolio/.venv/bin/python scripts/run_service.py --once
-'
-```
-
-Equivalent if the env file is already exported into that user's environment:
-
-```bash
-sudo -u agentic \
-  /opt/agentic-portfolio/.venv/bin/python \
-  scripts/run_service.py --once
-```
-
-Confirm `state/runtime/health.json` was written, `runtime_mode` is `LIVE`,
-`LIVE_ORDER_PLACEMENT` is false, and the process exited. Then enable systemd.
-
-## Enable and health
-
-```bash
-sudo systemctl enable --now agentic-portfolio
-sudo systemctl status agentic-portfolio
-journalctl -u agentic-portfolio -f
-```
-
-Health file:
-
-```bash
-python3 -c "import json; print(json.load(open('/opt/agentic-portfolio/state/runtime/health.json')))"
-```
-
-Expect `"agent": "ONLINE"`, `"runtime_mode": "LIVE"`,
-`"LIVE_ORDER_PLACEMENT": false`. Robinhood should show a reconnect/healthy
-snapshot after OAuth loads.
-
-Dashboard health (on the Pi, or via SSH tunnel):
-
-```bash
-curl -sS http://127.0.0.1:3100/healthz
-```
-
-`/healthz` does not require dashboard login. It must report live order
-placement disabled.
-
-## Restart test
-
-```bash
-sudo systemctl restart agentic-portfolio
-sudo systemctl status agentic-portfolio
-```
-
-Verify after restart:
-
-| Check | Where |
+| Variable | Meaning |
 |---|---|
-| Service returns ONLINE | `state/runtime/health.json` `"agent": "ONLINE"` and `systemctl status` |
-| Watchlist survives | `state/live_ai/watch/` unchanged tickers |
-| Approval state survives | `state/live_ai/approvals/` |
-| AI budget ledger survives | `state/ai_budget/` spent/remaining unchanged |
-| Robinhood reconnects | health `robinhood` / journal reconnect, no credential prompt |
-| No duplicate jobs | single PID; `state/runtime/locks/` held by this process only |
-| No PAPER contamination | `"runtime_mode": "LIVE"`; LIVE watch/approvals stay under `state/live_ai/` |
+| `AGENTIC_LIVE_ORDER_PLACEMENT` | `true` lets the Execution Desk write to Robinhood. Anything else: off. |
+| `AGENTIC_KILL_SWITCH` | `1` forces the kill switch on. |
+| `TELEGRAM_NOTIFICATIONS`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` | Alerts to your phone |
+| `AGENTIC_PUBLIC_DASHBOARD_URL` | Link included in alerts |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` | Phase 2+ (CIO) |
+
+`AGENTIC_EXECUTION_MODE`, `AGENTIC_RUNTIME_MODE`, and `DASHBOARD_ENVIRONMENT` are legacy and ignored.
+
+## Robinhood OAuth (service user)
+
+```bash
+sudo -u agentic /opt/agentic-portfolio/.venv/bin/python scripts/firm_admin.py login-mcp --status
+```
+
+The token store is `~agentic/.agentic-portfolio/readonly-mcp/oauth.json`
+(unchanged from the legacy system, so the existing login keeps working).
 
 ## Deploying updates
 
-From the development machine (needs SSH to the Pi as the deploy user, with
-passwordless `systemctl start|stop|restart|status agentic-portfolio.service` and
-`sudo -u agentic` for the venv's `python`/`pip`):
+From the development machine (SSH as the deploy user with passwordless
+`systemctl start|stop|restart|status agentic-portfolio.service` and
+`sudo -u agentic` for the venv's `python`/`pip`; npm installed locally):
 
 ```bash
 python scripts/deploy_pi.py --status     # deployed commit, service, in-flight orders
@@ -325,47 +39,36 @@ python scripts/deploy_pi.py [<ref>]      # deploy (default HEAD)
 python scripts/deploy_pi.py --rollback   # restore the code the last deploy replaced
 ```
 
-A deploy ships a `git archive` of a pushed commit, so uncommitted files never
-reach the Pi. It refuses to run during regular market hours or while any
-execution intent is in flight. Before the service is touched, the full test
-suite passes locally and on the Pi (production venv, scratch copy; tests never
-run inside `/opt/agentic-portfolio`), and a baseline production smoke test is
-recorded. It then backs up the current code to `~/agentic-deploys/backups/`
-(newest 5 kept), stops the service, syncs code with `state/`, `logs/`,
-`reports/`, `.venv/` and `var/` excluded, installs declared dependencies if
-`pyproject.toml` changed, writes `/opt/agentic-portfolio/DEPLOYED_COMMIT`, and
-starts the service. Verification requires a fresh process reporting ONLINE,
-every released file byte-identical, `/healthz` answering, and no smoke check
-that passed before failing after. Any failure rolls back automatically.
+A deploy ships a `git archive` of a pushed commit plus the HQ frontend built
+from that same export. It refuses to run in market hours or while an order is
+in flight. Before touching the service: the full test suite passes locally
+and on the Pi (production venv, scratch copy; declared dependencies are
+installed first), and a baseline smoke test is recorded. Then: back up the
+code (`~/agentic-deploys/backups/`, newest 5), stop, sync (never `state/`,
+`logs/`, `reports/`, `.venv/`, `var/`), install changed dependencies, write
+`DEPLOYED_COMMIT`, start. Verification: a fresh process ONLINE, every file
+byte-identical, `/healthz`, and no smoke regression (or, with
+`--require-smoke-pass`, every new check passing). Any failure rolls back.
 
-The deploy never reads `/etc/agentic-portfolio/env` and never changes
-`AGENTIC_EXECUTION_MODE`, `AGENTIC_LIVE_ORDER_PLACEMENT`, or the kill switch.
-History: `~/agentic-deploys/history.jsonl`. Pi side: `deploy/pi_remote.sh`.
+## Backups
 
-## Lifecycle
+Nightly at 02:30 ET (and `firm_admin.py backup-now`): SQLite online copy →
+integrity check → gzip → AES-256-GCM → force-push one commit holding the
+retention set (7 daily, 8 weekly, 12 monthly) to the private repository in
+`config/firm.json` (`backup.remote`) → fresh clone, decrypt, open, compare
+the ledger fingerprint.
 
-```bash
-sudo systemctl start agentic-portfolio
-sudo systemctl stop agentic-portfolio
-sudo systemctl restart agentic-portfolio
-sudo systemctl status agentic-portfolio
-```
+* Encryption key: `~agentic/.agentic-portfolio/backup.key` (`firm_admin.py backup-init`; copy it to your password manager with `backup-show-key`).
+* Repository access: a write deploy key at `~agentic/.agentic-portfolio/backup_deploy_key` registered on that repository only.
 
-PID file: `state/runtime/agent.pid`
+## Cutover from the legacy engine (one time)
 
-## Execution: going from validation to autonomous operation
+1. Weekend or after the close. `deploy_pi.py --status` shows no in-flight orders.
+2. `deploy_pi.py <firm sha> --require-smoke-pass`: the service restarts running the firm with its books closed (it trades nothing).
+3. `firm_admin.py migrate --stamp YYYYMMDD`: archives legacy `state/` `logs/` `reports/` with a SHA-256 into `state/firm/archive/`, imports the live NAV history, and opens the books from a fresh broker snapshot.
+4. Owner: `firm_admin.py set-password` (HQ admin; there is no default).
+5. Allocate (HQ Capital or `firm_admin.py allocate tim <amount>`), set Tim to SIM.
+6. After the validation period, the owner switches Tim to LIVE from HQ.
 
-Committed defaults are safe: `AGENTIC_EXECUTION_MODE=HUMAN_APPROVAL`, `AGENTIC_LIVE_ORDER_PLACEMENT=false`, kill switch released.
-(The old `auto_execution=false` / `live_trade_actions_allowed=false` flags no longer exist; the three switches below replace them.)
-
-Recommended sequence, each step only after the previous one looks right on the dashboard:
-
-1. **Observe** — `AGENTIC_EXECUTION_MODE=OBSERVE`, placement `false`. Watch a few sessions of discovery → research → decision → Risk Gate. `logs/order_intake.jsonl` shows every proposal that *would* have been made.
-2. **Human approval, broker writes off** — `HUMAN_APPROVAL`, placement `false`. Approve a proposal; it must become `APPROVED_EXECUTION_DISABLED` and nothing reaches Robinhood.
-3. **Human approval, broker writes on** — set `AGENTIC_LIVE_ORDER_PLACEMENT=true`, restart. Approve one small proposal; confirm the fill, the reconcile, and the position on the dashboard.
-4. **Kill-switch drill** — engage from the System page (or `sudo -u agentic .venv/bin/python scripts/kill_switch.py engage --reason drill`), confirm the drain job reports `kill_switch_engaged`, then release with your name and a note.
-5. **Autonomous** — `AGENTIC_EXECUTION_MODE=AUTONOMOUS`, restart. Telegram/dashboard now show `ORDER AUTHORIZED` for clean PASS orders and `TRADE APPROVAL REQUIRED` for escalations. Review the circuit breakers in `config/execution_policy.json` first.
-
-Emergency stop at any time: dashboard **System → ENGAGE KILL SWITCH**, `scripts/kill_switch.py engage`, or `AGENTIC_KILL_SWITCH=1` in `/etc/agentic-portfolio/env` + restart. Releasing is always a named human action.
-
-The only placement surface is `OrderExecutor` (`live_execution/executor.py`); it re-runs the Risk Gate on fresh facts before every order.
+Rollback: `deploy_pi.py --rollback` restores the legacy code; legacy state is
+untouched until the post-cutover cleanup.

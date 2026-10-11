@@ -7,7 +7,7 @@ reconciliation tests exercise real accounting. Failure modes are switchable.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from typing import Any
 from uuid import uuid4

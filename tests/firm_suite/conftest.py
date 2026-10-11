@@ -32,6 +32,8 @@ def _no_live_env(monkeypatch, tmp_path):
     for name in ("AGENTIC_LIVE_ORDER_PLACEMENT", "AGENTIC_KILL_SWITCH", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID", "OPENAI_API_KEY", "ANTHROPIC_API_KEY"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("FIRM_STATE_ROOT", str(tmp_path / "firm-state"))
+    # Never let a test reach the real backup repository.
+    monkeypatch.setattr("firm.backup._configured_remote", lambda: "")
     monkeypatch.setenv("AGENTIC_READONLY_MCP_HOME", str(tmp_path / "mcp-home"))
 
 

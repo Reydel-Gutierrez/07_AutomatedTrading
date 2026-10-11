@@ -9,7 +9,7 @@ Nightly:
   4. verify: fresh clone → decrypt → open → integrity_check → digest must match
 
 Configuration (Pi env file):
-  FIRM_BACKUP_REMOTE     git@github.com:<owner>/<repo>.git
+  FIRM_BACKUP_REMOTE     overrides config/firm.json backup.remote
   FIRM_BACKUP_KEY_FILE   default ~/.agentic-portfolio/backup.key
   FIRM_BACKUP_SSH_KEY    default ~/.agentic-portfolio/backup_deploy_key
 """
@@ -157,9 +157,18 @@ def restore_file(path: Path, out: Path, key: bytes) -> dict[str, Any]:
     return ledger_digest(out)
 
 
+def _configured_remote() -> str:
+    try:
+        from firm.config import firm_config
+
+        return str((firm_config().get("backup") or {}).get("remote") or "")
+    except (OSError, ValueError, KeyError):
+        return ""
+
+
 def run_backup(firm: "Firm", *, environ: Mapping[str, str] | None = None) -> dict[str, Any]:
     env = environ if environ is not None else os.environ
-    remote = str(env.get("FIRM_BACKUP_REMOTE") or "").strip()
+    remote = str(env.get("FIRM_BACKUP_REMOTE") or _configured_remote()).strip()
     status: dict[str, Any] = {"at": iso(firm.clock()), "ok": False, "remote": bool(remote)}
     try:
         key = load_key(env)

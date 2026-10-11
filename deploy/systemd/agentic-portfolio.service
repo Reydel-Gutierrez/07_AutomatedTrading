@@ -1,5 +1,5 @@
 [Unit]
-Description=Agentic Portfolio 24/7 autonomous service
+Description=Agentic Capital firm service (managers, execution desk, Investment HQ)
 Documentation=file:///opt/agentic-portfolio/deploy/README.md
 After=network-online.target
 Wants=network-online.target
@@ -13,8 +13,8 @@ Type=simple
 User=agentic
 Group=agentic
 WorkingDirectory=/opt/agentic-portfolio
-# OPENAI_API_KEY lives only in /etc/agentic-portfolio/env (EnvironmentFile).
-# Never put the key in this unit, the repo, logs, or state. See deploy/env.example.
+# Secrets and the broker-write switch live only in /etc/agentic-portfolio/env.
+# See deploy/env.example.
 EnvironmentFile=/etc/agentic-portfolio/env
 Environment=PYTHONPATH=src
 Environment=AGENTIC_RUNTIME_MODE=LIVE
@@ -27,8 +27,8 @@ KillMode=mixed
 NoNewPrivileges=true
 # Do not set ProtectHome=true: OAuth tokens live in the service user's home.
 
-# Read-only observation. Never places or cancels orders.
-# Dashboard stays on 127.0.0.1:3100. Do not bind publicly.
+# Orders are placed only by the Execution Desk, only when
+# AGENTIC_LIVE_ORDER_PLACEMENT=true and a manager is LIVE. HQ binds 127.0.0.1:3100.
 
 [Install]
 WantedBy=multi-user.target

@@ -32,6 +32,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -115,8 +116,22 @@ def resolve(ref: str, *, allow_unpushed: bool) -> str:
 
 
 def build_archive(sha: str, dest: Path) -> Path:
+    """git archive of the commit, plus the frontend built from that same clean export."""
     tar = dest / f"{sha}.tar"
     run(["git", "archive", "--format=tar", "-o", str(tar), sha], cwd=ROOT)
+    with tempfile.TemporaryDirectory(prefix="agentic-deploy-web-") as tmp:
+        with tarfile.open(tar) as archive:
+            archive.extractall(tmp, filter="data")
+        web = Path(tmp) / "web"
+        if (web / "package.json").is_file():
+            npm = shutil.which("npm") or shutil.which("npm.cmd")
+            if not npm:
+                raise DeployError("npm is required to build the HQ frontend")
+            log("building the HQ frontend from the clean export")
+            run([npm, "ci", "--no-audit", "--no-fund", "--silent"], cwd=web)
+            run([npm, "run", "build", "--silent"], cwd=web)
+            with tarfile.open(tar, "a") as archive:
+                archive.add(web / "dist", arcname="web/dist")
     return tar
 
 
@@ -124,7 +139,7 @@ def local_tests(tar: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="agentic-deploy-test-") as tmp:
         with tarfile.open(tar) as archive:
             archive.extractall(tmp, filter="data")
-        env = {k: v for k, v in os.environ.items() if not k.startswith(("AGENTIC_", "DASHBOARD_", "OPENAI_", "ANTHROPIC_", "TELEGRAM_"))}
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("AGENTIC_", "DASHBOARD_", "OPENAI_", "ANTHROPIC_", "TELEGRAM_", "FIRM_"))}
         log("running test suite on a clean export (local)")
         res = subprocess.run([sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider"], cwd=tmp, env=env)
         if res.returncode != 0:
@@ -193,9 +208,16 @@ def deploy(args: argparse.Namespace) -> int:
         pi.remote("activate", sha, json.dumps(meta))
         pi.remote("verify", sha)
         after = smoke(pi, "after")
-        regressed = smoke_regressions(baseline, after)
-        if regressed:
-            raise DeployError(f"smoke checks regressed: {', '.join(regressed)}")
+        if args.require_smoke_pass:
+            # A release that replaces the smoke test itself (e.g. the legacy → firm
+            # cutover) cannot be compared check-by-check; every new check must pass.
+            failing = sorted(k for k, ok in after.items() if not ok)
+            if not after or failing:
+                raise DeployError(f"smoke checks failing after deploy: {', '.join(failing) or 'no results'}")
+        else:
+            regressed = smoke_regressions(baseline, after)
+            if regressed:
+                raise DeployError(f"smoke checks regressed: {', '.join(regressed)}")
     except DeployError as exc:
         if args.no_auto_rollback:
             log(f"verification failed and auto-rollback is off: {exc}")
@@ -236,6 +258,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-local-tests", action="store_true")
     parser.add_argument("--skip-pi-tests", action="store_true")
     parser.add_argument("--no-auto-rollback", action="store_true")
+    parser.add_argument("--require-smoke-pass", action="store_true", help="every post-deploy smoke check must pass (instead of comparing with the old release)")
     args = parser.parse_args(argv)
     try:
         if args.status:

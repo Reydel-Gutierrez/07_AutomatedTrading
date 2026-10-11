@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 
-from firm.ledger import FIRM, Ledger, LedgerError
+from firm.ledger import FIRM, LedgerError
 from firm.money import D, ZERO, cents
 
 TIM = "tim"

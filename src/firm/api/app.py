@@ -6,7 +6,6 @@ import asyncio
 import json
 import secrets
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
@@ -16,7 +15,7 @@ from pydantic import BaseModel, Field
 from firm.api import views
 from firm.api.auth import CSRF_COOKIE, SESSION_COOKIE, SESSION_TTL, Sessions
 from firm.core import Firm
-from firm.ledger import FIRM, LedgerError
+from firm.ledger import LedgerError
 from firm.managers.registry import MODES
 from firm.managers.tim import validate_mandate
 from firm.money import D, cents

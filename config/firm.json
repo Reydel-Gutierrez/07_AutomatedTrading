@@ -1,6 +1,12 @@
 {
   "account_number": "549688554",
   "account_nickname": "Agentic",
-  "dashboard": {"host": "127.0.0.1", "port": 3100},
-  "notes": "Identity and binding only. Everything the owner tunes (allocations, mandates, limits, AI budget) lives versioned in state/firm/firm.db and is edited from Investment HQ."
+  "dashboard": {
+    "host": "127.0.0.1",
+    "port": 3100
+  },
+  "notes": "Identity and binding only. Everything the owner tunes (allocations, mandates, limits, AI budget) lives versioned in state/firm/firm.db and is edited from Investment HQ.",
+  "backup": {
+    "remote": "git@github.com:Reydel-Gutierrez/agentic-firm-backups.git"
+  }
 }

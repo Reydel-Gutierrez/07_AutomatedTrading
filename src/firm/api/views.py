@@ -11,7 +11,7 @@ from firm.broker.errors import BrokerUnavailable
 from firm.clock import CALENDAR, EASTERN, et, parse_hhmm
 from firm.core import Firm
 from firm.ledger import FIRM, SUSPENSE
-from firm.money import ZERO, D, cents
+from firm.money import ZERO, cents
 
 ACTIVITY_EVENTS = ("MANAGER_RUN", "ORDER_FILLED", "ORDER_SUBMITTED", "ORDER_BLOCKED", "ORDER_DEFERRED", "ORDER_REJECTED", "MANAGER_DEGRADED", "MANAGER_WAITING", "MANAGER_MODE", "MANDATE_CHANGED", "CAPITAL_ALLOCATED", "CAPITAL_DEALLOCATED")
 
@@ -150,7 +150,6 @@ def controls(firm: Firm, health: dict[str, Any]) -> dict[str, Any]:
 def manager_detail(firm: Firm, manager_id: str) -> dict[str, Any]:
     row = firm.registry.get(manager_id)
     version, mandate = firm.registry.mandate(manager_id)
-    book = row.book or "LIVE"
     held = set()
     for b in ("LIVE", "SIM"):
         held |= set(firm.ledger.holdings(b, manager_id).get(manager_id, {}))

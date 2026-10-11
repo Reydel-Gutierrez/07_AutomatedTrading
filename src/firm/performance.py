@@ -17,7 +17,7 @@ from decimal import Decimal
 from typing import Any
 
 from firm.db import Database
-from firm.ledger import FIRM, SUSPENSE, Ledger
+from firm.ledger import SUSPENSE, Ledger
 from firm.market import MarketData
 from firm.money import ZERO, D, cents, s
 from firm.settings import Settings

@@ -66,7 +66,8 @@ def test_full_backup_push_and_restore_verification(firm, tmp_path, monkeypatch):
     assert restored["counts"]["ledger"] == firm.db.one("SELECT COUNT(*) AS n FROM ledger")["n"]
 
 
-def test_backup_without_remote_fails_loudly_but_keeps_local_copy(firm, tmp_path):
+def test_backup_without_remote_fails_loudly_but_keeps_local_copy(firm, tmp_path, monkeypatch):
+    monkeypatch.setattr(backup, "_configured_remote", lambda: "")
     env = {"HOME": str(tmp_path / "home")}
     backup.create_key(env)
     status = backup.run_backup(firm, environ=env)

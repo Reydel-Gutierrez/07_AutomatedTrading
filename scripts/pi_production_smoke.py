@@ -1,234 +1,107 @@
-"""Raspberry Pi production smoke test. Read-only. Never places or reviews an order.
+"""Production smoke test for the firm. Read-only against Robinhood; never reviews or places orders.
 
-Safe to run as the service user:
+  sudo -u agentic /opt/agentic-portfolio/.venv/bin/python scripts/pi_production_smoke.py
 
-  sudo -u agentic -H env PYTHONPATH=src \\
-    /opt/agentic-portfolio/.venv/bin/python scripts/pi_production_smoke.py
-
-Exits nonzero on any FAIL. Does not call place/review/cancel/crypto/transfer tools.
+Lines are ``PASS|FAIL  <check>  <detail>`` (deploy_pi.py compares them before/after a
+deploy) or ``INFO  <check>  <detail>`` (reported, never gating). Exit 1 on any FAIL.
 """
 
 from __future__ import annotations
 
-import argparse
+import json
 import os
+import sqlite3
 import sys
-from dataclasses import dataclass
+import urllib.request
 from pathlib import Path
-from typing import Any, Mapping
 
-from agentic_portfolio.adapters.portfolio_facts import confirm_agentic_account
-from agentic_portfolio.adapters.readonly_mcp_auth import oauth_store_path, path_is_inside_repo
-from agentic_portfolio.adapters.readonly_runtime import (
-    bootstrap_readonly_broker_runtime,
-    reset_readonly_broker_runtime,
-)
-from agentic_portfolio.adapters.robinhood_read import FORBIDDEN_MCP_TOOLS
-from agentic_portfolio.ai.config import load_ai_config, monthly_cap
-from agentic_portfolio.dashboard.queries import dashboard_state, dashboard_view
-from agentic_portfolio.discovery.live_readonly import LIVE_DISCOVERY_WIRED
-from agentic_portfolio.live.engine import refresh_live_portfolio
-from agentic_portfolio.live.store import LivePortfolioStore
-from agentic_portfolio.paths import project_root
-from agentic_portfolio.policy import load_account_rules
-from agentic_portfolio.runtime import LIVE_ORDER_PLACEMENT, RuntimeMode, get_active_runtime
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+lines: list[str] = []
 
 
-WRITE_TOOLS = frozenset(FORBIDDEN_MCP_TOOLS) | {
-    "review_equity_order",
-    "place_option_order",
-    "review_option_order",
-    "cancel_option_order",
-    "place_crypto_order",
-    "preview_crypto_order",
-    "cancel_crypto_order",
-}
+def check(name: str, ok: bool, detail: str = "") -> bool:
+    lines.append(f"{'PASS' if ok else 'FAIL'}  {name}  {detail}".rstrip())
+    return ok
 
 
-@dataclass
-class Check:
-    name: str
-    ok: bool
-    detail: str = ""
+def info(name: str, detail: str) -> None:
+    lines.append(f"INFO  {name}  {detail}")
 
 
-def _merge_env_file(environ: dict[str, str], path: Path) -> dict[str, str]:
-    """Load systemd EnvironmentFile keys without printing values."""
-    if not path.is_file():
-        return environ
-    merged = dict(environ)
+def main() -> int:
+    check("python_version", sys.version_info >= (3, 11), sys.version.split()[0])
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return merged
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, _, _value = stripped.partition("=")
-        name = key.strip()
-        if name and name not in merged:
-            merged[name] = _value.strip().strip('"').strip("'")
-    return merged
+        import importlib
 
+        for mod in ("cryptography", "fastapi", "uvicorn"):
+            importlib.import_module(mod)
 
-def _home(environ: Mapping[str, str]) -> Path:
-    raw = str(environ.get("HOME") or "").strip()
-    return Path(raw) if raw else Path.home()
+        check("dependencies", True, "fastapi uvicorn cryptography")
+    except ImportError as exc:
+        check("dependencies", False, str(exc))
 
+    from firm.broker import connect_reader, live_writes_enabled
+    from firm.broker.errors import BrokerWriteRefused
+    from firm.broker.mcp_auth import oauth_session_status
+    from firm.config import account_number
+    from firm.paths import db_path, state_root
 
-def _writable(path: Path) -> bool:
+    root = state_root()
     try:
-        path.mkdir(parents=True, exist_ok=True)
-        probe = path / ".smoke_write_probe"
-        probe.write_text("ok", encoding="utf-8")
+        root.mkdir(parents=True, exist_ok=True)
+        probe = root / ".write-probe"
+        probe.write_text("ok")
         probe.unlink()
-        return True
-    except OSError:
-        return False
-
-
-def run_smoke(
-    *,
-    root: Path | None = None,
-    environ: Mapping[str, str] | None = None,
-    transport: Any | None = None,
-    persist: bool = True,
-    connect: bool = True,
-) -> list[Check]:
-    """Return a PASS/FAIL checklist. Never places."""
-    env = dict(environ if environ is not None else os.environ)
-    env = _merge_env_file(env, Path("/etc/agentic-portfolio/env"))
-    base = root or project_root()
-    checks: list[Check] = []
-
-    def add(name: str, ok: bool, detail: str = "") -> None:
-        checks.append(Check(name, bool(ok), detail))
-
-    runtime = get_active_runtime(environ=env)
-    add("runtime_mode_LIVE", runtime is RuntimeMode.LIVE, runtime.value)
-    add("LIVE_ORDER_PLACEMENT_false", LIVE_ORDER_PLACEMENT is False, str(LIVE_ORDER_PLACEMENT).lower())
-    rules = load_account_rules()
-    from agentic_portfolio.autonomy.kill_switch import KillSwitch
-    from agentic_portfolio.autonomy.policy import load_execution_policy
-    from agentic_portfolio.runtime import live_placement_enabled
-
-    policy = load_execution_policy(environ=env)
-    # A typo in AGENTIC_EXECUTION_MODE silently falls back to HUMAN_APPROVAL; surface it here.
-    add("execution_mode_valid", policy.invalid_mode_value is None, f"{policy.mode.value} ({policy.mode_source})")
-    # Informational: unset or ambiguous values fail closed to OFF.
-    add("broker_writes_switch", True, f"AGENTIC_LIVE_ORDER_PLACEMENT={str(live_placement_enabled(environ=env)).lower()}")
-    ks = KillSwitch(base, policy=policy, environ=env).status()
-    add("kill_switch_readable", ks.reason not in {"kill_switch_state_unreadable", "kill_switch_state_invalid"}, "ENGAGED" if ks.engaged else "released")
-
-    home = _home(env)
-    store = oauth_store_path(environ=env)
-    add("HOME_set", bool(str(env.get("HOME") or "").strip() or home), str(home))
-    add("oauth_store_not_in_repo", not path_is_inside_repo(store, root=project_root()), str(store))
-    override = str(env.get("AGENTIC_READONLY_MCP_HOME") or "").strip()
-    if override:
-        add("oauth_store_uses_override", Path(override) in store.parents or store.parent == Path(override), str(store))
+        check("state_writable", True, str(root))
+    except OSError as exc:
+        check("state_writable", False, str(exc))
+    if db_path().exists():
+        conn = sqlite3.connect(f"file:{db_path()}?mode=ro", uri=True)
+        try:
+            check("database_integrity", conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok", str(db_path()))
+            opened = conn.execute("SELECT COUNT(*) FROM ledger WHERE kind = 'OPENING_BALANCE'").fetchone()[0] > 0
+            info("books_open", str(opened))
+        finally:
+            conn.close()
     else:
-        add(
-            "oauth_store_under_HOME",
-            str(store).startswith(str(home)),
-            str(store),
-        )
-    windows_like = "localappdata" in str(store).lower() or str(store).startswith("C:\\\\Users")
-    add("oauth_store_not_windows_path", not windows_like, str(store))
+        info("database", "not created yet (books open at migration)")
 
-    for rel in ("state", "logs", "reports"):
-        add(f"writable_{rel}", _writable(base / rel), str(base / rel))
-
-    cfg = load_ai_config()
-    cap = monthly_cap(cfg)
-    add("ai_monthly_cap_10", float(cap) == 10.0, str(cap))
-    add("live_discovery_wired", LIVE_DISCOVERY_WIRED is True, "LIVE_DISCOVERY_WIRED")
-
-    if not connect:
-        return checks
-
-    reset_readonly_broker_runtime()
-    bound = bootstrap_readonly_broker_runtime(transport=transport, environ=env, force=True)
-    add("mcp_initialize", bound.bound is True, bound.initialization_error or "bound")
-    if not bound.bound or bound.fetcher is None:
-        add("get_accounts", False, bound.initialization_error or "unbound")
-        add("agentic_account", False, "skipped")
-        add("get_portfolio", False, "skipped")
-        add("get_equity_positions", False, "skipped")
-        add("get_equity_quotes", False, "skipped")
-        add("snapshot_persists", False, "skipped")
-        add("dashboard_reads_snapshot", False, "skipped")
-        return checks
-
-    fetcher = bound.fetcher
-    for tool in WRITE_TOOLS:
-        add(f"no_write_method_{tool}", not callable(getattr(fetcher, tool, None)), tool)
-
-    expected = str(rules["account"]["account_number"])
+    st = oauth_session_status()
+    check("robinhood_oauth_session", st.present and (not st.expired or st.has_refresh_token), f"store {st.store_path}")
     try:
-        accounts = fetcher.get_accounts()
-        account = confirm_agentic_account(accounts, expected_number=expected, rules=rules)
-        add("get_accounts", True, expected)
-        add("agentic_account", account.get("account_number") == expected and account.get("agentic_allowed") is True, expected)
+        reader = connect_reader(account_number())
+        account = reader.confirm_account()
+        check("broker_account_confirmed", True, f"••••{account_number()[-4:]} {account.get('type', '')}")
+        facts = reader.portfolio()
+        check("broker_portfolio", facts.nav > 0, f"cash ${facts.cash}")
+        quote = reader.quotes(["VTI"]).get("VTI")
+        check("broker_quotes", quote is not None and quote.last is not None, f"VTI {quote and quote.last}")
+        check("robinhood_app_approval_off", not reader.trade_approval_required(), "agent orders are not held for in-app approval")
+        try:
+            reader.review({"symbol": "VTI"})
+            check("reader_cannot_write", False, "review was allowed on the read client")
+        except BrokerWriteRefused:
+            check("reader_cannot_write", True, "write tools refused on the read client")
     except Exception as exc:  # noqa: BLE001
-        add("get_accounts", False, str(exc))
-        add("agentic_account", False, str(exc))
-        return checks
+        check("broker_account_confirmed", False, f"{type(exc).__name__}: {exc}")
+    info("live_order_placement", str(live_writes_enabled()).lower())
+    from firm import backup
 
+    info("backup_key", "present" if backup.key_path(os.environ).exists() else "missing (run firm_admin.py backup-init)")
     try:
-        refresh = refresh_live_portfolio(fetcher, root=base, persist=persist)
-        add("get_portfolio", True, str(refresh.context.current_nav))
-        add("get_equity_positions", True, str(refresh.context.holdings_count))
-        add("get_equity_quotes", "get_equity_quotes" in refresh.tools_used, ",".join(refresh.tools_used))
-        add("snapshot_persists", persist and LivePortfolioStore(base).current_book() is not None, refresh.snapshot_id)
-        add("placement_disabled", refresh.placement_disabled is True, "true")
-        add("no_write_tools_called", not any(t in WRITE_TOOLS for t in refresh.tools_used), ",".join(refresh.tools_used))
+        with urllib.request.urlopen("http://127.0.0.1:3100/healthz", timeout=5) as res:
+            health = json.load(res)
+        check("service_healthz", health.get("agent") == "ONLINE", json.dumps({k: health.get(k) for k in ("books_open", "kill_switch", "live_writes_enabled")}))
     except Exception as exc:  # noqa: BLE001
-        add("get_portfolio", False, str(exc))
-        add("get_equity_positions", False, getattr(exc, "code", "") or str(exc))
-        add("get_equity_quotes", False, str(exc))
-        add("snapshot_persists", False, str(exc))
-        return checks
+        check("service_healthz", False, f"{type(exc).__name__}: {exc}")
 
-    prior = {k: os.environ.get(k) for k in ("AGENTIC_RUNTIME_MODE", "DASHBOARD_ENVIRONMENT")}
-    os.environ["AGENTIC_RUNTIME_MODE"] = "LIVE"
-    os.environ["DASHBOARD_ENVIRONMENT"] = "LIVE"
-    try:
-        view = dashboard_view(dashboard_state(base))
-        add("dashboard_reads_snapshot", view.get("live_data_unavailable") is False and view.get("nav") is not None, str(view.get("nav")))
-        add("dashboard_not_paper_fallback", view.get("nav") != 10000.0 and view.get("paper_environment") is False, str(view.get("nav")))
-    except Exception as exc:  # noqa: BLE001
-        add("dashboard_reads_snapshot", False, str(exc))
-        add("dashboard_not_paper_fallback", False, str(exc))
-    finally:
-        for key, value in prior.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
-    return checks
-
-
-def render(checks: list[Check]) -> str:
-    lines = ["Raspberry Pi production smoke (read-only, never places)", ""]
-    for item in checks:
-        mark = "PASS" if item.ok else "FAIL"
-        extra = f"  {item.detail}" if item.detail else ""
-        lines.append(f"{mark}  {item.name}{extra}")
-    failed = sum(1 for item in checks if not item.ok)
-    lines.append("")
-    lines.append(f"{'PASS' if failed == 0 else 'FAIL'}  {len(checks) - failed}/{len(checks)} checks")
-    return "\n".join(lines)
-
-
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Read-only Pi production smoke test. Never places.")
-    parser.add_argument("--no-connect", action="store_true", help="Skip MCP/OAuth live calls (local compile check)")
-    args = parser.parse_args(argv)
-    checks = run_smoke(connect=not args.no_connect)
-    print(render(checks))
-    return 0 if all(item.ok for item in checks) else 1
+    failed = sum(1 for line in lines if line.startswith("FAIL"))
+    total = sum(1 for line in lines if line.startswith(("PASS", "FAIL")))
+    print("Firm production smoke (read-only, never places)\n")
+    print("\n".join(lines))
+    print(f"\n{'PASS' if not failed else 'FAIL'}  {total - failed}/{total} checks")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

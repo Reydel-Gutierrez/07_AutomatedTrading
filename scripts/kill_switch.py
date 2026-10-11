@@ -1,51 +1,43 @@
-"""Emergency kill switch CLI (works even if the dashboard is down).
+"""Emergency stop from a shell on the Pi (as the service user).
 
-    python scripts/kill_switch.py status
-    python scripts/kill_switch.py engage --reason "something looks wrong"
-    python scripts/kill_switch.py release --by reydel --note "reconciled; safe to resume"
-
-Engaging stops every order submission (autonomous and human-approved) at the
-executor. Releasing is always a named human action. If AGENTIC_KILL_SWITCH is
-set in the service environment, only editing that environment releases it.
+  python scripts/kill_switch.py engage --reason "..."
+  python scripts/kill_switch.py release --note "..."
+  python scripts/kill_switch.py status
 """
 
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
+import os
 import sys
+from pathlib import Path
 
-from agentic_portfolio.autonomy.kill_switch import KillSwitch
-from agentic_portfolio.autonomy.policy import load_execution_policy, resolve_state_root
-from agentic_portfolio.paths import project_root
-from agentic_portfolio.runtime import get_active_runtime
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+
+from firm.controls import Controls  # noqa: E402
+from firm.db import Database  # noqa: E402
+from firm.events import EventLog  # noqa: E402
+from firm.paths import db_path  # noqa: E402
+from firm.settings import Settings  # noqa: E402
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    sub = parser.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("status")
-    engage = sub.add_parser("engage")
-    engage.add_argument("--reason", required=True)
-    engage.add_argument("--by", default="cli")
-    release = sub.add_parser("release")
-    release.add_argument("--by", required=True, help="name of the human releasing the switch")
-    release.add_argument("--note", required=True, help="why it is safe to resume")
-    args = parser.parse_args()
-
-    root = resolve_state_root(project_root(), runtime_mode=get_active_runtime())
-    ks = KillSwitch(root)
-    if args.cmd == "engage":
-        status = ks.engage(args.reason, by=args.by)
-    elif args.cmd == "release":
-        try:
-            status = ks.release(by=args.by, note=args.note)
-        except PermissionError as exc:
-            print(str(exc), file=sys.stderr)
-            return 2
-    else:
-        status = ks.status()
-    print(json.dumps({"state_root": str(root), "execution_mode": load_execution_policy().mode.value, "kill_switch": status.as_dict()}, indent=2))
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("action", choices=["engage", "release", "status"])
+    p.add_argument("--reason", default="engaged from the shell")
+    p.add_argument("--note", default="")
+    args = p.parse_args(argv)
+    db = Database(db_path())
+    settings = Settings(db)
+    controls = Controls(settings, EventLog(db))
+    who = os.environ.get("SUDO_USER") or getpass.getuser()
+    if args.action == "engage":
+        controls.engage(args.reason, by=who)
+    elif args.action == "release":
+        controls.release(by=who, note=args.note)
+    print(json.dumps(controls.kill_switch().__dict__, indent=2))
     return 0
 
 
