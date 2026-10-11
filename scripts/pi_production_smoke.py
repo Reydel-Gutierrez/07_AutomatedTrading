@@ -70,8 +70,17 @@ def main() -> int:
     st = oauth_session_status()
     check("robinhood_oauth_session", st.present and (not st.expired or st.has_refresh_token), f"store {st.store_path}")
     try:
-        reader = connect_reader(account_number())
-        account = reader.confirm_account()
+        import time
+
+        for attempt in range(3):  # tolerate a transient network blip (TLS/DNS timeouts)
+            try:
+                reader = connect_reader(account_number())
+                account = reader.confirm_account()
+                break
+            except Exception:  # noqa: BLE001
+                if attempt == 2:
+                    raise
+                time.sleep(10)
         check("broker_account_confirmed", True, f"••••{account_number()[-4:]} {account.get('type', '')}")
         facts = reader.portfolio()
         check("broker_portfolio", facts.nav > 0, f"cash ${facts.cash}")

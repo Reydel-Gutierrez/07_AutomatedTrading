@@ -37,6 +37,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -211,6 +212,10 @@ def deploy(args: argparse.Namespace) -> int:
         pi.remote("activate", sha, json.dumps(meta))
         pi.remote("verify", sha)
         after = smoke(pi, "after")
+        if (args.require_smoke_pass and any(not ok for ok in after.values())) or smoke_regressions(baseline, after):
+            log("smoke not clean; re-running once in 30s to rule out a transient network failure")
+            time.sleep(30)
+            after = smoke(pi, "after-retry")
         if args.require_smoke_pass:
             # A release that replaces the smoke test itself (e.g. the legacy → firm
             # cutover) cannot be compared check-by-check; every new check must pass.
