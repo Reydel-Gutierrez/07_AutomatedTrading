@@ -4,7 +4,8 @@
 // Static architecture is memoized; only the people and their desks re-render.
 
 import { memo, type ReactNode } from "react";
-import { Body, Chair, Hands, LOOKS, type Look, Walker, Zzz } from "./Character";
+import { Body, Chair, ChatDots, Hands, LOOKS, type Look, Walker, Zzz } from "./Character";
+import type { Life } from "./life";
 import { poseFor } from "./pose";
 import { type AgentState, type Mood, STATE_META } from "./state";
 
@@ -320,12 +321,27 @@ const Shell = memo(function Shell() {
   );
 });
 
+function CoffeeStation({ x }: { x: number }) {
+  const [mx, my] = P(x + 0.15, G_Y0 + 0.35, 1.5);
+  return (
+    <g>
+      <Box x={x - 0.7} y={G_Y0} w={1.4} d={0.8} z={0} h={1.5} top="#4a3a2e" left="#3a2d24" right="#2e241d" />
+      <g transform={`translate(${mx} ${my})`}>
+        <rect x={-7} y={-16} width={14} height={16} rx={2} fill="#1f2430" />
+        <rect x={-4} y={-13} width={8} height={4} rx={1} fill="#f59e0b" opacity=".7" />
+        <rect x={-2.5} y={-6} width={5} height={5} rx={1} fill="#ece6da" />
+      </g>
+    </g>
+  );
+}
+
 function RoomDecor({ id, off }: { id: "tim" | "alex" | "max"; off: boolean }) {
   const r = ROOMS[id];
   const mid = (r.x0 + r.x1) / 2;
   return (
     <g className={off ? "fs-off" : undefined}>
       <Glow x={mid} y={15.5} z={0} r={off ? 3 : 4.6} />
+      <CoffeeStation x={{ tim: 6.5, alex: 18.5, max: 30.5 }[id]} />
       {id === "tim" && (
         <g>
           <Box x={1} y={G_Y0} w={4.4} d={0.9} z={0} h={4.6} top="#3a2a20" left="#2e2119" right="#241a14" />
@@ -402,7 +418,7 @@ function Mug({ x, y, z, steam }: { x: number; y: number; z: number; steam: boole
 }
 
 /** One person at their desk. Clickable; keyboard reachable. */
-export function Workstation({ id, state, mood, selected, onSelect, pending = 0, phase }: { id: AgentId; state: AgentState; mood: Mood; selected: boolean; onSelect: () => void; pending?: number; phase?: number }) {
+export function Workstation({ id, state, mood, selected, onSelect, pending = 0, phase, away = false, visited = false }: { id: AgentId; state: AgentState; mood: Mood; selected: boolean; onSelect: () => void; pending?: number; phase?: number; away?: boolean; visited?: boolean }) {
   const r = ROOMS[id];
   const { x, y, w, d } = r.desk;
   const z = r.z;
@@ -413,12 +429,9 @@ export function Workstation({ id, state, mood, selected, onSelect, pending = 0, 
   const [ax, ay] = P(x + w / 2, y, z + DESK_H);
   const s = id === "cio" ? 0.78 : 0.74;
   const meta = STATE_META[k];
-  const resting = mood.kind === "resting" && !off;
   const asleep = mood.kind === "asleep" && !off;
   const feeling = mood.kind === "stressed" ? "stressed" : mood.kind === "pleased" ? "pleased" : "calm";
-  const gaze = meta.working ? "monitor" : mood.kind === "pleased" ? "viewer" : "wander";
-  const [wx, wy] = P(x - 0.6, y + d + 0.9, z);
-  const ws = s * 0.9;
+  const gaze = meta.working ? "monitor" : mood.kind === "pleased" || visited ? "viewer" : "wander";
   const wood = id === "cio" ? { top: "#6b4430", left: "#4a2f22", right: "#3b2519" } : id === "max" ? { top: "#3d4452", left: "#2a2f3a", right: "#222631" } : { top: "#5a4232", left: "#3e2c22", right: "#33241b" };
   return (
     <g
@@ -443,12 +456,12 @@ export function Workstation({ id, state, mood, selected, onSelect, pending = 0, 
         <g transform={`translate(${ax} ${ay}) scale(${s})`}>
           <Chair look={look} />
         </g>
-        <g className={resting ? "fs-seat" : undefined}>
+        {!away && (
           <g transform={`translate(${ax} ${ay}) scale(${s})`}>
             <rect x={-34} y={-2} width={68} height={22} fill={look.top} />
             <Body look={look} pose={asleep ? "asleep" : pose} working={meta.working} feeling={feeling} gaze={gaze} chair={false} />
           </g>
-        </g>
+        )}
         <Box x={x} y={y} z={z} w={w} d={d} h={DESK_H} top={wood.top} left={wood.left} right={wood.right} />
         {id !== "max" && <Mug x={x + 0.9} y={y + 1.2} z={z + DESK_H} steam={!off} />}
         {id === "cio" && (
@@ -468,19 +481,13 @@ export function Workstation({ id, state, mood, selected, onSelect, pending = 0, 
             })()}
           </g>
         )}
-        <g className={resting ? "fs-seat" : undefined}>
+        {!away && (
           <g transform={`translate(${ax} ${ay}) scale(${s})`}>
             <Hands look={look} pose={pose} />
           </g>
-        </g>
-        {resting && (
-          <g transform={`translate(${wx} ${wy}) scale(${ws})`}>
-            <g className="fs-walker" style={{ ["--wx" as string]: `${70 / ws}px`, ["--wy" as string]: `${35 / ws}px` }}>
-              <Walker look={look} />
-            </g>
-          </g>
         )}
-        {asleep && <Zzz x={ax + 16} y={ay - 92 * s} size={7} />}
+        {asleep && !away && <Zzz x={ax + 16} y={ay - 92 * s} size={7} />}
+        {visited && !away && <ChatDots x={ax + 22} y={ay - 100 * s} />}
         <Monitor x={x + w - 1.85} y={y + 0.3} z={z + DESK_H} w={1.7} h={1.15} k={k} accent={look.accent} off={off} />
         {id === "max" && <Monitor x={x + 0.15} y={y + 0.3} z={z + DESK_H} w={1.7} h={1.15} k={k} accent={look.accent} off={off} />}
       </g>
@@ -541,6 +548,30 @@ export const Foreground = memo(function Foreground() {
     </g>
   );
 });
+
+/** People away from their desks (office life). Drawn after the offices so they walk in front of furniture. */
+export function Strollers({ life }: { life: Record<AgentId, Life | null> }) {
+  return (
+    <g pointerEvents="none">
+      {(Object.keys(life) as AgentId[]).map((id) => {
+        const l = life[id];
+        if (!l) return null;
+        const s = (id === "cio" ? 0.78 : 0.74) * 0.9;
+        const look = LOOKS[id];
+        return (
+          <g key={id} style={{ transform: `translate(${l.pos[0]}px, ${l.pos[1]}px)`, transition: `transform ${l.dur}s linear, opacity .6s`, opacity: l.hidden ? 0 : 1 }}>
+            <g transform={`scale(${s})`}>
+              <g style={{ transform: `scaleX(${l.facing})` }}>
+                <Walker look={look} walking={l.walking} holding={l.holding} />
+              </g>
+            </g>
+            {l.chatWith && !l.hidden && <ChatDots x={18} y={-118 * s} />}
+          </g>
+        );
+      })}
+    </g>
+  );
+}
 
 export function StateGradients() {
   return (

@@ -6,8 +6,9 @@ import { Donut } from "../components/charts";
 import { AGENTS, Avatar, Badge, Empty } from "../components/ui";
 import { usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
+import { useOfficeLife } from "../space/life";
 import { Office } from "../space/Office";
-import { Foreground, Partition, RoomDecor, Shell, StateGradients, VB, Workstation, headPoint, type AgentId } from "../space/Building";
+import { Foreground, Partition, RoomDecor, Shell, StateGradients, Strollers, VB, Workstation, headPoint, type AgentId } from "../space/Building";
 import { type AgentState, CIO_TYPES, MOOD_LABEL, type Mood, PHASE, type Space, STATE_META, cioState, etTime, managerState, moodOf } from "../space/state";
 
 const IDS: AgentId[] = ["cio", "tim", "alex", "max"];
@@ -83,6 +84,9 @@ export default function FirmSpace() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const life = useOfficeLife(moods, !office && visible);
+  const visitedBy = (id: AgentId) => Object.values(life).some((l) => l?.chatWith === id && !l.hidden);
+
   if (error) return <div className="p-6"><Empty>{error.message}</Empty></div>;
   if (!space || !states || !moods) return <div className="p-6 text-slate-500">Opening the building…</div>;
   const unbuilt = (id: AgentId) => (space.agents.find((a) => a.id === id)?.implemented ? undefined : PHASE[id]);
@@ -97,15 +101,16 @@ export default function FirmSpace() {
             <g onClick={() => setSelected(null)}>
               <Shell />
             </g>
-            <Workstation id="cio" state={states.cio} mood={moods.cio} selected={selected === "cio"} onSelect={pick("cio")} pending={space.cio.pending_proposals.length} />
+            <Workstation id="cio" state={states.cio} mood={moods.cio} away={!!life.cio} visited={visitedBy("cio")} selected={selected === "cio"} onSelect={pick("cio")} pending={space.cio.pending_proposals.length} />
             <RoomDecor id="tim" off={states.tim.key === "inactive"} />
-            <Workstation id="tim" state={states.tim} mood={moods.tim} selected={selected === "tim"} onSelect={pick("tim")} />
+            <Workstation id="tim" state={states.tim} mood={moods.tim} away={!!life.tim} visited={visitedBy("tim")} selected={selected === "tim"} onSelect={pick("tim")} />
             <Partition x={12} />
             <RoomDecor id="alex" off={states.alex.key === "inactive"} />
-            <Workstation id="alex" state={states.alex} mood={moods.alex} selected={selected === "alex"} onSelect={pick("alex")} phase={unbuilt("alex")} />
+            <Workstation id="alex" state={states.alex} mood={moods.alex} away={!!life.alex} visited={visitedBy("alex")} selected={selected === "alex"} onSelect={pick("alex")} phase={unbuilt("alex")} />
             <Partition x={24} />
             <RoomDecor id="max" off={states.max.key === "inactive"} />
-            <Workstation id="max" state={states.max} mood={moods.max} selected={selected === "max"} onSelect={pick("max")} phase={unbuilt("max")} />
+            <Workstation id="max" state={states.max} mood={moods.max} away={!!life.max} visited={visitedBy("max")} selected={selected === "max"} onSelect={pick("max")} phase={unbuilt("max")} />
+            <Strollers life={life} />
             <Foreground />
           </svg>
           {!office && IDS.map((id) => (

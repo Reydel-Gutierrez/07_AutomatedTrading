@@ -13,7 +13,7 @@ import { useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, until, when } from "../format";
 import { ChatThread, MemoryPanel, ProposalCard, useCioChat } from "../pages/CIO";
 import { DecisionLog, MandateCard, ModeControl, Orders, Positions, ResearchDesk, RunNow } from "../pages/Manager";
-import { Body, Chair, Hands, LOOKS, Walker, Zzz } from "./Character";
+import { Body, Chair, Hands, LOOKS, Zzz } from "./Character";
 import { poseFor } from "./pose";
 import { type AgentState, MOOD_LABEL, type Mood, type Space, STATE_META } from "./state";
 
@@ -44,7 +44,6 @@ function Room({ id, state, mood, shifted = false }: { id: string; state: AgentSt
   const meta = STATE_META[state.key];
   const [top, low, wood] = WALL[id] ?? WALL.tim;
   const off = state.key === "inactive";
-  const resting = mood.kind === "resting" && !off;
   const asleep = mood.kind === "asleep" && !off;
   const stressed = mood.kind === "stressed";
   const feeling = stressed ? "stressed" : mood.kind === "pleased" ? "pleased" : "calm";
@@ -177,11 +176,9 @@ function Room({ id, state, mood, shifted = false }: { id: string; state: AgentSt
       <g transform={`translate(${cx} ${deskY}) scale(${s})`} className={off ? "fs-off" : undefined}>
         <Chair look={look} />
       </g>
-      <g className={resting ? "fs-seat" : undefined}>
-        <g transform={`translate(${cx} ${deskY}) scale(${s})`} className={off ? "fs-off" : undefined}>
-          <rect x={-34} y={-2} width={68} height={12} fill={look.top} />
-          <Body look={look} pose={asleep ? "asleep" : pose} working={meta.working} feeling={feeling} gaze={gaze} chair={false} />
-        </g>
+      <g transform={`translate(${cx} ${deskY}) scale(${s})`} className={off ? "fs-off" : undefined}>
+        <rect x={-34} y={-2} width={68} height={12} fill={look.top} />
+        <Body look={look} pose={asleep ? "asleep" : pose} working={meta.working} feeling={feeling} gaze={gaze} chair={false} />
       </g>
       <rect x={cx - 450} y={deskY - 10} width="900" height="34" rx="4" fill={id === "max" ? "#3d4452" : "#6b4430"} />
       <rect x={cx - 430} y={deskY + 24} width="860" height="156" fill={id === "max" ? "#2a2f3a" : wood} />
@@ -207,18 +204,9 @@ function Room({ id, state, mood, shifted = false }: { id: string; state: AgentSt
           {!off && <path className="fs-steam" d="M-2 -52 q-8 -10 0 -20 q8 -10 0 -20" stroke="#e2e8f0" strokeWidth="3" fill="none" opacity=".45" />}
         </g>
       )}
-      <g className={resting ? "fs-seat" : undefined}>
-        <g transform={`translate(${cx} ${deskY}) scale(${s})`} className={off ? "fs-off" : undefined}>
-          <Hands look={look} pose={pose} />
-        </g>
+      <g transform={`translate(${cx} ${deskY}) scale(${s})`} className={off ? "fs-off" : undefined}>
+        <Hands look={look} pose={pose} />
       </g>
-      {resting && (
-        <g transform={`translate(${cx - 640} 900) scale(2.6)`}>
-          <g className="fs-walker" style={{ ["--wx" as string]: `${1050 / 2.6}px`, ["--wy" as string]: "0px" }}>
-            <Walker look={look} />
-          </g>
-        </g>
-      )}
       {asleep && <Zzz x={cx + 60} y={deskY - 300} size={28} />}
     </svg>
   );

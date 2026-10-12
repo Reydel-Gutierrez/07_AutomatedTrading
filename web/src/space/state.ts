@@ -332,8 +332,8 @@ export function moodOf(state: AgentState, a: SpaceAgent | null, marketOpen: bool
     if (m.marks >= 5 && m.excess !== null && m.excess >= 0.02) return { kind: "pleased", reason: `Ahead of the S&P 500 by ${fmt(m.excess)}` };
   }
   if (state.key === "completed") return { kind: "pleased", reason: state.headline };
-  if (state.key === "inactive" && a && !a.implemented) return { kind: "calm", reason: null };
-  if (["idle", "waiting", "paused", "inactive"].includes(state.key)) {
+  if (state.key === "inactive") return { kind: "calm", reason: null }; // switched off: stays put
+  if (["idle", "waiting", "paused"].includes(state.key)) {
     return marketOpen ? { kind: "resting", reason: "Nothing to do until his next decision" } : { kind: "asleep", reason: "Market closed" };
   }
   return { kind: "calm", reason: null };
