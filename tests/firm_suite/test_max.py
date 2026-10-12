@@ -112,3 +112,14 @@ def test_phase4_mandate_keeps_the_approved_sleeve_stops_and_trades_in_simulation
     assert out.ran, out.summary
     fills = firm.events.recent(manager_id="max", types=["ORDER_FILLED"])
     assert [e.symbol for e in fills] == ["UPDIP"] and "[SIM] BUY" in fills[0].summary
+
+
+def test_first_run_fetches_missing_history(firm):
+    _, m = firm.registry.mandate("max")
+    firm.registry.update_mandate("max", {**m, "universe": SMALL["universe"]}, by="test", note="small universe")
+    calls = []
+    firm.market.refresh_bars = lambda syms, days=400: calls.append(sorted(syms)) or 0
+    Max().inputs(firm, {**m, "universe": SMALL["universe"]})
+    assert calls == [sorted(SMALL["universe"])]
+    r = Max().run(ctx(CLOSE_ET, closes={"UPFLAT": UPFLAT}))
+    assert not r.intents and r.detail["missing_history"] == ["DOWN", "UPDIP"] and "no price history yet" in r.summary

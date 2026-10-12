@@ -144,8 +144,15 @@ class Max:
             p["qty"] += lot.open_quantity
             p["cost"] += lot.open_cost
             p["opened_at"] = min(p["opened_at"], lot.opened_at)
+        universe = self.symbols(mandate)
+        need = int(mandate.get("trend_sma_days", 200)) + 30
+        closes = firm.market.recent_closes(universe, sessions=need)
+        if sum(1 for s in universe if len(closes.get(s, [])) >= int(mandate.get("trend_sma_days", 200))) < len(universe) * 0.8:
+            # First run (or new names): fetch daily history once rather than trade on a partial picture.
+            firm.market.refresh_bars(universe)
+            closes = firm.market.recent_closes(universe, sessions=need)
         return {
-            "closes": firm.market.recent_closes(self.symbols(mandate), sessions=int(mandate.get("trend_sma_days", 200)) + 30),
+            "closes": closes,
             "last_bar_dates": {s: d for s, d in ((s, firm.market.last_bar_date(s)) for s in self.symbols(mandate)) if d},
             "positions": {s: {"avg_cost": float(p["cost"] / p["qty"]) if p["qty"] > 0 else 0.0, "opened_at": p["opened_at"]} for s, p in positions.items()},
         }
@@ -219,9 +226,13 @@ class Max:
             if xs[-1] > slow and r < float(m.get("rsi_entry_below", 10)):
                 candidates.append((r, sym, xs[-1], slow))
         candidates.sort()
+        lacking = sorted(s for s in (m.get("universe") or []) if len(stored.get(s) or []) < int(m.get("trend_sma_days", 200)))
+        detail["missing_history"] = lacking
         detail["candidates"] = [{"symbol": s, "rsi": round(r, 1), "price": round(p, 2), "sma200": round(sl, 2)} for r, s, p, sl in candidates[:8]]
         if slots <= 0 or not candidates:
             why = "all position slots are in use" if slots <= 0 else "no oversold dips in uptrends today"
+            if lacking:
+                why += f" (no price history yet for {', '.join(lacking[:6])}{'…' if len(lacking) > 6 else ''})"
             return RunResult(f"Holding {', '.join(sorted(held)) or 'cash'}: {why}.", detail=detail, activity="holding")
         size = cents(nav * D(m.get("position_pct", 0.25)))
         cash = view.cash
