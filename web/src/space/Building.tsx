@@ -4,9 +4,9 @@
 // Static architecture is memoized; only the people and their desks re-render.
 
 import { memo, type ReactNode } from "react";
-import { Body, Hands, LOOKS, type Look } from "./Character";
+import { Body, Chair, Hands, LOOKS, type Look, Walker, Zzz } from "./Character";
 import { poseFor } from "./pose";
-import { type AgentState, STATE_META } from "./state";
+import { type AgentState, type Mood, STATE_META } from "./state";
 
 export const K = 20;
 const OX = 520;
@@ -402,7 +402,7 @@ function Mug({ x, y, z, steam }: { x: number; y: number; z: number; steam: boole
 }
 
 /** One person at their desk. Clickable; keyboard reachable. */
-export function Workstation({ id, state, selected, onSelect, pending = 0, phase }: { id: AgentId; state: AgentState; selected: boolean; onSelect: () => void; pending?: number; phase?: number }) {
+export function Workstation({ id, state, mood, selected, onSelect, pending = 0, phase }: { id: AgentId; state: AgentState; mood: Mood; selected: boolean; onSelect: () => void; pending?: number; phase?: number }) {
   const r = ROOMS[id];
   const { x, y, w, d } = r.desk;
   const z = r.z;
@@ -413,6 +413,12 @@ export function Workstation({ id, state, selected, onSelect, pending = 0, phase 
   const [ax, ay] = P(x + w / 2, y, z + DESK_H);
   const s = id === "cio" ? 0.78 : 0.74;
   const meta = STATE_META[k];
+  const resting = mood.kind === "resting" && !off;
+  const asleep = mood.kind === "asleep" && !off;
+  const feeling = mood.kind === "stressed" ? "stressed" : mood.kind === "pleased" ? "pleased" : "calm";
+  const gaze = meta.working ? "monitor" : mood.kind === "pleased" ? "viewer" : "wander";
+  const [wx, wy] = P(x - 0.6, y + d + 0.9, z);
+  const ws = s * 0.9;
   const wood = id === "cio" ? { top: "#6b4430", left: "#4a2f22", right: "#3b2519" } : id === "max" ? { top: "#3d4452", left: "#2a2f3a", right: "#222631" } : { top: "#5a4232", left: "#3e2c22", right: "#33241b" };
   return (
     <g
@@ -427,10 +433,21 @@ export function Workstation({ id, state, selected, onSelect, pending = 0, phase 
       <Poly p={floorQ(x - 1.4, y - 2.6, x + w + 1.2, y + d + 1.4, z)} fill="transparent" />
       <ellipse cx={ax} cy={P(x + w / 2, y + d / 2, z)[1]} rx={w * K * 1.05} ry={w * K * 0.5} fill="none" stroke={selected ? meta.color : "transparent"} strokeWidth="2" strokeDasharray="5 5" className={selected ? "fs-flow" : "fs-ring"} />
       {meta.working && <Glow x={x + w / 2} y={y + d / 2} z={z} r={2.6} color={`url(#fs-state-${k})`} className="fs-pulse" />}
+      {mood.kind === "stressed" && (
+        <g>
+          <Glow x={x + w / 2} y={y + d / 2} z={z} r={5} color="url(#fs-state-error)" className="fs-stress" />
+          <Glow x={x + w / 2} y={y + d / 2} z={z} r={2.4} color="url(#fs-state-error)" className="fs-stress" />
+        </g>
+      )}
       <g className={off ? "fs-off" : undefined}>
         <g transform={`translate(${ax} ${ay}) scale(${s})`}>
-          <rect x={-34} y={-2} width={68} height={22} fill={look.top} />
-          <Body look={look} pose={pose} working={meta.working} />
+          <Chair look={look} />
+        </g>
+        <g className={resting ? "fs-seat" : undefined}>
+          <g transform={`translate(${ax} ${ay}) scale(${s})`}>
+            <rect x={-34} y={-2} width={68} height={22} fill={look.top} />
+            <Body look={look} pose={asleep ? "asleep" : pose} working={meta.working} feeling={feeling} gaze={gaze} chair={false} />
+          </g>
         </g>
         <Box x={x} y={y} z={z} w={w} d={d} h={DESK_H} top={wood.top} left={wood.left} right={wood.right} />
         {id !== "max" && <Mug x={x + 0.9} y={y + 1.2} z={z + DESK_H} steam={!off} />}
@@ -451,9 +468,19 @@ export function Workstation({ id, state, selected, onSelect, pending = 0, phase 
             })()}
           </g>
         )}
-        <g transform={`translate(${ax} ${ay}) scale(${s})`}>
-          <Hands look={look} pose={pose} />
+        <g className={resting ? "fs-seat" : undefined}>
+          <g transform={`translate(${ax} ${ay}) scale(${s})`}>
+            <Hands look={look} pose={pose} />
+          </g>
         </g>
+        {resting && (
+          <g transform={`translate(${wx} ${wy}) scale(${ws})`}>
+            <g className="fs-walker" style={{ ["--wx" as string]: `${70 / ws}px`, ["--wy" as string]: `${35 / ws}px` }}>
+              <Walker look={look} />
+            </g>
+          </g>
+        )}
+        {asleep && <Zzz x={ax + 16} y={ay - 92 * s} size={7} />}
         <Monitor x={x + w - 1.85} y={y + 0.3} z={z + DESK_H} w={1.7} h={1.15} k={k} accent={look.accent} off={off} />
         {id === "max" && <Monitor x={x + 0.15} y={y + 0.3} z={z + DESK_H} w={1.7} h={1.15} k={k} accent={look.accent} off={off} />}
       </g>

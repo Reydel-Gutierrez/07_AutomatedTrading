@@ -32,6 +32,7 @@ export type SpaceAgent = {
   open_orders: SpaceOrder[];
   recent: FirmEvent[];
   research?: { running: boolean; symbol: string | null; since: string | null } | null;
+  mood?: { book: string; marks: number; twr: number | null; excess: number | null; drawdown: number; day_change: number | null };
 };
 
 export type Space = {
@@ -295,4 +296,45 @@ export function cioState(c: Space["cio"], live: FirmEvent[], now: number): Agent
     return { ...base, key: "waiting", headline: `Waiting on your decision: ${plural(n, "proposal")}`, sub: `#${c.pending_proposals[0].id} ${c.pending_proposals[0].title}`.slice(0, 70), detail: c.pending_proposals.map((p) => `#${p.id} ${p.title}`).join(" · "), at: c.pending_proposals[0].created_at, source: "Proposals" };
   }
   return { ...base, key: "idle", headline: "Ready for your questions", sub: "No proposals pending", detail: "Ask me anything about the firm. I work only when you ask, and I show the records behind every answer.", source: "CIO office" };
+}
+
+// -- moods ------------------------------------------------------------------------------------
+// How someone looks is read from the same records as what they're doing: performance vs the
+// S&P 500, drawdown, today's move, safeguards, errors. Resting and sleeping are what idle
+// people do when nothing is happening; they never stand in for activity.
+
+export type MoodKind = "stressed" | "pleased" | "focused" | "calm" | "resting" | "asleep";
+export type Mood = { kind: MoodKind; reason: string | null };
+export const MOOD_LABEL: Record<MoodKind, string> = {
+  stressed: "Under pressure",
+  pleased: "In good spirits",
+  focused: "Focused",
+  calm: "Calm",
+  resting: "Stretching his legs",
+  asleep: "Resting",
+};
+
+const fmt = (x: number) => `${(Math.abs(x) * 100).toFixed(1)}%`;
+
+export function moodOf(state: AgentState, a: SpaceAgent | null, marketOpen: boolean, now: number): Mood {
+  if (state.key === "error") return { kind: "stressed", reason: state.headline };
+  const m = a?.mood;
+  const paused = a?.recent.find((e) => e.type === "SLEEVE_PAUSED" && age(e.ts, now) < 24 * 60 * MIN);
+  if (paused) return { kind: "stressed", reason: "His safeguard paused new buys" };
+  if (m) {
+    if (m.day_change !== null && m.day_change <= -0.015) return { kind: "stressed", reason: `Down ${fmt(m.day_change)} today` };
+    if (m.drawdown >= 0.05) return { kind: "stressed", reason: `${fmt(m.drawdown)} below his peak` };
+    if (m.marks >= 5 && m.excess !== null && m.excess <= -0.03) return { kind: "stressed", reason: `Trailing the S&P 500 by ${fmt(m.excess)}` };
+  }
+  if (STATE_META[state.key].working) return { kind: "focused", reason: null };
+  if (m) {
+    if (m.day_change !== null && m.day_change >= 0.01) return { kind: "pleased", reason: `Up ${fmt(m.day_change)} today` };
+    if (m.marks >= 5 && m.excess !== null && m.excess >= 0.02) return { kind: "pleased", reason: `Ahead of the S&P 500 by ${fmt(m.excess)}` };
+  }
+  if (state.key === "completed") return { kind: "pleased", reason: state.headline };
+  if (state.key === "inactive" && a && !a.implemented) return { kind: "calm", reason: null };
+  if (["idle", "waiting", "paused", "inactive"].includes(state.key)) {
+    return marketOpen ? { kind: "resting", reason: "Nothing to do until his next decision" } : { kind: "asleep", reason: "Market closed" };
+  }
+  return { kind: "calm", reason: null };
 }

@@ -335,7 +335,7 @@ class Ledger:
 
     def net_capital(self, book: str, bucket: str, *, since_id: int = 0, until_id: int | None = None) -> Decimal:
         """Capital moved into a bucket (allocations, external flows) — the TWR cash-flow term."""
-        sql = "SELECT cash FROM ledger WHERE book = ? AND bucket = ? AND kind IN ('OPENING_BALANCE','EXTERNAL_IN','EXTERNAL_OUT','ALLOCATE','DEALLOCATE') AND id > ?"
+        sql = "SELECT cash FROM ledger WHERE book = ? AND bucket = ? AND kind IN ('OPENING_BALANCE','EXTERNAL_IN','EXTERNAL_OUT','ALLOCATE','DEALLOCATE','CIO_GRANT','CIO_RECALL') AND id > ?"
         params: list = [book, bucket, since_id]
         if until_id is not None:
             sql += " AND id <= ?"

@@ -199,6 +199,30 @@ SPACE_EVENTS = (*ACTIVITY_EVENTS, "ORDER_UNKNOWN", "ORDER_RECOVERED", "ORDER_NOT
 CIO_EVENTS = ("PROPOSAL_CREATED", "PROPOSAL_APPLIED", "PROPOSAL_REJECTED", "PROPOSAL_FAILED", "CIO_MEMORY", "AI_PROVIDER_UNAVAILABLE")
 
 
+def _mood(firm: Firm, manager_id: str, book: str) -> dict[str, Any]:
+    """Numbers behind a manager's mood: return vs S&P, drawdown, and today's move (cached quotes only)."""
+    marks = firm.performance.marks(book, manager_id)
+    twr = firm.performance.twr(marks)
+    bench = firm.performance.benchmark_return(marks)
+    day = None
+    holdings = firm.ledger.holdings(book, manager_id).get(manager_id, {})
+    if marks and marks[-1].nav > 0:
+        q = firm.market.cached_quotes(sorted(holdings))
+        if all(s in q and q[s].mid for s in holdings):
+            nav = firm.ledger.cash(book, manager_id) + sum((qty * q[s].mid for s, qty in holdings.items()), ZERO)  # type: ignore[operator]
+            since = int((firm.settings.get(f"marks_watermark_{book}") or {}).get("ledger_id") or 0)
+            flows = firm.ledger.net_capital(book, manager_id, since_id=since)
+            day = float((nav - flows) / marks[-1].nav - 1)
+    return {
+        "book": book,
+        "marks": len(marks),
+        "twr": float(twr) if twr is not None else None,
+        "excess": float(twr - bench) if twr is not None and bench is not None else None,
+        "drawdown": firm.performance.drawdown(marks),
+        "day_change": day,
+    }
+
+
 def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None, researching: dict[str, Any] | None = None) -> dict[str, Any]:
     """Who is doing what right now, for the Firm Space. Cheap: no quotes, no performance math.
 
@@ -223,6 +247,7 @@ def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None, re
             "status": m.status, "activity": m.status_detail, "implemented": m.id in firm.managers,
             "running": running, "run_started": job.get("last_started") if running else None,
             "last_run": last, "next_run": _next_run(firm, m.id), "open_orders": open_orders,
+            "mood": _mood(firm, m.id, m.book or "SIM"),
             "research": ({"running": bool((jobs.get(f"research:{m.id}") or {}).get("running")), "symbol": (researching or {}).get("symbol"), "since": (researching or {}).get("since")} if f"research:{m.id}" in jobs else None),
             "recent": [e.as_dict() for e in firm.events.recent(manager_id=m.id, types=list(SPACE_EVENTS), limit=8)],
         })

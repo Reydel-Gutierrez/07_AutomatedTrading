@@ -8,7 +8,7 @@ import { usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
 import { Office } from "../space/Office";
 import { Foreground, Partition, RoomDecor, Shell, StateGradients, VB, Workstation, headPoint, type AgentId } from "../space/Building";
-import { type AgentState, CIO_TYPES, PHASE, type Space, STATE_META, cioState, etTime, managerState } from "../space/state";
+import { type AgentState, CIO_TYPES, MOOD_LABEL, type Mood, PHASE, type Space, STATE_META, cioState, etTime, managerState, moodOf } from "../space/state";
 
 const IDS: AgentId[] = ["cio", "tim", "alex", "max"];
 const NAMES: Record<AgentId, string> = { cio: "Graham", tim: "Tim", alex: "Alex", max: "Max" };
@@ -69,6 +69,13 @@ export default function FirmSpace() {
     for (const a of space.agents) out[a.id as AgentId] = managerState(a, events, now);
     return out;
   }, [space, events, now]);
+  const moods = useMemo(() => {
+    if (!space || !states) return null;
+    const open = !!space.market.regular_hours_open;
+    const out = { cio: moodOf(states.cio, null, open, now) } as Record<AgentId, Mood>;
+    for (const a of space.agents) out[a.id as AgentId] = moodOf(states[a.id as AgentId], a, open, now);
+    return out;
+  }, [space, states, now]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSelected(null);
@@ -77,7 +84,7 @@ export default function FirmSpace() {
   }, []);
 
   if (error) return <div className="p-6"><Empty>{error.message}</Empty></div>;
-  if (!space || !states) return <div className="p-6 text-slate-500">Opening the building…</div>;
+  if (!space || !states || !moods) return <div className="p-6 text-slate-500">Opening the building…</div>;
   const unbuilt = (id: AgentId) => (space.agents.find((a) => a.id === id)?.implemented ? undefined : PHASE[id]);
   const pick = (id: AgentId) => () => setSelected((cur) => (cur === id ? null : id));
 
@@ -85,31 +92,31 @@ export default function FirmSpace() {
     <div className="grid bg-[#0a0e19] lg:grid-cols-[minmax(0,1fr)_360px]" style={{ ["--fs-h" as string]: `calc(100dvh - ${header}px)` }}>
       <div className="relative flex items-center justify-center overflow-hidden bg-gradient-to-b from-[#070b17] via-[#141a2e] to-[#14201a] lg:h-[var(--fs-h)]">
         <div className="relative w-full" style={{ aspectRatio: `${VB.w} / ${VB.h}`, maxWidth: `calc(var(--fs-h) * ${(VB.w / VB.h).toFixed(4)})` }}>
-          <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className="fs-building absolute inset-0 h-full w-full" role="group" aria-label="The 537 Firm building">
+          <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className={`fs-building fs-scene absolute inset-0 h-full w-full ${office ? "fs-paused" : ""}`} role="group" aria-label="The 537 Firm building">
             <StateGradients />
             <g onClick={() => setSelected(null)}>
               <Shell />
             </g>
-            <Workstation id="cio" state={states.cio} selected={selected === "cio"} onSelect={pick("cio")} pending={space.cio.pending_proposals.length} />
+            <Workstation id="cio" state={states.cio} mood={moods.cio} selected={selected === "cio"} onSelect={pick("cio")} pending={space.cio.pending_proposals.length} />
             <RoomDecor id="tim" off={states.tim.key === "inactive"} />
-            <Workstation id="tim" state={states.tim} selected={selected === "tim"} onSelect={pick("tim")} />
+            <Workstation id="tim" state={states.tim} mood={moods.tim} selected={selected === "tim"} onSelect={pick("tim")} />
             <Partition x={12} />
             <RoomDecor id="alex" off={states.alex.key === "inactive"} />
-            <Workstation id="alex" state={states.alex} selected={selected === "alex"} onSelect={pick("alex")} phase={unbuilt("alex")} />
+            <Workstation id="alex" state={states.alex} mood={moods.alex} selected={selected === "alex"} onSelect={pick("alex")} phase={unbuilt("alex")} />
             <Partition x={24} />
             <RoomDecor id="max" off={states.max.key === "inactive"} />
-            <Workstation id="max" state={states.max} selected={selected === "max"} onSelect={pick("max")} phase={unbuilt("max")} />
+            <Workstation id="max" state={states.max} mood={moods.max} selected={selected === "max"} onSelect={pick("max")} phase={unbuilt("max")} />
             <Foreground />
           </svg>
           {!office && IDS.map((id) => (
-            <Indicator key={id} id={id} state={states[id]} active={selected === id} onClick={pick(id)} />
+            <Indicator key={id} id={id} state={states[id]} mood={moods[id]} active={selected === id} onClick={pick(id)} />
           ))}
           {!office && selected && <SummaryCard id={selected} state={states[selected]} space={space} onClose={() => setSelected(null)} onEnter={() => enter(selected)} />}
           <p className="pointer-events-none absolute bottom-2 left-3 hidden text-[10px] text-slate-400/70 sm:block">
             Indicators come from live records. Breathing, plants, steam, and lighting are decorative.
           </p>
         </div>
-        {office && <Office id={office} state={states[office]} space={space} top={header} onClose={() => navigate("/firm")} />}
+        {office && <Office id={office} state={states[office]} mood={moods[office]} space={space} top={header} onClose={() => navigate("/firm")} />}
       </div>
       <ul className="divide-y divide-ink-800 border-t border-ink-800 bg-ink-950 lg:hidden" aria-label="What each person is doing">
         {IDS.map((id) => {
@@ -135,7 +142,7 @@ export default function FirmSpace() {
   );
 }
 
-function Indicator({ id, state, active, onClick }: { id: AgentId; state: AgentState; active: boolean; onClick: () => void }) {
+function Indicator({ id, state, mood, active, onClick }: { id: AgentId; state: AgentState; mood: Mood; active: boolean; onClick: () => void }) {
   const [x, y] = headPoint(id);
   const m = STATE_META[state.key];
   const color = AGENTS[id].color;
@@ -143,7 +150,7 @@ function Indicator({ id, state, active, onClick }: { id: AgentId; state: AgentSt
     <button
       onClick={onClick}
       aria-label={`${NAMES[id]}: ${state.headline}${state.sub ? `. ${state.sub}` : ""}. Open summary.`}
-      className={`absolute z-10 max-w-[44%] -translate-x-1/2 -translate-y-full rounded-lg border bg-ink-950/85 px-1.5 py-1 text-left shadow-lg backdrop-blur transition hover:border-gold-500/60 sm:max-w-[240px] sm:px-2.5 sm:py-1.5 ${active ? "border-gold-500/70" : "border-white/10"}`}
+      className={`absolute z-10 max-w-[44%] -translate-x-1/2 -translate-y-full rounded-lg border bg-ink-950/85 px-1.5 py-1 text-left shadow-lg backdrop-blur transition hover:border-gold-500/60 sm:max-w-[240px] sm:px-2.5 sm:py-1.5 ${active ? "border-gold-500/70" : mood.kind === "stressed" ? "border-rose-500/60 shadow-rose-900/40" : "border-white/10"}`}
       style={{ left: `${(x / VB.w) * 100}%`, top: `${(y / VB.h) * 100}%` }}
     >
       <span className="flex items-center gap-1.5">
@@ -153,6 +160,7 @@ function Indicator({ id, state, active, onClick }: { id: AgentId; state: AgentSt
       </span>
       <span className="mt-0.5 hidden text-[11px] leading-snug text-slate-200 sm:line-clamp-2">{state.headline}</span>
       {state.sub && <span className="hidden text-[10px] leading-snug text-slate-400 md:line-clamp-1">{state.sub}</span>}
+      {mood.kind === "stressed" && <span className="hidden text-[10px] leading-snug text-rose-300 md:line-clamp-1">{MOOD_LABEL.stressed}{mood.reason ? ` · ${mood.reason}` : ""}</span>}
       <span className="absolute left-1/2 top-full h-2 w-2 -translate-x-1/2 -translate-y-1 rotate-45 border-b border-r border-white/10 bg-ink-950" aria-hidden="true" />
     </button>
   );

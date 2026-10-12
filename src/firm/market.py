@@ -39,6 +39,12 @@ class MarketData:
         with self._lock:
             return {x: self._cache[x][1] for x in want if x in self._cache}
 
+    def cached_quotes(self, symbols: list[str], *, max_age_seconds: float = 300) -> dict[str, Quote]:
+        """Quotes already in memory and younger than max_age; never calls the broker."""
+        now = self.clock()
+        with self._lock:
+            return {x: self._cache[x][1] for x in {s.upper() for s in symbols} if x in self._cache and (now - self._cache[x][0]).total_seconds() <= max_age_seconds}
+
     def quote_age_seconds(self, quote: Quote) -> float | None:
         if quote.observed_at is None:
             return None

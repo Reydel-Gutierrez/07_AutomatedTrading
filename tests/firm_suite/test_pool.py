@@ -67,6 +67,8 @@ def test_grant_rules(firm):
     out = pool.grant("tim", D("250"), reason=WHY)  # 900 of 1010 = 89%
     assert out["ok"] and firm.ledger.cash("LIVE", "tim") == D("900") and firm.ledger.cash("SIM", "tim") == D("900")
     assert firm.events.last_of("CIO_ALLOCATION").summary.startswith("Graham moved $250.00")
+    # A pool grant is new capital for the manager, not investment gain: it counts as a flow for returns.
+    assert firm.ledger.net_capital("LIVE", "tim") == D("900") and firm.ledger.net_capital("LIVE", POOL) == D("50")
     with pytest.raises(PoolError, match="reason"):
         pool.grant("tim", D("5"), reason="ok")
     with pytest.raises(PoolError, match="at least"):

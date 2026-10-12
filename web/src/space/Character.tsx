@@ -24,6 +24,28 @@ export const LOOKS: Record<string, Look> = {
 };
 
 export type Pose = "idle" | "typing" | "reading" | "alert" | "pleased" | "asleep";
+export type Feeling = "calm" | "stressed" | "pleased";
+export type Gaze = "viewer" | "monitor" | "wander";
+
+export function Chair({ look }: { look: Look }) {
+  return (
+    <g>
+      <rect x={-31} y={look.tallChair ? -118 : -96} width={62} height={look.tallChair ? 118 : 96} rx={12} fill={look.chair} />
+      <rect x={-25} y={look.tallChair ? -110 : -89} width={50} height={8} rx={4} fill="#ffffff" opacity=".05" />
+    </g>
+  );
+}
+
+/** Floating z's over a sleeping head. */
+export function Zzz({ x, y, size = 10 }: { x: number; y: number; size?: number }) {
+  return (
+    <g transform={`translate(${x} ${y})`} fontFamily="Inter, sans-serif" fontWeight="700" fill="#cbd5e1">
+      {[0, 1, 2].map((i) => (
+        <text key={i} className="fs-zzz" style={{ animationDelay: `${i * 1}s` }} fontSize={size + i * 3} x={i * size * 0.6} y={-i * size * 0.8}>z</text>
+      ))}
+    </g>
+  );
+}
 
 function Hair({ look }: { look: Look }) {
   const c = look.hair;
@@ -55,13 +77,12 @@ function Hair({ look }: { look: Look }) {
   }
 }
 
-export function Body({ look, pose = "idle", working = false }: { look: Look; pose?: Pose; working?: boolean }) {
+export function Body({ look, pose = "idle", working = false, feeling = "calm", gaze = "viewer", chair = true }: { look: Look; pose?: Pose; working?: boolean; feeling?: Feeling; gaze?: Gaze; chair?: boolean }) {
   const shut = pose === "asleep";
+  const stressed = feeling === "stressed";
   return (
     <g>
-      {/* chair back */}
-      <rect x={-31} y={look.tallChair ? -118 : -96} width={62} height={look.tallChair ? 118 : 96} rx={12} fill={look.chair} />
-      <rect x={-25} y={look.tallChair ? -110 : -89} width={50} height={8} rx={4} fill="#ffffff" opacity=".05" />
+      {chair && <Chair look={look} />}
       <g className="fs-breathe">
         {/* torso */}
         <path d="M-30 -48 Q-30 -58 -19 -61 L19 -61 Q30 -58 30 -48 L34 0 L-34 0 Z" fill={look.top} />
@@ -81,12 +102,16 @@ export function Body({ look, pose = "idle", working = false }: { look: Look; pos
         )}
         {/* neck + head */}
         <rect x={-6} y={-70} width={12} height={11} rx={3} fill={look.skin} />
+        <g transform={shut ? "rotate(10 0 -70)" : undefined}>
+        <g className={gaze === "wander" && !shut ? "fs-headturn" : undefined}>
         <circle cx={-15.2} cy={-81} r={3.4} fill={look.skin} />
         <circle cx={15.2} cy={-81} r={3.4} fill={look.skin} />
         <ellipse cx={0} cy={-83} rx={15} ry={17.5} fill={look.skin} />
         <ellipse cx={0} cy={-74} rx={11} ry={6} fill="#000" opacity=".04" />
         <Hair look={look} />
         {/* face */}
+        <g transform={gaze === "monitor" && !shut ? "translate(2.2 0.9)" : undefined}>
+        <g className={gaze === "wander" && !shut ? "fs-glance" : undefined}>
         <g className={shut ? "" : "fs-blink"}>
           {shut ? (
             <path d="M-8 -82 h4 M4 -82 h4" stroke="#2a1d18" strokeWidth="1.4" strokeLinecap="round" />
@@ -97,7 +122,22 @@ export function Body({ look, pose = "idle", working = false }: { look: Look; pos
             </>
           )}
         </g>
-        <path d="M-8 -87.5 l4.5 -1 M8 -87.5 l-4.5 -1" stroke={look.hair === "#c9cdd4" ? "#8d939c" : look.hair} strokeWidth="1.3" strokeLinecap="round" />
+        </g>
+        </g>
+        {stressed && (
+          <g>
+            <ellipse cx={-8.5} cy={-76.5} rx={3.4} ry={2} fill="#f43f5e" opacity=".55" className="fs-flush" />
+            <ellipse cx={8.5} cy={-76.5} rx={3.4} ry={2} fill="#f43f5e" opacity=".55" className="fs-flush" />
+            <path className="fs-sweat" d="M14 -94 q-2.6 4.2 0 5.8 q2.6 -1.6 0 -5.8 Z" fill="#93c5fd" />
+          </g>
+        )}
+        {feeling === "pleased" && !stressed && (
+          <g opacity=".35">
+            <ellipse cx={-8.5} cy={-76.5} rx={3} ry={1.7} fill="#fb7185" />
+            <ellipse cx={8.5} cy={-76.5} rx={3} ry={1.7} fill="#fb7185" />
+          </g>
+        )}
+        <path d={stressed ? "M-9 -86.5 l5 -3 M9 -86.5 l-5 -3" : "M-8 -87.5 l4.5 -1 M8 -87.5 l-4.5 -1"} stroke={look.hair === "#c9cdd4" ? "#8d939c" : look.hair} strokeWidth="1.3" strokeLinecap="round" />
         {look.glasses && (
           <g fill="none" stroke={look.glasses} strokeWidth="1.1">
             <rect x={-10.5} y={-85.5} width={9} height={7} rx={2.5} />
@@ -106,7 +146,7 @@ export function Body({ look, pose = "idle", working = false }: { look: Look; pos
           </g>
         )}
         <path
-          d={pose === "alert" ? "M-4 -72.5 Q0 -74.5 4 -72.5" : pose === "pleased" ? "M-5 -74 Q0 -69.5 5 -74" : working ? "M-3.5 -73 h7" : "M-4.5 -73.5 Q0 -71 4.5 -73.5"}
+          d={stressed ? "M-4.5 -72.5 q2.2 -1.6 4.5 0 q2.2 1.6 4.5 0" : pose === "alert" ? "M-4 -72.5 Q0 -74.5 4 -72.5" : pose === "pleased" || feeling === "pleased" ? "M-5 -74 Q0 -69.5 5 -74" : working ? "M-3.5 -73 h7" : shut ? "M-2.5 -73 q2.5 1.5 5 0" : "M-4.5 -73.5 Q0 -71 4.5 -73.5"}
           stroke="#7a3f33"
           strokeWidth="1.4"
           fill="none"
@@ -121,6 +161,28 @@ export function Body({ look, pose = "idle", working = false }: { look: Look; pos
             <rect x={14} y={-87} width={5} height={9} rx={2} fill={look.accent} stroke="none" />
           </g>
         )}
+        </g>
+        </g>
+      </g>
+    </g>
+  );
+}
+
+/** Standing and walking (cosmetic). Feet at the origin. */
+export function Walker({ look }: { look: Look }) {
+  const pants = "#1f2430";
+  return (
+    <g className="fs-bob">
+      <ellipse cx={0} cy={1} rx={16} ry={4} fill="#000" opacity=".25" />
+      <rect x={-10} y={-42} width={8} height={42} rx={3} fill={pants} className="fs-leg-a" />
+      <rect x={2} y={-42} width={8} height={42} rx={3} fill={pants} className="fs-leg-b" />
+      <ellipse cx={-6} cy={-1} rx={6} ry={2.6} fill="#111" />
+      <ellipse cx={6} cy={-1} rx={6} ry={2.6} fill="#111" />
+      <g transform="translate(0 -38) scale(0.92)">
+        <Body look={look} chair={false} gaze="wander" />
+        <path d="M-30 -46 Q-33 -24 -27 -8 M30 -46 Q33 -24 27 -8" stroke={look.hairStyle === "buzz" ? look.inner : look.top} strokeWidth="8" strokeLinecap="round" fill="none" />
+        <circle cx={-27} cy={-6} r={4} fill={look.skin} />
+        <circle cx={27} cy={-6} r={4} fill={look.skin} />
       </g>
     </g>
   );

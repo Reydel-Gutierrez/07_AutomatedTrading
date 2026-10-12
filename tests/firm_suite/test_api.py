@@ -134,6 +134,7 @@ def test_space_reports_real_state_without_side_effects(client, firm):
     assert agents["tim"]["last_run"]["summary"].startswith("Tim:") and "detail" not in agents["tim"]["last_run"]
     assert any(e["type"] == "MANAGER_RUN" for e in agents["tim"]["recent"])
     assert agents["alex"]["implemented"] and agents["alex"]["mode"] == "INACTIVE"
+    assert set(agents["tim"]["mood"]) == {"book", "marks", "twr", "excess", "drawdown", "day_change"} and agents["tim"]["mood"]["book"] == "SIM"
     assert agents["max"]["implemented"]
     assert space["cio"] == {"configured": False, "provider_ready": False, "working": None, "pending_proposals": [], "recent": []}
     assert space["market"]["next_open"] and space["benchmarks"] == []  # no stored bars yet: nothing shown

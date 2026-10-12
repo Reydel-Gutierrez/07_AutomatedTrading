@@ -13,9 +13,9 @@ import { useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, until, when } from "../format";
 import { ChatThread, MemoryPanel, ProposalCard, useCioChat } from "../pages/CIO";
 import { DecisionLog, MandateCard, ModeControl, Orders, Positions, ResearchDesk, RunNow } from "../pages/Manager";
-import { Body, Hands, LOOKS } from "./Character";
+import { Body, Chair, Hands, LOOKS, Walker, Zzz } from "./Character";
 import { poseFor } from "./pose";
-import { type AgentState, type Space, STATE_META } from "./state";
+import { type AgentState, MOOD_LABEL, type Mood, type Space, STATE_META } from "./state";
 
 const NAMES: Record<string, string> = { cio: "Graham", tim: "Tim", alex: "Alex", max: "Max" };
 const WALL: Record<string, [string, string, string]> = {
@@ -38,17 +38,22 @@ function useWide() {
 const glass = "rounded-2xl border border-white/10 bg-ink-950/75 shadow-2xl backdrop-blur-md";
 
 // -- the room ----------------------------------------------------------------------------
-function Room({ id, state, shifted = false }: { id: string; state: AgentState; shifted?: boolean }) {
+function Room({ id, state, mood, shifted = false }: { id: string; state: AgentState; mood: Mood; shifted?: boolean }) {
   const look = LOOKS[id] ?? LOOKS.tim;
   const pose = poseFor(state.key);
   const meta = STATE_META[state.key];
   const [top, low, wood] = WALL[id] ?? WALL.tim;
   const off = state.key === "inactive";
+  const resting = mood.kind === "resting" && !off;
+  const asleep = mood.kind === "asleep" && !off;
+  const stressed = mood.kind === "stressed";
+  const feeling = stressed ? "stressed" : mood.kind === "pleased" ? "pleased" : "calm";
+  const gaze = meta.working ? "monitor" : mood.kind === "pleased" ? "viewer" : "wander";
   const cx = 1200;
   const deskY = 640;
   const s = 3;
   return (
-    <svg viewBox="0 0 2400 1000" preserveAspectRatio={shifted ? "xMaxYMid slice" : "xMidYMid slice"} className="absolute inset-0 h-full w-full" aria-hidden="true">
+    <svg viewBox="0 0 2400 1000" preserveAspectRatio={shifted ? "xMaxYMid slice" : "xMidYMid slice"} className="fs-scene absolute inset-0 h-full w-full" aria-hidden="true">
       <defs>
         <linearGradient id={`room-wall-${id}`} x1="0" y1="0" x2="0" y2="1">
           <stop offset="0" stopColor={low} />
@@ -66,6 +71,10 @@ function Room({ id, state, shifted = false }: { id: string; state: AgentState; s
         <radialGradient id="room-glow">
           <stop offset="0" stopColor="#ffd9a0" stopOpacity=".32" />
           <stop offset="1" stopColor="#ffd9a0" stopOpacity="0" />
+        </radialGradient>
+        <radialGradient id="room-stress">
+          <stop offset="0" stopColor="#f43f5e" stopOpacity=".28" />
+          <stop offset="1" stopColor="#f43f5e" stopOpacity="0" />
         </radialGradient>
         <radialGradient id="room-state">
           <stop offset="0" stopColor={meta.color} stopOpacity=".22" />
@@ -140,10 +149,12 @@ function Room({ id, state, shifted = false }: { id: string; state: AgentState; s
       {/* light */}
       <path d={`M${cx} 0 V120`} stroke="#3a4560" strokeWidth="4" />
       <path d={`M${cx - 70} 170 L${cx - 34} 118 h68 L${cx + 70} 170 Z`} fill="#2a3245" />
-      <ellipse cx={cx} cy="170" rx="70" ry="10" fill="#ffe2a8" opacity={off ? 0.2 : 0.9} />
-      {!off && <path d={`M${cx - 70} 170 L${cx - 420} 1000 H${cx + 420} L${cx + 70} 170 Z`} fill="#ffe9c0" opacity=".07" />}
+      <ellipse cx={cx} cy="170" rx="70" ry="10" fill="#ffe2a8" opacity={off || asleep ? 0.25 : 0.9} />
+      {!off && !asleep && <path d={`M${cx - 70} 170 L${cx - 420} 1000 H${cx + 420} L${cx + 70} 170 Z`} fill="#ffe9c0" opacity=".07" />}
       <ellipse cx={cx} cy="700" rx="760" ry="300" fill="url(#room-glow)" />
       {meta.working && <ellipse cx={cx} cy="560" rx="420" ry="240" fill="url(#room-state)" className="fs-pulse" />}
+      {stressed && <ellipse cx={cx} cy="520" rx="900" ry="420" fill="url(#room-stress)" className="fs-stress" />}
+      {asleep && <rect width="2400" height="1000" fill="#020617" opacity=".35" />}
 
       {/* floor */}
       <rect y="780" width="2400" height="220" fill="url(#room-floor)" />
@@ -164,8 +175,13 @@ function Room({ id, state, shifted = false }: { id: string; state: AgentState; s
 
       {/* the person and the desk */}
       <g transform={`translate(${cx} ${deskY}) scale(${s})`} className={off ? "fs-off" : undefined}>
-        <rect x={-34} y={-2} width={68} height={12} fill={look.top} />
-        <Body look={look} pose={pose} working={meta.working} />
+        <Chair look={look} />
+      </g>
+      <g className={resting ? "fs-seat" : undefined}>
+        <g transform={`translate(${cx} ${deskY}) scale(${s})`} className={off ? "fs-off" : undefined}>
+          <rect x={-34} y={-2} width={68} height={12} fill={look.top} />
+          <Body look={look} pose={asleep ? "asleep" : pose} working={meta.working} feeling={feeling} gaze={gaze} chair={false} />
+        </g>
       </g>
       <rect x={cx - 450} y={deskY - 10} width="900" height="34" rx="4" fill={id === "max" ? "#3d4452" : "#6b4430"} />
       <rect x={cx - 430} y={deskY + 24} width="860" height="156" fill={id === "max" ? "#2a2f3a" : wood} />
@@ -191,15 +207,25 @@ function Room({ id, state, shifted = false }: { id: string; state: AgentState; s
           {!off && <path className="fs-steam" d="M-2 -52 q-8 -10 0 -20 q8 -10 0 -20" stroke="#e2e8f0" strokeWidth="3" fill="none" opacity=".45" />}
         </g>
       )}
-      <g transform={`translate(${cx} ${deskY}) scale(${s})`} className={off ? "fs-off" : undefined}>
-        <Hands look={look} pose={pose} />
+      <g className={resting ? "fs-seat" : undefined}>
+        <g transform={`translate(${cx} ${deskY}) scale(${s})`} className={off ? "fs-off" : undefined}>
+          <Hands look={look} pose={pose} />
+        </g>
       </g>
+      {resting && (
+        <g transform={`translate(${cx - 640} 900) scale(2.6)`}>
+          <g className="fs-walker" style={{ ["--wx" as string]: `${1050 / 2.6}px`, ["--wy" as string]: "0px" }}>
+            <Walker look={look} />
+          </g>
+        </g>
+      )}
+      {asleep && <Zzz x={cx + 60} y={deskY - 300} size={28} />}
     </svg>
   );
 }
 
 // -- shared pieces ---------------------------------------------------------------------------
-function Speech({ id, state, title, children }: { id: string; state: AgentState; title?: string; children?: ReactNode }) {
+function Speech({ id, state, mood, title, children }: { id: string; state: AgentState; mood?: Mood; title?: string; children?: ReactNode }) {
   const m = STATE_META[state.key];
   return (
     <div className={`${glass} relative p-4`}>
@@ -214,6 +240,11 @@ function Speech({ id, state, title, children }: { id: string; state: AgentState;
           {state.detail && <p className="mt-1 text-sm leading-relaxed text-slate-300">{state.detail}</p>}
           <p className="mt-2 text-[10px] text-slate-500" title={when(state.at)}>{state.at ? `${ago(state.at)} · ` : ""}source: {state.source}</p>
         </>
+      )}
+      {mood && mood.kind !== "calm" && mood.kind !== "focused" && (
+        <p className={`mt-2 border-t border-white/10 pt-2 text-xs ${mood.kind === "stressed" ? "text-rose-300" : mood.kind === "pleased" ? "text-emerald-300" : "text-slate-400"}`}>
+          {MOOD_LABEL[mood.kind]}{mood.reason ? ` · ${mood.reason}` : ""}
+        </p>
       )}
     </div>
   );
@@ -332,7 +363,7 @@ function useAnswers(m: ManagerDetail | null, notes: Note[]) {
   }, [m, notes]);
 }
 
-function ManagerOffice({ id, state, onPanel }: { id: string; state: AgentState; onPanel: (open: boolean) => void }) {
+function ManagerOffice({ id, state, mood, onPanel }: { id: string; state: AgentState; mood: Mood; onPanel: (open: boolean) => void }) {
   const { bump } = useLive();
   const navigate = useNavigate();
   const { data: m, reload } = useResource<ManagerDetail>(`/api/managers/${id}`, { every: 30000, bump });
@@ -395,7 +426,7 @@ function ManagerOffice({ id, state, onPanel }: { id: string; state: AgentState; 
             </div>
           </Speech>
         ) : (
-          <Speech id={id} state={state} />
+          <Speech id={id} state={state} mood={mood} />
         )}
         <div className={`${glass} p-3`}>
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Ask {NAMES[id]}</div>
@@ -445,7 +476,7 @@ const GRAHAM_STARTERS = [
   "Are any risk limits close to triggering?",
 ];
 
-function GrahamOffice({ state, space }: { state: AgentState; space: Space }) {
+function GrahamOffice({ state, mood, space }: { state: AgentState; mood: Mood; space: Space }) {
   const { bump, reloadOverview } = useLive();
   const [params, setParams] = useSearchParams();
   const proposals = useResource<{ proposals: Proposal[] }>("/api/cio/proposals", { every: 30000, bump });
@@ -508,7 +539,7 @@ function GrahamOffice({ state, space }: { state: AgentState; space: Space }) {
   return (
     <>
       <div className="relative z-10 flex flex-col gap-3 p-4 lg:absolute lg:left-6 lg:top-20 lg:w-[min(22rem,26vw)] lg:p-0">
-        <Speech id="cio" state={state} />
+        <Speech id="cio" state={state} mood={mood} />
         {current ? (
           <Panel title={`${current.icon}  ${current.label}`} onClose={() => setPanel(null)}>{current.body}</Panel>
         ) : (
@@ -531,20 +562,22 @@ function GrahamOffice({ state, space }: { state: AgentState; space: Space }) {
 }
 
 // -- the office --------------------------------------------------------------------------------
-export function Office({ id, state, space, onClose, top = 57 }: { id: string; state: AgentState; space: Space; onClose: () => void; top?: number }) {
+export function Office({ id, state, mood, space, onClose, top = 57 }: { id: string; state: AgentState; mood: Mood; space: Space; onClose: () => void; top?: number }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
   const agent = space.agents.find((a) => a.id === id);
+  // You're sitting with Graham to talk: he's awake for it.
+  if (id === "cio" && (mood.kind === "asleep" || mood.kind === "resting")) mood = { kind: "calm", reason: null };
   const wide = useWide();
   const [panelOpen, setPanelOpen] = useState(false);
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 overflow-y-auto bg-ink-950 lg:overflow-hidden" style={{ top }} role="dialog" aria-label={`1-on-1 with ${NAMES[id]}`}>
       {/* the room: full screen on desktop, a banner on phones */}
       <div className="relative h-[46vh] lg:absolute lg:inset-0 lg:h-auto">
-        <Room id={id} state={state} shifted={wide && (id === "cio" || panelOpen)} />
+        <Room id={id} state={state} mood={mood} shifted={wide && (id === "cio" || panelOpen)} />
         <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-ink-950/50 via-transparent to-ink-950/60" />
       </div>
       <header className="absolute left-0 right-0 top-0 z-20 flex items-center gap-3 px-4 py-3 lg:px-6">
@@ -557,7 +590,7 @@ export function Office({ id, state, space, onClose, top = 57 }: { id: string; st
         </div>
         <Link to={id === "cio" ? "/cio" : `/managers/${id}`} className={`${glass} ml-auto px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200`}>Full workspace ↗</Link>
       </header>
-      {id === "cio" ? <GrahamOffice state={state} space={space} /> : <ManagerOffice id={id} state={state} onPanel={setPanelOpen} />}
+      {id === "cio" ? <GrahamOffice state={state} mood={mood} space={space} /> : <ManagerOffice id={id} state={state} mood={mood} onPanel={setPanelOpen} />}
     </div>
   );
 }
