@@ -162,8 +162,14 @@ class Probe:
             "D_aligned_17NY": self.check("candles_D", lambda: candle_check("D", 500)),
         }
         # Server-side limit: one over the documented maximum should be refused.
-        over = self.check("candles_over_limit", lambda: len(c.get("/v3/instruments/EUR_USD/candles", {"granularity": "M5", "count": MAX_CANDLES + 1}).get("candles") or []))
-        self.report["candles"]["over_limit_refused"] = over is None
+        try:
+            c.get("/v3/instruments/EUR_USD/candles", {"granularity": "M5", "count": MAX_CANDLES + 1})
+            refused = False
+        except OandaError as exc:
+            refused = exc.status == 400
+        self.report["candles"]["over_limit_refused"] = refused
+        if not refused:
+            self.report["checks"]["candles_limit_enforced"] = {"ok": False, "error": f"OANDA accepted more than {MAX_CANDLES} candles per request"}
 
         def stream() -> dict[str, Any]:
             kinds: Counter[str] = Counter()
@@ -249,7 +255,7 @@ def main() -> int:
     if not args.quiet:
         print_summary(report)
     print(f"report: {path}")
-    return 0 if all(v["ok"] or k == "candles_over_limit" for k, v in report["checks"].items()) else 1
+    return 0 if all(v["ok"] for v in report["checks"].values()) else 1
 
 
 if __name__ == "__main__":

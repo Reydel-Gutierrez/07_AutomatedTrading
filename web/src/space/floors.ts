@@ -12,11 +12,13 @@ export type Zone = {
   today: string; // the factual state right now
   later?: string; // what will appear here once it opens
   rect: [number, number, number, number]; // world x0, y0, x1, y1 on the floor (for click targets)
+  z?: number; // floor height of the zone (upper level of the tower), default 0
 };
 
 export type Floor = {
   id: FloorId;
-  name: string;
+  building: "HQ Tower" | "The 537 Academy";
+  name: string; // the floor's name within its building
   short: string;
   division: string;
   open: boolean;
@@ -24,11 +26,26 @@ export type Floor = {
   zones: Zone[];
 };
 
+const UPPER = 8.6; // the tower's upper level (Building.UP_Z)
+
+const chair = (id: string, name: string, style: "day" | "swing", x0: number): Zone => ({
+  id,
+  name,
+  purpose:
+    style === "day"
+      ? "A live chair for an intraday forex agent: positions opened and closed within the trading day, flat by Friday's close. The agent trades its own OANDA sub-account."
+      : "A live chair for a multi-day forex agent. Qualified swing agents may hold over weekends under stricter limits. The agent trades its own OANDA sub-account.",
+  today: "Open. No agent has been promoted to live forex trading.",
+  later: "An agent takes this chair only after the Academy's evidence gates, Graham's memo, and your authorization of the promotion and its capital.",
+  rect: [x0 + 0.4, 10.4, x0 + 8.6, 21.6],
+});
+
 export const FLOORS: Floor[] = [
   {
     id: "hq",
-    name: "HQ Tower",
-    short: "HQ",
+    building: "HQ Tower",
+    name: "Executive & Core Investments",
+    short: "Core",
     division: "Executive level · Core Investments Division",
     open: true,
     blurb: "Graham's office and lounge upstairs; Tim, Alex, and Max on the investment floor.",
@@ -36,40 +53,31 @@ export const FLOORS: Floor[] = [
   },
   {
     id: "forex",
-    name: "Forex Trading Floor",
+    building: "HQ Tower",
+    name: "Forex Division",
     short: "Forex",
     division: "Forex Division · OANDA",
     open: false,
-    blurb: "Where promoted forex agents trade real capital, each in its own OANDA sub-account. No chair is open yet.",
+    blurb: "Four live chairs for forex agents promoted from the Academy, each trading its own OANDA sub-account. All chairs are open.",
     zones: [
       {
-        id: "day-desk",
-        name: "Day Desk",
-        purpose: "Intraday forex agents: positions opened and closed within the trading day, flat by Friday's close.",
-        today: "No live chairs. No agent has been promoted to live forex trading.",
-        later: "Each desk becomes a chair when you authorize an agent's promotion and its capital.",
-        rect: [1, 4, 17, 19],
+        id: "market-room",
+        name: "Market room",
+        purpose: "Live OANDA rates, the Tokyo, London, and New York sessions, and the desk heads' workstations for the day and swing desks.",
+        today: "Session clocks follow the market schedule. The read-only OANDA connection is verified from the Pi, but live rates are not wired into the Firm yet.",
+        rect: [0.5, 0.5, 35.5, 9.5],
+        z: UPPER,
       },
-      {
-        id: "swing-desk",
-        name: "Swing Desk",
-        purpose: "Multi-day forex agents. Qualified agents may hold over weekends under stricter limits.",
-        today: "No live chairs. No agent has been promoted to live forex trading.",
-        later: "Weekend holds will show here with their gap-risk limits.",
-        rect: [19, 4, 35, 19],
-      },
-      {
-        id: "rates-board",
-        name: "Rates board and session clocks",
-        purpose: "Live OANDA prices and which trading sessions (Tokyo, London, New York) are open.",
-        today: "Session clocks run on the market schedule. Live rates are not connected yet; the OANDA adapter is read-only and awaiting its first probe.",
-        rect: [1, 0.2, 27, 3],
-      },
+      chair("day-1", "Day Chair 1", "day", 0),
+      chair("day-2", "Day Chair 2", "day", 9),
+      chair("swing-1", "Swing Chair 1", "swing", 18),
+      chair("swing-2", "Swing Chair 2", "swing", 27),
     ],
   },
   {
     id: "academy",
-    name: "The 537 Academy",
+    building: "The 537 Academy",
+    name: "Academy Annex",
     short: "Academy",
     division: "Academy Annex · strategy development",
     open: false,

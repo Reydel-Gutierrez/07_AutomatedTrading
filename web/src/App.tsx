@@ -22,7 +22,7 @@ function useDocumentTitle() {
   const { pathname } = useLocation();
   useEffect(() => {
     const desk = pathname.match(/^\/firm\/(\w+)/)?.[1];
-    const floors: Record<string, string> = { forex: "Forex Trading Floor", academy: "The 537 Academy" };
+    const floors: Record<string, string> = { forex: "Forex Division · HQ Tower", academy: "The 537 Academy" };
     if (desk && floors[desk]) {
       document.title = `${floors[desk]} · ${BRAND.name}`;
       return;

@@ -1,9 +1,10 @@
-// The Forex Trading Floor and the Academy Annex, drawn with the HQ Tower's projection and
-// parts. Neither engine has live records yet, so every desk is empty and every screen is
-// dark; the only moving facts are the clocks and the forex market schedule.
+// The Forex Division floor of the HQ Tower and the Academy Annex, drawn with the HQ
+// Tower's projection and parts. Neither engine has live records yet, so every desk is
+// empty and every screen is dark; the only moving facts are the clocks and the forex
+// market schedule.
 
 import { memo, type ReactNode } from "react";
-import { Box, Glow, OnWallX, OnWallY, P, Plant, Poly, SceneDefs, Sign, Sky, StreetLamp, Tree, floorQ, wallXQ, wallYQ, K } from "./Building";
+import { Box, Foreground, G_Y0, G_Y1, Glow, OnWallX, OnWallY, P, Plant, Poly, SceneDefs, Sign, Sky, StreetLamp, Tree, UP_Z, floorQ, wallXQ, wallYQ, K } from "./Building";
 import { type Floor, type Zone, SESSIONS, fxMarketOpen, localTime, sessionOpen } from "./floors";
 
 const W = 36; // floor width (x)
@@ -78,25 +79,25 @@ function FrontGlass({ name }: { name: string }) {
 }
 
 /** An empty desk: chair pushed in behind it, dark screens, and an "open" plate on the front. */
-function EmptyDesk({ x, y, w, d, screens = 1, tone = "#3d4452", plate }: { x: number; y: number; w: number; d: number; screens?: number; tone?: string; plate?: string }) {
+function EmptyDesk({ x, y, z = 0, w, d, screens = 1, tone = "#3d4452", plate }: { x: number; y: number; z?: number; w: number; d: number; screens?: number; tone?: string; plate?: string }) {
   const cx = x + w / 2;
   const mw = Math.min(1.5, (w - 0.6) / screens - 0.1);
   return (
     <g className="fs-off-soft">
-      <Box x={cx - 0.55} y={y - 1.15} w={1.1} d={0.25} z={0} h={2.1} top="#2b2f3a" left="#1f232c" right="#181b22" />
-      <Box x={cx - 0.55} y={y - 1.0} w={1.1} d={0.95} z={0} h={0.95} top="#323744" left="#242833" right="#1c1f28" />
-      <Box x={x} y={y} w={w} d={d} z={0} h={1.45} top={tone} left="#2a2f3a" right="#222631" />
+      <Box x={cx - 0.55} y={y - 1.15} w={1.1} d={0.25} z={z} h={2.1} top="#2b2f3a" left="#1f232c" right="#181b22" />
+      <Box x={cx - 0.55} y={y - 1.0} w={1.1} d={0.95} z={z} h={0.95} top="#323744" left="#242833" right="#1c1f28" />
+      <Box x={x} y={y} w={w} d={d} z={z} h={1.45} top={tone} left="#2a2f3a" right="#222631" />
       {Array.from({ length: screens }, (_, i) => {
         const mx = cx - (screens * (mw + 0.1)) / 2 + i * (mw + 0.1);
         return (
           <g key={i}>
-            <Poly p={[P(mx + mw / 2 - 0.08, y + 0.25, 1.45), P(mx + mw / 2 + 0.08, y + 0.25, 1.45), P(mx + mw / 2 + 0.08, y + 0.25, 1.75), P(mx + mw / 2 - 0.08, y + 0.25, 1.75)]} fill="#2b3242" />
-            <Poly p={wallYQ(y + 0.25, mx, mx + mw, 1.75, 2.75)} fill="#0b0e14" stroke="#2b3242" sw={1.2} />
+            <Poly p={[P(mx + mw / 2 - 0.08, y + 0.25, z + 1.45), P(mx + mw / 2 + 0.08, y + 0.25, z + 1.45), P(mx + mw / 2 + 0.08, y + 0.25, z + 1.75), P(mx + mw / 2 - 0.08, y + 0.25, z + 1.75)]} fill="#2b3242" />
+            <Poly p={wallYQ(y + 0.25, mx, mx + mw, z + 1.75, z + 2.75)} fill="#0b0e14" stroke="#2b3242" sw={1.2} />
           </g>
         );
       })}
       {plate && (
-        <OnWallY x={cx - 1} y={y + d} z={1.05}>
+        <OnWallY x={cx - 1} y={y + d} z={z + 1.05}>
           <rect width={2 * K} height={11} rx={2} fill="#14110f" stroke="#cdb27a" strokeOpacity=".5" />
           <text x={K} y={8.2} textAnchor="middle" fontSize="6.5" fontWeight="700" letterSpacing="1" fill="#cdb27a" opacity=".85" fontFamily="Inter, sans-serif">
             {plate}
@@ -145,7 +146,7 @@ function Zones({ floor, active, onPick }: { floor: Floor; active: string | null;
           onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onPick(z))}
           className={`fs-zone outline-none ${active === z.id ? "fs-zone-on" : ""}`}
         >
-          <Poly p={floorQ(z.rect[0], z.rect[1], z.rect[2], z.rect[3], 0.02)} fill="transparent" stroke="transparent" sw={2} />
+          <Poly p={floorQ(z.rect[0], z.rect[1], z.rect[2], z.rect[3], (z.z ?? 0) + 0.02)} fill="transparent" stroke="transparent" sw={2} />
         </g>
       ))}
     </g>
@@ -162,29 +163,67 @@ function Scene({ children, label }: { children: ReactNode; label: string }) {
   );
 }
 
-// -- Forex Trading Floor -----------------------------------------------------------------
+// -- HQ Tower: Forex Division floor ----------------------------------------------------
+// Same tower geometry as the Executive / Core Investments view: a market room on the upper
+// level and four glass-walled offices below, one per live chair. Chairs are few on purpose:
+// only agents promoted from the Academy, with the owner's authorization, sit here.
 
-const ForexRoom = memo(function ForexRoom() {
-  const day = [6.5, 12.5].flatMap((y) => [2.5, 7.4, 12.3].map((x) => ({ x, y })));
-  const swing = [6.5, 12.5].flatMap((y) => [20.6, 27.6].map((x) => ({ x, y })));
+export const FX_CHAIRS = [
+  { id: "day-1", name: "Day Chair 1", style: "day", x0: 0, x1: 9 },
+  { id: "day-2", name: "Day Chair 2", style: "day", x0: 9, x1: 18 },
+  { id: "swing-1", name: "Swing Chair 1", style: "swing", x0: 18, x1: 27 },
+  { id: "swing-2", name: "Swing Chair 2", style: "swing", x0: 27, x1: 36 },
+] as const;
+
+const UP_H = 7;
+
+const ForexTower = memo(function ForexTower() {
   return (
     <g>
-      <Grounds />
-      <Poly p={floorQ(0, 0, W, D, 0)} fill="url(#fs-stone)" />
-      <Poly p={floorQ(1, 4, 17, 19, 0)} fill="#1c2635" op={0.92} />
-      <Poly p={floorQ(19, 4, 35, 19, 0)} fill="#2a2236" op={0.92} />
-      <Walls />
-      {/* division sign */}
-      <OnWallY x={1.2} y={0} z={7.1}>
+      {/* grounds and plinth (as the HQ view) */}
+      <Poly p={floorQ(-5, -2, 46, 40, -0.8)} fill="#14201a" />
+      <Poly p={floorQ(-3, 23, 39, 30, -0.8)} fill="#2a2724" />
+      <Poly p={floorQ(14, 23, 22, 40, -0.8)} fill="#2a2724" />
+      <Poly p={floorQ(-2, -2, 38, 24, -0.8)} fill="#1b1714" />
+      <Box x={-1} y={-1} w={38} d={24} z={-0.8} h={0.8} top="#2c2621" left="#211c18" right="#1a1613" />
+
+      {/* base under the market room; its front face is the chairs' back wall */}
+      <Poly p={wallXQ(36, 0, G_Y0, 0, UP_Z)} fill="#1c1916" />
+      <Poly p={wallYQ(G_Y0, 0, 36, 0, UP_Z)} fill="url(#fs-wall)" />
+      <Poly p={wallYQ(G_Y0, 0, 36, 0, UP_Z)} fill="url(#fs-slat-y)" />
+      <Poly p={wallYQ(G_Y0, 0, 36, 0, UP_Z)} fill="url(#fs-wash)" />
+      {[4.5, 13.5, 22.5, 31.5].map((x) => (
+        <g key={x}>
+          <Glow x={x} y={G_Y0 + 0.2} z={4.6} r={1.5} color="url(#fs-bulb)" />
+          <Poly p={wallYQ(G_Y0 + 0.05, x - 0.2, x + 0.2, 5.6, 6.2)} fill="#ffd48a" />
+        </g>
+      ))}
+
+      {/* market room (upper level) */}
+      <Box x={0} y={0} w={36} d={G_Y0} z={UP_Z - 0.6} h={0.6} top="#3a2e26" left="#2a221d" right="#211b17" />
+      <Poly p={floorQ(0, 0, 36, G_Y0, UP_Z)} fill="url(#fs-stone)" />
+      <Poly p={floorQ(1, 2.5, 35, 9, UP_Z)} fill="#1c2635" op={0.85} />
+      <Poly p={wallXQ(0, 0, G_Y0, UP_Z, UP_Z + UP_H)} fill="url(#fs-wall2)" />
+      <Poly p={wallYQ(0, 0, 36, UP_Z, UP_Z + UP_H)} fill="url(#fs-wall)" />
+      <Poly p={wallYQ(0, 0, 36, UP_Z, UP_Z + UP_H)} fill="url(#fs-slat-y)" />
+      <Poly p={wallYQ(0, 0, 36, UP_Z, UP_Z + UP_H)} fill="url(#fs-wash)" />
+      <Poly p={wallXQ(0, 0, G_Y0, UP_Z, UP_Z + UP_H)} fill="url(#fs-wash)" />
+      <Poly p={[P(0, 0, UP_Z + UP_H), P(36, 0, UP_Z + UP_H), P(36, -0.6, UP_Z + UP_H), P(0, -0.6, UP_Z + UP_H)]} fill="#4a3b30" />
+      <Poly p={[P(0, 0, UP_Z + UP_H), P(0, G_Y0, UP_Z + UP_H), P(-0.6, G_Y0, UP_Z + UP_H), P(-0.6, 0, UP_Z + UP_H)]} fill="#4a3b30" />
+      <OnWallX x={0} y={G_Y0 - 0.6} z={UP_Z + 5.4}>
+        {[0, 1, 2].map((i) => (
+          <rect key={i} x={i * 56} y={0} width={36} height={70} fill="url(#fs-night)" stroke="#3a2e26" strokeWidth="3" />
+        ))}
+      </OnWallX>
+      <OnWallY x={1.2} y={0} z={UP_Z + 6.6}>
         <rect width={11.6 * K} height={1.5 * K} rx={2} fill="#14110f" />
         <text x={14} y={21} fontFamily="Fraunces, Georgia, serif" fontSize="17" letterSpacing="3" fill="#e4cf9f">FOREX DIVISION</text>
         <rect y={1.5 * K - 3} width={11.6 * K} height={3} fill="#cdb27a" opacity=".5" />
       </OnWallY>
-      {/* rates board: dark until a live feed exists */}
-      <OnWallY x={14.2} y={0} z={6.9}>
+      <OnWallY x={14.2} y={0} z={UP_Z + 6.4}>
         <rect width={12.6 * K} height={4.1 * K} rx={3} fill="#07090d" stroke="#2b3242" strokeWidth="4" />
         <text x={14} y={22} fontSize="11" fontWeight="700" letterSpacing="2.4" fill="#f59e0b" opacity=".85" fontFamily="Inter, sans-serif">LIVE RATES · OANDA</text>
-        <text x={14} y={46} fontSize="10" fill="#94a3b8" fontFamily="Inter, sans-serif">Not connected yet</text>
+        <text x={14} y={46} fontSize="10" fill="#94a3b8" fontFamily="Inter, sans-serif">Not wired into the Firm yet</text>
         {["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD"].map((s, i) => (
           <g key={s} fontFamily="Inter, sans-serif">
             <text x={14 + (i % 2) * 120} y={64 + Math.floor(i / 2) * 14} fontSize="9" fill="#475569" letterSpacing="1">{s}</text>
@@ -192,8 +231,7 @@ const ForexRoom = memo(function ForexRoom() {
           </g>
         ))}
       </OnWallY>
-      {/* swing desk week planner (decorative) */}
-      <OnWallY x={28.4} y={0} z={6.4}>
+      <OnWallY x={28.4} y={0} z={UP_Z + 6}>
         <rect width={6.6 * K} height={3.2 * K} rx={2} fill="#efe9dc" opacity=".9" />
         {["MON", "TUE", "WED", "THU", "FRI", "WKND"].map((d, i) => (
           <g key={d}>
@@ -202,18 +240,33 @@ const ForexRoom = memo(function ForexRoom() {
           </g>
         ))}
       </OnWallY>
-      <Glow x={9} y={11} z={0} r={6} />
-      <Glow x={27} y={11} z={0} r={6} />
-      {day.map((p) => (
-        <EmptyDesk key={`d${p.x}-${p.y}`} x={p.x} y={p.y} w={3.4} d={1.5} screens={2} plate="OPEN CHAIR" />
+      <Glow x={18} y={5} z={UP_Z} r={7} />
+      <EmptyDesk x={6} y={5.6} z={UP_Z} w={9} d={1.6} screens={4} />
+      <EmptyDesk x={21} y={5.6} z={UP_Z} w={9} d={1.6} screens={4} tone="#4a3b5e" />
+      <Plant x={1.2} y={9} z={UP_Z} s={1.1} />
+      <Plant x={34.6} y={8.4} z={UP_Z} s={1.2} />
+
+      {/* chairs floor (ground level) */}
+      <Poly p={floorQ(0, G_Y0, 36, G_Y1, 0)} fill="url(#fs-plank)" />
+      <Poly p={wallXQ(0, G_Y0, G_Y1, 0, UP_Z - 0.6)} fill="url(#fs-wall2)" />
+      <Poly p={wallXQ(0, G_Y0, G_Y1, 0, UP_Z - 0.6)} fill="url(#fs-slat-x)" />
+      <Poly p={wallXQ(0, G_Y0, G_Y1, 0, UP_Z - 0.6)} fill="url(#fs-wash)" />
+      <Poly p={[P(0, G_Y0, UP_Z - 0.6), P(0, G_Y1, UP_Z - 0.6), P(-0.6, G_Y1, UP_Z - 0.6), P(-0.6, G_Y0, UP_Z - 0.6)]} fill="#4a3b30" />
+      {FX_CHAIRS.map((c, i) => (
+        <g key={c.id}>
+          <Glow x={(c.x0 + c.x1) / 2} y={15.5} z={0} r={3.4} />
+          <Poly p={floorQ(c.x0 + 0.8, G_Y0 + 2.6, c.x1 - 0.8, G_Y1 - 1.6, 0)} fill={c.style === "day" ? "#1c2635" : "#2a2236"} op={0.75} />
+          <OnWallY x={c.x0 + 1.4} y={G_Y0} z={6.4}>
+            <rect width={6 * K} height={18} fill="#07090d" />
+            <text x={3 * K} y={13} textAnchor="middle" fontSize="8.5" fill={c.style === "day" ? "#f59e0b" : "#c4b5fd"} opacity=".5" letterSpacing="2" fontFamily="Inter, sans-serif">
+              {c.style === "day" ? "INTRADAY · FLAT BY FRIDAY" : "MULTI-DAY · WEEKEND RULES"}
+            </text>
+          </OnWallY>
+          <EmptyDesk x={c.x0 + 1.7} y={14.4} w={5.6} d={1.9} screens={c.style === "day" ? 2 : 1} tone={c.style === "day" ? "#3d4452" : "#4a3b5e"} plate="OPEN CHAIR" />
+          <Plant x={c.x1 - 0.9} y={G_Y0 + 1} z={0} s={1} />
+          {i > 0 && <Poly p={wallXQ(c.x0, G_Y0, G_Y1, 0, UP_Z - 1.2)} fill="url(#fs-glass)" stroke="#ffffff1f" />}
+        </g>
       ))}
-      <Poly p={wallXQ(18, 3.5, 20, 0, 3.2)} fill="url(#fs-glass)" stroke="#ffffff1f" />
-      {swing.map((p) => (
-        <EmptyDesk key={`s${p.x}-${p.y}`} x={p.x} y={p.y} w={4.6} d={1.6} screens={1} tone="#4a3b5e" plate="OPEN CHAIR" />
-      ))}
-      <Plant x={1.2} y={20.6} z={0} s={1.1} />
-      <Plant x={17.6} y={1.2} z={0} s={1} />
-      <Plant x={35} y={20.5} z={0} s={1.1} />
     </g>
   );
 });
@@ -221,26 +274,26 @@ const ForexRoom = memo(function ForexRoom() {
 export function ForexFloor({ floor, now, active, onPick, labels }: { floor: Floor; now: number; active: string | null; onPick: (z: Zone) => void; labels: boolean }) {
   const fxOpen = fxMarketOpen(now);
   return (
-    <Scene label="Forex Trading Floor">
-      <ForexRoom />
+    <Scene label="HQ Tower, Forex Division floor">
+      <ForexTower />
       {/* the clocks and market status are the only live facts on this floor */}
       {SESSIONS.map((s, i) => (
-        <WallClock key={s.city} x={1.6 + i * 4} z={5.4} city={s.city} now={now} open={sessionOpen(now, s)} />
+        <WallClock key={s.city} x={1.6 + i * 4} z={UP_Z + 4.8} city={s.city} now={now} open={sessionOpen(now, s)} />
       ))}
-      <OnWallY x={14.2} y={0} z={6.9}>
+      <OnWallY x={14.2} y={0} z={UP_Z + 6.4}>
         <text x={12.6 * K - 14} y={46} textAnchor="end" fontSize="9.5" fontWeight="700" letterSpacing="1.4" fill={fxOpen ? "#34d399" : "#94a3b8"} fontFamily="Inter, sans-serif">
           {fxOpen ? "FX MARKET OPEN" : "FX MARKET CLOSED"}
         </text>
       </OnWallY>
-      <FrontGlass name="Forex Trading Floor" />
+      <Foreground />
       <Zones floor={floor} active={active} onPick={onPick} />
       {labels && (
         <g>
-          <Sign at={[150, 300]} to={P(0, 8, 4)} title="Forex Trading Floor" sub="Forex Division · OANDA · not open yet" />
-          <Sign at={P(9, 19.6, 0)} title="Day Desk" sub="Intraday agents · 0 live chairs" />
-          <Sign at={P(27.5, 19.6, 0)} title="Swing Desk" sub="Multi-day agents · 0 live chairs" />
-          <Sign at={P(7.5, 0, H + 2.4)} title="Session clocks" sub="Tokyo · London · New York" tone="muted" />
-          <Sign at={P(21, 0, H + 2.4)} title="Rates board" sub="Live prices once OANDA connects" tone="muted" />
+          <Sign at={[165, 190]} to={P(0, 4, UP_Z + 3)} title="Market room" sub="Upper level · rates, sessions, desk heads" />
+          <Sign at={[150, 575]} title="Forex Division" sub="HQ Tower · OANDA · 4 live chairs, all open" />
+          {FX_CHAIRS.map((c) => (
+            <Sign key={c.id} at={P(c.x0 + 6.5, G_Y0, UP_Z - 1.3)} title={c.name} sub={c.style === "day" ? "Intraday · open chair" : "Multi-day · open chair"} />
+          ))}
         </g>
       )}
     </Scene>

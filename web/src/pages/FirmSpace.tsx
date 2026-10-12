@@ -134,7 +134,7 @@ export default function FirmSpace() {
       <div className="relative flex items-center justify-center overflow-hidden bg-gradient-to-b from-[#070b17] via-[#141a2e] to-[#14201a] lg:h-[var(--fs-h)]">
         <div className="relative w-full" style={{ aspectRatio: `${VB.w} / ${VB.h}`, maxWidth: `calc(var(--fs-h) * ${(VB.w / VB.h).toFixed(4)})` }}>
           {floor !== "hq" && (
-            <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className="fs-building fs-scene absolute inset-0 h-full w-full" role="group" aria-label={floorById(floor).name}>
+            <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className="fs-building fs-scene absolute inset-0 h-full w-full" role="group" aria-label={`${floorById(floor).building}, ${floorById(floor).name}`}>
               {floor === "forex" ? (
                 <ForexFloor floor={floorById("forex")} now={clock} active={zone?.id ?? null} onPick={pickZone} labels={labels} />
               ) : (
@@ -553,56 +553,72 @@ const DIRECTORY: Record<FloorId, { level: string; spaces: string }[]> = {
     { level: "Executive level", spaces: "Graham (CIO) · lounge" },
     { level: "Core Investments", spaces: "Tim · Alex · Max" },
   ],
-  forex: [{ level: "Forex Division", spaces: "Day Desk · Swing Desk · rates board" }],
+  forex: [
+    { level: "Market room", spaces: "rates board · session clocks · desk heads" },
+    { level: "Live chairs", spaces: "Day Chair 1 & 2 · Swing Chair 1 & 2 (all open)" },
+  ],
   academy: [{ level: "Academy Annex", spaces: "Strategy Lab · Trading Hall · Research Lead · Alumni" }],
 };
+
+const BUILDINGS = [...new Set(FLOORS.map((f) => f.building))];
 
 function Directory({ floor, onFloor }: { floor: FloorId; onFloor: (id: FloorId) => void }) {
   return (
     <section className="mt-5">
       <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-gold-300">Building directory</h2>
-      <ul className="space-y-1.5">
-        {FLOORS.map((f) => (
-          <li key={f.id}>
-            <button
-              onClick={() => onFloor(f.id)}
-              aria-current={floor === f.id ? "page" : undefined}
-              className={`w-full rounded-lg border px-3 py-2 text-left transition ${floor === f.id ? "border-gold-500/50 bg-ink-850" : "border-ink-800 hover:border-ink-600"}`}
-            >
-              <span className="flex items-center gap-2">
-                <span className="text-sm font-semibold text-slate-100">{f.name}</span>
-                <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] ${f.open ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-500/10 text-slate-400"}`}>{f.open ? "Open" : "Not open yet"}</span>
-              </span>
-              {DIRECTORY[f.id].map((d) => (
-                <span key={d.level} className="mt-0.5 block text-[11px] text-slate-400">
-                  <span className="text-slate-300">{d.level}:</span> {d.spaces}
-                </span>
-              ))}
-            </button>
-          </li>
-        ))}
-      </ul>
+      {BUILDINGS.map((b) => (
+        <div key={b} className="mb-3">
+          <h3 className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-slate-500">{b}</h3>
+          <ul className="space-y-1.5">
+            {FLOORS.filter((f) => f.building === b).map((f) => (
+              <li key={f.id}>
+                <button
+                  onClick={() => onFloor(f.id)}
+                  aria-current={floor === f.id ? "page" : undefined}
+                  className={`w-full rounded-lg border px-3 py-2 text-left transition ${floor === f.id ? "border-gold-500/50 bg-ink-850" : "border-ink-800 hover:border-ink-600"}`}
+                >
+                  <span className="flex items-center gap-2">
+                    <span className="text-sm font-semibold text-slate-100">{f.name}</span>
+                    <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] ${f.open ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-500/10 text-slate-400"}`}>{f.open ? "Open" : "Not open yet"}</span>
+                  </span>
+                  {DIRECTORY[f.id].map((d) => (
+                    <span key={d.level} className="mt-0.5 block text-[11px] text-slate-400">
+                      <span className="text-slate-300">{d.level}:</span> {d.spaces}
+                    </span>
+                  ))}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ))}
     </section>
   );
 }
 
-/** Floor tabs and the name-plate toggle, over the top-left of the scene. */
+/** Floor tabs grouped by building, and the name-plate toggle, over the top-left of the scene. */
 function FloorSwitcher({ floor, onPick, labels, onLabels }: { floor: FloorId; onPick: (id: FloorId) => void; labels: boolean; onLabels: () => void }) {
   const f = floorById(floor);
   return (
     <div className="absolute left-2 top-2 z-20 flex max-w-[calc(100%-16px)] flex-col gap-1.5 sm:left-3 sm:top-3">
       <div className="flex flex-wrap items-center gap-1 rounded-xl border border-white/10 bg-ink-950/85 p-1 shadow-lg backdrop-blur" role="tablist" aria-label="Floors">
-        {FLOORS.map((x) => (
-          <button
-            key={x.id}
-            role="tab"
-            aria-selected={floor === x.id}
-            onClick={() => onPick(x.id)}
-            className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${floor === x.id ? "bg-gold-500/20 text-gold-200" : "text-slate-400 hover:bg-ink-800 hover:text-slate-200"}`}
-          >
-            <span className="sm:hidden">{x.short}</span>
-            <span className="hidden sm:inline">{x.name}</span>
-          </button>
+        {BUILDINGS.map((b, bi) => (
+          <span key={b} className="flex items-center gap-1">
+            {bi > 0 && <span className="mx-0.5 h-4 w-px bg-white/10" aria-hidden="true" />}
+            <span className="hidden px-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 sm:inline">{b === "HQ Tower" ? "HQ Tower" : ""}</span>
+            {FLOORS.filter((x) => x.building === b).map((x) => (
+              <button
+                key={x.id}
+                role="tab"
+                aria-selected={floor === x.id}
+                onClick={() => onPick(x.id)}
+                className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${floor === x.id ? "bg-gold-500/20 text-gold-200" : "text-slate-400 hover:bg-ink-800 hover:text-slate-200"}`}
+              >
+                <span className="sm:hidden">{x.short}</span>
+                <span className="hidden sm:inline">{x.building === "HQ Tower" ? x.name : x.building}</span>
+              </button>
+            ))}
+          </span>
         ))}
         <span className="mx-0.5 h-4 w-px bg-white/10" aria-hidden="true" />
         <button onClick={onLabels} aria-pressed={labels} className={`rounded-lg px-2.5 py-1 text-xs transition hover:bg-ink-800 ${labels ? "text-slate-200" : "text-slate-500"}`}>
@@ -623,7 +639,7 @@ function ZoneCard({ zone, floor, onClose }: { zone: Zone; floor: FloorId; onClos
     <div role="dialog" aria-label={zone.name} className="fixed inset-x-2 bottom-2 z-30 rounded-2xl border border-ink-600 bg-ink-900/95 p-4 shadow-2xl backdrop-blur lg:absolute lg:inset-x-auto lg:bottom-auto lg:right-3 lg:top-3 lg:w-[340px]">
       <header className="flex items-start gap-3">
         <div className="min-w-0 flex-1">
-          <div className="text-[11px] uppercase tracking-wider text-slate-500">{floorById(floor).name}</div>
+          <div className="text-[11px] uppercase tracking-wider text-slate-500">{floorById(floor).building} · {floorById(floor).name}</div>
           <div className="font-display text-lg text-slate-50">{zone.name}</div>
         </div>
         <span className="mt-1 rounded bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-slate-400">Not open yet</span>
