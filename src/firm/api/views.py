@@ -224,9 +224,18 @@ def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None) ->
         )
     ]
     ks = firm.controls.kill_switch()
+    market = dict(health.get("market") or {})
+    nxt = CALENDAR.next_regular_open(firm.clock())
+    market["next_open"] = iso(nxt) if nxt else None
+    benchmarks = []
+    for sym, label in (("SPY", "S&P 500 (SPY)"), ("QQQ", "Nasdaq-100 (QQQ)")):
+        rows = list(reversed(firm.db.query("SELECT date, close FROM market_bars WHERE symbol = ? ORDER BY date DESC LIMIT 30", (sym,))))
+        if len(rows) >= 2:
+            benchmarks.append({"symbol": sym, "label": label, "closes": [{"date": r["date"], "close": float(r["close"])} for r in rows]})
     return {
         "as_of": firm.clock().isoformat(),
-        "market": health.get("market") or {},
+        "market": market,
+        "benchmarks": benchmarks,
         "broker_connected": health.get("broker_connected"),
         "controls": {
             "kill_switch": ks.engaged,

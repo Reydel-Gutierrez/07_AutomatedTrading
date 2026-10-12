@@ -6,6 +6,8 @@ from fastapi.testclient import TestClient
 from firm.api.app import create_app
 from firm.api.auth import set_password
 from firm.core import Firm
+from firm.broker.types import Bar
+from firm.money import D
 
 from tests.firm_suite.fakes import FakeRobinhood
 
@@ -134,6 +136,9 @@ def test_space_reports_real_state_without_side_effects(client, firm):
     assert any(e["type"] == "MANAGER_RUN" for e in agents["tim"]["recent"])
     assert not agents["alex"]["implemented"] and agents["alex"]["mode"] == "INACTIVE"
     assert space["cio"] == {"configured": False, "provider_ready": False, "working": None, "pending_proposals": [], "recent": []}
+    assert space["market"]["next_open"] and space["benchmarks"] == []  # no stored bars yet: nothing shown
+    firm.market.store_bars("SPY", [Bar("2026-10-09", D("660"), D("671"), D("659"), D("668"), 1), Bar("2026-10-12", D("668"), D("675"), D("667"), D("672"), 1)])
+    assert [c["close"] for c in client.get("/api/space").json()["benchmarks"][0]["closes"]] == [668.0, 672.0]
     assert firm.events.recent(limit=1)[0].id == before  # reading the space writes nothing
     client.cookies.clear()
     assert client.get("/api/space").status_code == 401

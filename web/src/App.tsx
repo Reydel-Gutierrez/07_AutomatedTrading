@@ -50,6 +50,7 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
   }, []);
   const c = overview?.controls;
   useDocumentTitle();
+  const fullBleed = useLocation().pathname === "/firm";
   return (
     <LiveContext.Provider value={{ events, bump, connected, overview, reloadOverview: reload }}>
       <div className="min-h-screen">
@@ -76,7 +77,7 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
             </div>
           </div>
         </header>
-        <main className="mx-auto max-w-7xl px-4 py-6">
+        <main className={fullBleed ? "" : "mx-auto max-w-7xl px-4 py-6"}>
           <Routes>
             <Route path="/" element={<HQ />} />
             <Route path="/managers/:id" element={<ManagerPage />} />
@@ -87,9 +88,9 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
             <Route path="/system" element={<SystemPage />} />
           </Routes>
         </main>
-        <footer className="mx-auto max-w-7xl px-4 pb-8 pt-2 text-[11px] tracking-wide text-slate-600">
+        {!fullBleed && <footer className="mx-auto max-w-7xl px-4 pb-8 pt-2 text-[11px] tracking-wide text-slate-600">
           {BRAND.name} · {BRAND.descriptor}
-        </footer>
+        </footer>}
       </div>
     </LiveContext.Provider>
   );
