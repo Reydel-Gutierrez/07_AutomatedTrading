@@ -8,7 +8,9 @@ import { usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
 import { useOfficeLife } from "../space/life";
 import { Office } from "../space/Office";
-import { Foreground, Partition, RoomDecor, Shell, StateGradients, VB, Workstation, headPoint, walkersIn, type AgentId } from "../space/Building";
+import { Foreground, HqLabels, Partition, RoomDecor, Shell, StateGradients, VB, Workstation, headPoint, walkersIn, type AgentId } from "../space/Building";
+import { AcademyAnnex, ForexFloor } from "../space/Campus";
+import { FLOORS, type FloorId, type Zone, floorById, fxMarketOpen } from "../space/floors";
 import { type AgentState, CIO_TYPES, MOOD_LABEL, type Mood, PHASE, type Space, STATE_META, cioState, etTime, managerState, moodOf } from "../space/state";
 
 const IDS: AgentId[] = ["cio", "tim", "alex", "max"];
@@ -37,6 +39,27 @@ function useHeaderHeight() {
   return h;
 }
 
+/** Name plates on or off; remembered per browser. */
+function useLabels(): [boolean, () => void] {
+  const [on, setOn] = useState(() => {
+    try {
+      return localStorage.getItem("fs-labels") !== "off";
+    } catch {
+      return true;
+    }
+  });
+  const toggle = () =>
+    setOn((v) => {
+      try {
+        localStorage.setItem("fs-labels", v ? "off" : "on");
+      } catch {
+        /* storage unavailable: keep the in-memory choice */
+      }
+      return !v;
+    });
+  return [on, toggle];
+}
+
 function useWide() {
   const [wide, setWide] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
   useEffect(() => {
@@ -59,10 +82,20 @@ export default function FirmSpace() {
   const params = useParams();
   const navigate = useNavigate();
   const office = (IDS as string[]).includes(params.office ?? "") ? (params.office as AgentId) : null;
+  const floor: FloorId = params.office === "forex" || params.office === "academy" ? params.office : "hq";
+  const [zone, setZone] = useState<Zone | null>(null);
+  const [labels, toggleLabels] = useLabels();
+  const clock = useNow(30000);
   const enter = (id: AgentId) => {
     setSelected(null);
     navigate(`/firm/${id}`);
   };
+  const goFloor = (id: FloorId) => {
+    setSelected(null);
+    setZone(null);
+    navigate(id === "hq" ? "/firm" : `/firm/${id}`);
+  };
+  const pickZone = (z: Zone) => setZone((cur) => (cur?.id === z.id ? null : z));
 
   const states = useMemo(() => {
     if (!space) return null;
@@ -79,12 +112,16 @@ export default function FirmSpace() {
   }, [space, states, now]);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSelected(null);
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setSelected(null);
+      setZone(null);
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  const life = useOfficeLife(moods, !office && visible);
+  const life = useOfficeLife(moods, floor === "hq" && !office && visible);
   const visitedBy = (id: AgentId) => Object.values(life).some((l) => l?.chatWith === id && !l.hidden);
 
   if (error) return <div className="p-6"><Empty>{error.message}</Empty></div>;
@@ -96,7 +133,17 @@ export default function FirmSpace() {
     <div className="grid bg-[#0a0e19] lg:grid-cols-[minmax(0,1fr)_360px]" style={{ ["--fs-h" as string]: `calc(100dvh - ${header}px)` }}>
       <div className="relative flex items-center justify-center overflow-hidden bg-gradient-to-b from-[#070b17] via-[#141a2e] to-[#14201a] lg:h-[var(--fs-h)]">
         <div className="relative w-full" style={{ aspectRatio: `${VB.w} / ${VB.h}`, maxWidth: `calc(var(--fs-h) * ${(VB.w / VB.h).toFixed(4)})` }}>
-          <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className={`fs-building fs-scene absolute inset-0 h-full w-full ${office ? "fs-paused" : ""}`} role="group" aria-label="The 537 Firm building">
+          {floor !== "hq" && (
+            <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className="fs-building fs-scene absolute inset-0 h-full w-full" role="group" aria-label={floorById(floor).name}>
+              {floor === "forex" ? (
+                <ForexFloor floor={floorById("forex")} now={clock} active={zone?.id ?? null} onPick={pickZone} labels={labels} />
+              ) : (
+                <AcademyAnnex floor={floorById("academy")} active={zone?.id ?? null} onPick={pickZone} labels={labels} />
+              )}
+            </svg>
+          )}
+          {floor === "hq" && (
+          <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className={`fs-building fs-scene absolute inset-0 h-full w-full ${office ? "fs-paused" : ""}`} role="group" aria-label="HQ Tower">
             <StateGradients />
             <g onClick={() => setSelected(null)}>
               <Shell />
@@ -111,17 +158,33 @@ export default function FirmSpace() {
             <RoomDecor id="max" off={states.max.key === "inactive"} />
             <Workstation id="max" state={states.max} mood={moods.max} away={!!life.max} visited={visitedBy("max")} behind={walkersIn(life, "max", "behind")} front={walkersIn(life, "max", "front")} selected={selected === "max"} onSelect={pick("max")} phase={unbuilt("max")} />
             <Foreground />
+            {labels && <HqLabels />}
           </svg>
-          {!office && IDS.map((id) => (
+          )}
+          {!office && <FloorSwitcher floor={floor} onPick={goFloor} labels={labels} onLabels={toggleLabels} />}
+          {floor !== "hq" && zone && <ZoneCard zone={zone} floor={floor} onClose={() => setZone(null)} />}
+          {floor === "hq" && !office && IDS.map((id) => (
             <Indicator key={id} id={id} state={states[id]} mood={moods[id]} active={selected === id} onClick={pick(id)} />
           ))}
-          {!office && selected && <SummaryCard id={selected} state={states[selected]} space={space} onClose={() => setSelected(null)} onEnter={() => enter(selected)} />}
+          {floor === "hq" && !office && selected && <SummaryCard id={selected} state={states[selected]} space={space} onClose={() => setSelected(null)} onEnter={() => enter(selected)} />}
           <p className="pointer-events-none absolute bottom-2 left-3 hidden text-[10px] text-slate-400/70 sm:block">
-            Indicators come from live records. Breathing, plants, steam, and lighting are decorative.
+            {floor === "hq"
+              ? "Indicators come from live records. Breathing, plants, steam, and lighting are decorative."
+              : "Nothing on this floor is live yet. Clocks follow the market schedule; furniture and lighting are decorative."}
           </p>
         </div>
         {office && <Office id={office} state={states[office]} mood={moods[office]} space={space} top={header} onClose={() => navigate("/firm")} />}
       </div>
+      {floor !== "hq" ? (
+        <ul className="divide-y divide-ink-800 border-t border-ink-800 bg-ink-950 lg:hidden" aria-label={`Spaces on the ${floorById(floor).name}`}>
+          {floorById(floor).zones.map((z) => (
+            <li key={z.id} className="px-4 py-3">
+              <span className="text-sm font-semibold text-slate-100">{z.name}</span>
+              <span className="block text-sm text-slate-300">{z.today}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
       <ul className="divide-y divide-ink-800 border-t border-ink-800 bg-ink-950 lg:hidden" aria-label="What each person is doing">
         {IDS.map((id) => {
           const st = states[id];
@@ -141,7 +204,8 @@ export default function FirmSpace() {
           );
         })}
       </ul>
-      <OverviewPanel space={space} events={events} />
+      )}
+      <OverviewPanel space={space} events={events} floor={floor} onFloor={goFloor} />
     </div>
   );
 }
@@ -363,7 +427,7 @@ function Spark({ closes }: { closes: { close: number }[] }) {
   );
 }
 
-function OverviewPanel({ space, events }: { space: Space; events: FirmEvent[] }) {
+function OverviewPanel({ space, events, floor, onFloor }: { space: Space; events: FirmEvent[]; floor: FloorId; onFloor: (id: FloorId) => void }) {
   const { overview: o } = useLive();
   const now = useNow(15000);
   const c = space.controls;
@@ -415,6 +479,8 @@ function OverviewPanel({ space, events }: { space: Space; events: FirmEvent[] })
         <Status label="Broker" value={space.broker_connected ? "Connected" : "Offline"} ok={!!space.broker_connected} sub={c.live_writes_enabled ? "Live orders on" : "Live orders off"} />
         <Status label="Safeguards" value={flags.length ? "Engaged" : "All clear"} ok={!flags.length} sub={flags.join(" · ") || "No holds or brakes"} />
       </section>
+
+      <Directory floor={floor} onFloor={onFloor} />
 
       <section className="mt-5">
         <header className="mb-3 flex items-center justify-between">
@@ -478,6 +544,98 @@ function Status({ label, value, ok, sub }: { label: string; value: string; ok: b
         {value}
       </div>
       {sub && <div className="mt-0.5 text-[10px] leading-snug text-slate-500">{sub}</div>}
+    </div>
+  );
+}
+
+const DIRECTORY: Record<FloorId, { level: string; spaces: string }[]> = {
+  hq: [
+    { level: "Executive level", spaces: "Graham (CIO) · lounge" },
+    { level: "Core Investments", spaces: "Tim · Alex · Max" },
+  ],
+  forex: [{ level: "Forex Division", spaces: "Day Desk · Swing Desk · rates board" }],
+  academy: [{ level: "Academy Annex", spaces: "Strategy Lab · Trading Hall · Research Lead · Alumni" }],
+};
+
+function Directory({ floor, onFloor }: { floor: FloorId; onFloor: (id: FloorId) => void }) {
+  return (
+    <section className="mt-5">
+      <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-gold-300">Building directory</h2>
+      <ul className="space-y-1.5">
+        {FLOORS.map((f) => (
+          <li key={f.id}>
+            <button
+              onClick={() => onFloor(f.id)}
+              aria-current={floor === f.id ? "page" : undefined}
+              className={`w-full rounded-lg border px-3 py-2 text-left transition ${floor === f.id ? "border-gold-500/50 bg-ink-850" : "border-ink-800 hover:border-ink-600"}`}
+            >
+              <span className="flex items-center gap-2">
+                <span className="text-sm font-semibold text-slate-100">{f.name}</span>
+                <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] ${f.open ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-500/10 text-slate-400"}`}>{f.open ? "Open" : "Not open yet"}</span>
+              </span>
+              {DIRECTORY[f.id].map((d) => (
+                <span key={d.level} className="mt-0.5 block text-[11px] text-slate-400">
+                  <span className="text-slate-300">{d.level}:</span> {d.spaces}
+                </span>
+              ))}
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+/** Floor tabs and the name-plate toggle, over the top-left of the scene. */
+function FloorSwitcher({ floor, onPick, labels, onLabels }: { floor: FloorId; onPick: (id: FloorId) => void; labels: boolean; onLabels: () => void }) {
+  const f = floorById(floor);
+  return (
+    <div className="absolute left-2 top-2 z-20 flex max-w-[calc(100%-16px)] flex-col gap-1.5 sm:left-3 sm:top-3">
+      <div className="flex flex-wrap items-center gap-1 rounded-xl border border-white/10 bg-ink-950/85 p-1 shadow-lg backdrop-blur" role="tablist" aria-label="Floors">
+        {FLOORS.map((x) => (
+          <button
+            key={x.id}
+            role="tab"
+            aria-selected={floor === x.id}
+            onClick={() => onPick(x.id)}
+            className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${floor === x.id ? "bg-gold-500/20 text-gold-200" : "text-slate-400 hover:bg-ink-800 hover:text-slate-200"}`}
+          >
+            <span className="sm:hidden">{x.short}</span>
+            <span className="hidden sm:inline">{x.name}</span>
+          </button>
+        ))}
+        <span className="mx-0.5 h-4 w-px bg-white/10" aria-hidden="true" />
+        <button onClick={onLabels} aria-pressed={labels} className={`rounded-lg px-2.5 py-1 text-xs transition hover:bg-ink-800 ${labels ? "text-slate-200" : "text-slate-500"}`}>
+          Labels {labels ? "on" : "off"}
+        </button>
+      </div>
+      <p className="hidden max-w-sm rounded-lg bg-ink-950/70 px-2.5 py-1.5 text-[11px] leading-snug text-slate-300 backdrop-blur sm:block">
+        <span className="font-semibold text-slate-100">{f.division}.</span> {f.blurb}
+      </p>
+    </div>
+  );
+}
+
+function ZoneCard({ zone, floor, onClose }: { zone: Zone; floor: FloorId; onClose: () => void }) {
+  const now = useNow(60000);
+  const fx = floor === "forex" ? fxMarketOpen(now) : null;
+  return (
+    <div role="dialog" aria-label={zone.name} className="fixed inset-x-2 bottom-2 z-30 rounded-2xl border border-ink-600 bg-ink-900/95 p-4 shadow-2xl backdrop-blur lg:absolute lg:inset-x-auto lg:bottom-auto lg:right-3 lg:top-3 lg:w-[340px]">
+      <header className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] uppercase tracking-wider text-slate-500">{floorById(floor).name}</div>
+          <div className="font-display text-lg text-slate-50">{zone.name}</div>
+        </div>
+        <span className="mt-1 rounded bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-slate-400">Not open yet</span>
+        <button onClick={onClose} className="rounded-md px-2 py-1 text-slate-500 hover:bg-ink-800 hover:text-slate-200" aria-label="Close">✕</button>
+      </header>
+      <p className="mt-3 text-sm leading-relaxed text-slate-300">{zone.purpose}</p>
+      <section className="mt-3 rounded-xl border border-ink-700 bg-ink-850 p-3">
+        <div className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Right now</div>
+        <p className="mt-1 text-sm text-slate-100">{zone.today}</p>
+        {fx !== null && <p className="mt-1 text-xs text-slate-400">FX market by schedule: {fx ? "open" : "closed"} (Sunday 5 PM to Friday 5 PM New York).</p>}
+      </section>
+      {zone.later && <p className="mt-3 text-xs leading-relaxed text-slate-400">{zone.later}</p>}
     </div>
   );
 }

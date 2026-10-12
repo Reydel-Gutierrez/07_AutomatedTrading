@@ -15,13 +15,13 @@ const OY = 400;
 export const VB = { w: 1280, h: 1010 };
 
 export const P = (x: number, y: number, z = 0): [number, number] => [OX + (x - y) * K, OY + ((x + y) * K) / 2 - z * K];
-const pts = (...ps: [number, number][]) => ps.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
+export const pts = (...ps: [number, number][]) => ps.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join(" ");
 
 // floor plan
-const UP_Z = 8.6; // upper floor surface
+export const UP_Z = 8.6; // upper floor surface
 const UP_H = 7; // upper wall height
-const G_Y0 = 10; // investment floor starts in front of the upper block
-const G_Y1 = 22;
+export const G_Y0 = 10; // investment floor starts in front of the upper block
+export const G_Y1 = 22;
 export const ROOMS = {
   cio: { x0: 0, x1: 14, desk: { x: 4.1, y: 4.2, w: 6, d: 2 }, z: UP_Z },
   tim: { x0: 0, x1: 12, desk: { x: 3.1, y: 14.4, w: 5.6, d: 1.9 }, z: 0 },
@@ -38,14 +38,14 @@ export function headPoint(id: AgentId): [number, number] {
   return [x, y - (id === "cio" ? 100 : 90)];
 }
 
-function Poly({ p, fill, stroke, sw = 1, op, className }: { p: [number, number][]; fill: string; stroke?: string; sw?: number; op?: number; className?: string }) {
+export function Poly({ p, fill, stroke, sw = 1, op, className }: { p: [number, number][]; fill: string; stroke?: string; sw?: number; op?: number; className?: string }) {
   return <polygon points={pts(...p)} fill={fill} stroke={stroke} strokeWidth={stroke ? sw : undefined} opacity={op} className={className} strokeLinejoin="round" />;
 }
-const floorQ = (x0: number, y0: number, x1: number, y1: number, z: number): [number, number][] => [P(x0, y0, z), P(x1, y0, z), P(x1, y1, z), P(x0, y1, z)];
-const wallXQ = (x: number, y0: number, y1: number, z0: number, z1: number): [number, number][] => [P(x, y0, z0), P(x, y1, z0), P(x, y1, z1), P(x, y0, z1)];
-const wallYQ = (y: number, x0: number, x1: number, z0: number, z1: number): [number, number][] => [P(x0, y, z0), P(x1, y, z0), P(x1, y, z1), P(x0, y, z1)];
+export const floorQ = (x0: number, y0: number, x1: number, y1: number, z: number): [number, number][] => [P(x0, y0, z), P(x1, y0, z), P(x1, y1, z), P(x0, y1, z)];
+export const wallXQ = (x: number, y0: number, y1: number, z0: number, z1: number): [number, number][] => [P(x, y0, z0), P(x, y1, z0), P(x, y1, z1), P(x, y0, z1)];
+export const wallYQ = (y: number, x0: number, x1: number, z0: number, z1: number): [number, number][] => [P(x0, y, z0), P(x1, y, z0), P(x1, y, z1), P(x0, y, z1)];
 
-function Box({ x, y, z, w, d, h, top, left, right, stroke = "#00000040" }: { x: number; y: number; z: number; w: number; d: number; h: number; top: string; left: string; right: string; stroke?: string }) {
+export function Box({ x, y, z, w, d, h, top, left, right, stroke = "#00000040" }: { x: number; y: number; z: number; w: number; d: number; h: number; top: string; left: string; right: string; stroke?: string }) {
   return (
     <g>
       <Poly p={[P(x, y + d, z), P(x + w, y + d, z), P(x + w, y + d, z + h), P(x, y + d, z + h)]} fill={left} stroke={stroke} sw={0.6} />
@@ -56,22 +56,22 @@ function Box({ x, y, z, w, d, h, top, left, right, stroke = "#00000040" }: { x: 
 }
 
 /** Content drawn flat on the plane y = const (text reads left to right). Origin at (x, y, z). */
-function OnWallY({ x, y, z, children }: { x: number; y: number; z: number; children: ReactNode }) {
+export function OnWallY({ x, y, z, children }: { x: number; y: number; z: number; children: ReactNode }) {
   const [sx, sy] = P(x, y, z);
   return <g transform={`matrix(1 0.5 0 1 ${sx} ${sy})`}>{children}</g>;
 }
 /** Content on the plane x = const, reading from front (large y) to back. Origin at (x, y, z). */
-function OnWallX({ x, y, z, children }: { x: number; y: number; z: number; children: ReactNode }) {
+export function OnWallX({ x, y, z, children }: { x: number; y: number; z: number; children: ReactNode }) {
   const [sx, sy] = P(x, y, z);
   return <g transform={`matrix(1 -0.5 0 1 ${sx} ${sy})`}>{children}</g>;
 }
 
-function Glow({ x, y, z, r = 3.2, color = "url(#fs-warm)", className }: { x: number; y: number; z: number; r?: number; color?: string; className?: string }) {
+export function Glow({ x, y, z, r = 3.2, color = "url(#fs-warm)", className }: { x: number; y: number; z: number; r?: number; color?: string; className?: string }) {
   const [cx, cy] = P(x, y, z);
   return <ellipse cx={cx} cy={cy} rx={r * K * 1.42} ry={r * K * 0.71} fill={color} className={className} />;
 }
 
-function Plant({ x, y, z, s = 1 }: { x: number; y: number; z: number; s?: number }) {
+export function Plant({ x, y, z, s = 1 }: { x: number; y: number; z: number; s?: number }) {
   const [sx, sy] = P(x, y, z);
   return (
     <g transform={`translate(${sx} ${sy}) scale(${s})`}>
@@ -86,7 +86,7 @@ function Plant({ x, y, z, s = 1 }: { x: number; y: number; z: number; s?: number
   );
 }
 
-function Tree({ x, y, s = 1 }: { x: number; y: number; s?: number }) {
+export function Tree({ x, y, s = 1 }: { x: number; y: number; s?: number }) {
   const [sx, sy] = P(x, y, -0.8);
   return (
     <g transform={`translate(${sx} ${sy}) scale(${s})`}>
@@ -100,7 +100,7 @@ function Tree({ x, y, s = 1 }: { x: number; y: number; s?: number }) {
   );
 }
 
-function StreetLamp({ x, y }: { x: number; y: number }) {
+export function StreetLamp({ x, y }: { x: number; y: number }) {
   const [sx, sy] = P(x, y, -0.8);
   return (
     <g transform={`translate(${sx} ${sy})`}>
@@ -112,77 +112,82 @@ function StreetLamp({ x, y }: { x: number; y: number }) {
   );
 }
 
-/** Night sky, skyline, grounds, and the building shell. Never re-renders. */
-const Shell = memo(function Shell() {
+/** Gradients and patterns shared by every floor's scene. */
+export const SceneDefs = memo(function SceneDefs() {
+  return (
+    <defs>
+      <linearGradient id="fs-sky" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#070b17" />
+        <stop offset=".55" stopColor="#141a2e" />
+        <stop offset="1" stopColor="#3a2622" />
+      </linearGradient>
+      <radialGradient id="fs-warm">
+        <stop offset="0" stopColor="#ffcf8a" stopOpacity=".55" />
+        <stop offset="1" stopColor="#ffcf8a" stopOpacity="0" />
+      </radialGradient>
+      <radialGradient id="fs-bulb">
+        <stop offset="0" stopColor="#ffe2a8" stopOpacity=".8" />
+        <stop offset="1" stopColor="#ffe2a8" stopOpacity="0" />
+      </radialGradient>
+      <linearGradient id="fs-wall" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#2b2420" />
+        <stop offset="1" stopColor="#3a2e26" />
+      </linearGradient>
+      <linearGradient id="fs-wall2" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#221d1a" />
+        <stop offset="1" stopColor="#2f2620" />
+      </linearGradient>
+      <linearGradient id="fs-glass" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#bcd3ff" stopOpacity=".1" />
+        <stop offset="1" stopColor="#bcd3ff" stopOpacity=".03" />
+      </linearGradient>
+      <linearGradient id="fs-night" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#0a1226" />
+        <stop offset="1" stopColor="#23263f" />
+      </linearGradient>
+      <pattern id="fs-lit" width="14" height="16" patternUnits="userSpaceOnUse">
+        <rect width="14" height="16" fill="#0e1424" />
+        <rect x="2" y="3" width="3" height="4" fill="#f6c979" opacity=".7" />
+        <rect x="8" y="3" width="3" height="4" fill="#f6c979" opacity=".15" />
+        <rect x="2" y="10" width="3" height="4" fill="#9fc3ff" opacity=".2" />
+        <rect x="8" y="10" width="3" height="4" fill="#f6c979" opacity=".55" />
+      </pattern>
+      <pattern id="fs-lit2" width="18" height="14" patternUnits="userSpaceOnUse">
+        <rect width="18" height="14" fill="#111829" />
+        <rect x="3" y="3" width="4" height="3" fill="#f6c979" opacity=".2" />
+        <rect x="11" y="3" width="4" height="3" fill="#f6c979" opacity=".65" />
+        <rect x="3" y="9" width="4" height="3" fill="#f6c979" opacity=".5" />
+      </pattern>
+      <pattern id="fs-slat-y" width="14" height="20" patternUnits="userSpaceOnUse" patternTransform="matrix(1 0.5 0 1 0 0)">
+        <rect width="14" height="20" fill="none" />
+        <rect width="1.5" height="20" fill="#000" opacity=".22" />
+        <rect x="1.5" width="1" height="20" fill="#fff" opacity=".04" />
+      </pattern>
+      <pattern id="fs-slat-x" width="14" height="20" patternUnits="userSpaceOnUse" patternTransform="matrix(1 -0.5 0 1 0 0)">
+        <rect width="14" height="20" fill="none" />
+        <rect width="1.5" height="20" fill="#000" opacity=".22" />
+      </pattern>
+      <linearGradient id="fs-wash" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stopColor="#ffcf8a" stopOpacity=".16" />
+        <stop offset=".6" stopColor="#ffcf8a" stopOpacity=".03" />
+        <stop offset="1" stopColor="#000" stopOpacity=".15" />
+      </linearGradient>
+      <pattern id="fs-plank" width="20" height="10" patternUnits="userSpaceOnUse" patternTransform="matrix(1 0.5 -1 0.5 0 0)">
+        <rect width="20" height="10" fill="#6a4a35" />
+        <path d="M0 9.5 H20 M10 0 V10" stroke="#3d2a1e" strokeOpacity=".5" strokeWidth="1" />
+      </pattern>
+      <pattern id="fs-stone" width="24" height="24" patternUnits="userSpaceOnUse" patternTransform="matrix(1 0.5 -1 0.5 0 0)">
+        <rect width="24" height="24" fill="#4a4038" />
+        <path d="M0 23.5 H24 M23.5 0 V24" stroke="#2b241f" strokeOpacity=".6" strokeWidth="1" />
+      </pattern>
+    </defs>
+  );
+});
+
+/** Night sky, moon, and skyline behind every building. */
+export const Sky = memo(function Sky() {
   return (
     <g>
-      <defs>
-        <linearGradient id="fs-sky" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#070b17" />
-          <stop offset=".55" stopColor="#141a2e" />
-          <stop offset="1" stopColor="#3a2622" />
-        </linearGradient>
-        <radialGradient id="fs-warm">
-          <stop offset="0" stopColor="#ffcf8a" stopOpacity=".55" />
-          <stop offset="1" stopColor="#ffcf8a" stopOpacity="0" />
-        </radialGradient>
-        <radialGradient id="fs-bulb">
-          <stop offset="0" stopColor="#ffe2a8" stopOpacity=".8" />
-          <stop offset="1" stopColor="#ffe2a8" stopOpacity="0" />
-        </radialGradient>
-        <linearGradient id="fs-wall" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#2b2420" />
-          <stop offset="1" stopColor="#3a2e26" />
-        </linearGradient>
-        <linearGradient id="fs-wall2" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#221d1a" />
-          <stop offset="1" stopColor="#2f2620" />
-        </linearGradient>
-        <linearGradient id="fs-glass" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#bcd3ff" stopOpacity=".1" />
-          <stop offset="1" stopColor="#bcd3ff" stopOpacity=".03" />
-        </linearGradient>
-        <linearGradient id="fs-night" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#0a1226" />
-          <stop offset="1" stopColor="#23263f" />
-        </linearGradient>
-        <pattern id="fs-lit" width="14" height="16" patternUnits="userSpaceOnUse">
-          <rect width="14" height="16" fill="#0e1424" />
-          <rect x="2" y="3" width="3" height="4" fill="#f6c979" opacity=".7" />
-          <rect x="8" y="3" width="3" height="4" fill="#f6c979" opacity=".15" />
-          <rect x="2" y="10" width="3" height="4" fill="#9fc3ff" opacity=".2" />
-          <rect x="8" y="10" width="3" height="4" fill="#f6c979" opacity=".55" />
-        </pattern>
-        <pattern id="fs-lit2" width="18" height="14" patternUnits="userSpaceOnUse">
-          <rect width="18" height="14" fill="#111829" />
-          <rect x="3" y="3" width="4" height="3" fill="#f6c979" opacity=".2" />
-          <rect x="11" y="3" width="4" height="3" fill="#f6c979" opacity=".65" />
-          <rect x="3" y="9" width="4" height="3" fill="#f6c979" opacity=".5" />
-        </pattern>
-        <pattern id="fs-slat-y" width="14" height="20" patternUnits="userSpaceOnUse" patternTransform="matrix(1 0.5 0 1 0 0)">
-          <rect width="14" height="20" fill="none" />
-          <rect width="1.5" height="20" fill="#000" opacity=".22" />
-          <rect x="1.5" width="1" height="20" fill="#fff" opacity=".04" />
-        </pattern>
-        <pattern id="fs-slat-x" width="14" height="20" patternUnits="userSpaceOnUse" patternTransform="matrix(1 -0.5 0 1 0 0)">
-          <rect width="14" height="20" fill="none" />
-          <rect width="1.5" height="20" fill="#000" opacity=".22" />
-        </pattern>
-        <linearGradient id="fs-wash" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0" stopColor="#ffcf8a" stopOpacity=".16" />
-          <stop offset=".6" stopColor="#ffcf8a" stopOpacity=".03" />
-          <stop offset="1" stopColor="#000" stopOpacity=".15" />
-        </linearGradient>
-        <pattern id="fs-plank" width="20" height="10" patternUnits="userSpaceOnUse" patternTransform="matrix(1 0.5 -1 0.5 0 0)">
-          <rect width="20" height="10" fill="#6a4a35" />
-          <path d="M0 9.5 H20 M10 0 V10" stroke="#3d2a1e" strokeOpacity=".5" strokeWidth="1" />
-        </pattern>
-        <pattern id="fs-stone" width="24" height="24" patternUnits="userSpaceOnUse" patternTransform="matrix(1 0.5 -1 0.5 0 0)">
-          <rect width="24" height="24" fill="#4a4038" />
-          <path d="M0 23.5 H24 M23.5 0 V24" stroke="#2b241f" strokeOpacity=".6" strokeWidth="1" />
-        </pattern>
-      </defs>
-
       <rect width={VB.w} height={VB.h} fill="url(#fs-sky)" />
       {[[90, 60], [210, 34], [330, 90], [470, 40], [700, 70], [820, 30], [980, 54], [1120, 84], [1210, 40], [600, 110], [150, 140]].map(([x, y], i) => (
         <circle key={i} cx={x} cy={y} r={i % 3 ? 0.9 : 1.4} fill="#fff" opacity=".6" className={i % 4 === 0 ? "fs-pulse" : undefined} />
@@ -197,6 +202,16 @@ const Shell = memo(function Shell() {
         </g>
       ))}
       <rect x={0} y={330} width={VB.w} height={180} fill="url(#fs-sky)" opacity=".5" />
+    </g>
+  );
+});
+
+/** HQ Tower: grounds and the building shell. Never re-renders. */
+const Shell = memo(function Shell() {
+  return (
+    <g>
+      <SceneDefs />
+      <Sky />
 
       {/* grounds */}
       <Poly p={floorQ(-5, -2, 46, 40, -0.8)} fill="#14201a" />
@@ -591,3 +606,44 @@ export function StateGradients() {
 }
 
 export { Shell, RoomDecor };
+
+/** A flat, readable name plate for a space (always upright; not part of the architecture). */
+export function Sign({ at, title, sub, to, tone = "gold" }: { at: [number, number]; title: string; sub?: string; to?: [number, number]; tone?: "gold" | "muted" }) {
+  const [x, y] = at;
+  const w = Math.max(title.length * 7.4, (sub?.length ?? 0) * 5.6) + 22;
+  const h = sub ? 34 : 21;
+  return (
+    <g pointerEvents="none" fontFamily="Inter, sans-serif">
+      {to && (
+        <g>
+          <line x1={x} y1={y} x2={to[0]} y2={to[1]} stroke="#cdb27a" strokeOpacity=".55" strokeWidth="1.2" strokeDasharray="3 3" />
+          <circle cx={to[0]} cy={to[1]} r={3} fill="#cdb27a" opacity=".85" />
+        </g>
+      )}
+      <rect x={x - w / 2} y={y - h / 2} width={w} height={h} rx={5} fill="#090d18" fillOpacity=".88" stroke={tone === "gold" ? "#cdb27a" : "#64748b"} strokeOpacity=".55" />
+      <text x={x} y={sub ? y - 3 : y + 4} textAnchor="middle" fontSize="10.5" fontWeight="700" letterSpacing="1.6" fill={tone === "gold" ? "#e4cf9f" : "#cbd5e1"}>
+        {title.toUpperCase()}
+      </text>
+      {sub && (
+        <text x={x} y={y + 11} textAnchor="middle" fontSize="9.5" fill="#94a3b8">
+          {sub}
+        </text>
+      )}
+    </g>
+  );
+}
+
+/** Names for every space in the HQ Tower. */
+export const HqLabels = memo(function HqLabels() {
+  return (
+    <g>
+      <Sign at={[165, 190]} to={P(0, 4, UP_Z + 3)} title="Executive level" sub="Upper floor · CIO and lounge" />
+      <Sign at={[150, 575]} title="Core Investments Division" sub="Ground floor · Robinhood · US stocks & ETFs" />
+      <Sign at={P(3.2, 0, UP_Z + UP_H + 0.9)} title="Office of the CIO" sub="Graham · Chief Investment Officer" />
+      <Sign at={P(26, 0, UP_Z + UP_H + 0.9)} title="Executive lounge" sub="Breaks and visits (decorative)" tone="muted" />
+      <Sign at={P(10, G_Y0, UP_Z - 1.3)} title="Tim's office" sub="Core ETF portfolio" />
+      <Sign at={P(22, G_Y0, UP_Z - 1.3)} title="Alex's office" sub="Strategic growth stocks" />
+      <Sign at={P(34, G_Y0, UP_Z - 1.3)} title="Max's office" sub="Short-term swing trades" />
+    </g>
+  );
+});

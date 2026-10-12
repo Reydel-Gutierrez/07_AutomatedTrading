@@ -79,3 +79,8 @@
 @media (prefers-reduced-motion: reduce) {
   .fs-building *, .fs-scene *, .fs-flash { animation: none !important; }
 }
+
+/* Firm Space: clickable floor zones and empty furniture on floors that are not open yet */
+.fs-zone { cursor: pointer; }
+.fs-zone:hover polygon, .fs-zone:focus-visible polygon, .fs-zone-on polygon { stroke: #cdb27a; stroke-opacity: .55; stroke-dasharray: 6 5; fill: #cdb27a; fill-opacity: .05; }
+.fs-off-soft { filter: brightness(.85); }
