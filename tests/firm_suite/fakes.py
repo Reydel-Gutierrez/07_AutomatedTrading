@@ -37,6 +37,7 @@ class FakeRobinhood:
     fractional: bool = True
     quote_age_seconds: float = 1.0
     pending_deposits: Decimal = ZERO
+    echo_ref_id: bool = True  # real Robinhood order lists may omit the ref_id we sent
     orders_: list[BrokerOrder] = field(default_factory=list)
     calls: list[str] = field(default_factory=list)
 
@@ -116,6 +117,10 @@ class FakeRobinhood:
             rows = [o for o in rows if o.symbol == symbol]
         if since:
             rows = [o for o in rows if o.created_at >= since]
+        if not self.echo_ref_id:
+            from dataclasses import replace
+
+            rows = [replace(o, ref_id=None) for o in rows]
         return list(reversed(rows))
 
     def tradability(self, symbols: list[str]) -> dict[str, Tradability]:

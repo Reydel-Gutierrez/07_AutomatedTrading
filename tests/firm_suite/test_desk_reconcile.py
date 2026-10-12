@@ -171,6 +171,32 @@ def test_foreign_order_holds_buys(db, clock, rh):
     assert firm.events.last_of("FOREIGN_ORDER") is not None
 
 
+def test_own_orders_are_never_foreign_even_without_ref_id_echo(db, clock, rh):
+    """Regression (2026-10-12): Robinhood's order list omitted our ref_id, so Tim's first live fills paused buying."""
+    rh.echo_ref_id = False
+    firm = _firm(db, clock, rh)
+    _open(firm, rh)
+    assert firm.desk.submit(buy("100")).status == "FILLED"
+    rec = firm.reconciler.run(rh)
+    assert rec.status == "OK", rec.reasons
+    assert firm.events.last_of("FOREIGN_ORDER") is None
+
+
+def test_a_wrongly_flagged_own_order_clears_itself(db, clock, rh):
+    rh.echo_ref_id = False
+    firm = _firm(db, clock, rh)
+    _open(firm, rh)
+    firm.desk.submit(buy("100"))
+    own = firm.db.one("SELECT broker_order_id FROM orders WHERE book = 'LIVE'")["broker_order_id"]
+    firm.settings.put("foreign_orders", {"open": {own: {"symbol": "VTI", "side": "buy", "state": "filled", "placed_agent": "agentic", "created_at": "", "quantity": "0.33"}}, "acknowledged": []}, by="test")
+    firm.controls.set_reconcile_hold(["FOREIGN_ORDER: buy VTI (agentic)"], {})
+    rec = firm.reconciler.run(rh)
+    assert rec.status == "OK" and not firm.controls.reconcile_hold().get("active")
+    assert firm.events.last_of("FOREIGN_ORDER_CLEARED").symbol == "VTI"
+    rh.foreign_order("VXUS", "buy", "0.1", placed_agent="user")
+    assert firm.reconciler.run(rh).status == "HOLD"  # a genuine outside order still holds
+
+
 def test_account_mismatch_trips_kill_switch(db, clock, rh):
     firm = _firm(db, clock, rh)
     _open(firm, rh)

@@ -56,13 +56,20 @@ export default function ManagerPage() {
               </div>
             </Card>
             <Card
-              title="Portfolio"
+              title={m.mode === "LIVE" && shown === "SIM" ? "Portfolio · simulation history" : "Portfolio"}
               action={
-                <div className="flex rounded-lg border border-ink-700 p-0.5 text-xs">
-                  {(["LIVE", "SIM"] as const).map((k) => (
-                    <button key={k} onClick={() => setBook(k)} className={`rounded-md px-2.5 py-1 ${shown === k ? "bg-ink-700 text-slate-50" : "text-slate-400"}`}>{k === "LIVE" ? "Live" : "Simulated"}</button>
-                  ))}
-                </div>
+                m.mode === "LIVE" ? (
+                  // Real money is the only book that matters once live; the simulation stays one click away.
+                  <button onClick={() => setBook(shown === "SIM" ? "LIVE" : "SIM")} className="text-xs text-slate-500 hover:text-slate-300">
+                    {shown === "SIM" ? "← Back to real money" : "Simulation history"}
+                  </button>
+                ) : (
+                  <div className="flex rounded-lg border border-ink-700 p-0.5 text-xs">
+                    {(["LIVE", "SIM"] as const).map((k) => (
+                      <button key={k} onClick={() => setBook(k)} className={`rounded-md px-2.5 py-1 ${shown === k ? "bg-ink-700 text-slate-50" : "text-slate-400"}`}>{k === "LIVE" ? "Live" : "Simulated"}</button>
+                    ))}
+                  </div>
+                )
               }
             >
               <div className="grid grid-cols-2 gap-4">

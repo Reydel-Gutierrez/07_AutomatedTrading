@@ -145,11 +145,22 @@ class Reconciler:
         since = self.settings.get("reconcile_watermark")
         if not since:
             return []
-        known = {r["client_ref"] for r in self.db.query("SELECT client_ref FROM orders WHERE book = 'LIVE'")}
+        rows = self.db.query("SELECT client_ref, broker_order_id FROM orders WHERE book = 'LIVE'")
+        known = {r["client_ref"] for r in rows}
+        # Robinhood does not always echo our ref_id on its order list; the broker id we stored at submission is authoritative.
+        ours = {r["broker_order_id"] for r in rows if r["broker_order_id"]}
         state = self.settings.get("foreign_orders") or {"open": {}, "acknowledged": []}
         changed = False
+        for oid in [k for k in state["open"] if k in ours]:
+            info = state["open"].pop(oid)
+            changed = True
+            self.events.emit(
+                "FOREIGN_ORDER_CLEARED",
+                f"The {info['side']} of {info['symbol']} flagged as an outside order was the firm's own order; flag cleared.",
+                actor="reconciler", symbol=info["symbol"], payload={"broker_order_id": oid, **info},
+            )
         for o in reader.orders(since=since):
-            if (o.ref_id and o.ref_id in known) or o.id in state["open"] or o.id in state["acknowledged"]:
+            if (o.ref_id and o.ref_id in known) or o.id in ours or o.id in state["open"] or o.id in state["acknowledged"]:
                 continue
             state["open"][o.id] = {"symbol": o.symbol, "side": o.side, "state": o.state, "placed_agent": o.placed_agent, "created_at": o.created_at, "quantity": str(o.cumulative_quantity)}
             changed = True
