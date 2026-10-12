@@ -9,7 +9,13 @@ feasibility study. Branch: `firm`.
   and practice endpoints. It is **read-only by construction**: GET-only transport, and no method
   that writes. OANDA tokens can't be scoped, so the code is the boundary.
 - The owner's **live US v20 account** (to be funded with $50) is the integration target.
-  The first step is the read-only probe: `python scripts/oanda_probe.py`.
+  **Everything runs on the Pi**, as the `agentic` service account:
+  - credentials: `/home/agentic/.agentic-portfolio/forex/oanda.env` (file 0600, folder 0700),
+    separate from the equity engine's `/etc/agentic-portfolio/env`. The owner writes it with
+    `scripts/oanda_credentials.py set`, which prompts for the token without echo. The adapter
+    refuses a credentials file other users could read;
+  - read-only probe: `scripts/oanda_probe.py`. Reports go to
+    `/opt/agentic-portfolio/state/forex/probe/` (0700).
 - **The Academy uses only our virtual engine** ($10,000 per agent). Per-agent OANDA practice
   accounts and the PRACTICE stage are dropped. The CANDIDATE gate is replaced by the supervised
   execution test below, plus probation at small live size.

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import importlib.util
 import inspect
 import json
+import os
 from decimal import Decimal
 from pathlib import Path
 
@@ -134,12 +136,38 @@ def test_stream_stops_at_limits():
 def test_credentials_from_file_env_wins(tmp_path):
     f = tmp_path / "oanda.env"
     f.write_text("# comment\nOANDA_ENV=practice\nOANDA_API_TOKEN='from-file'\nOANDA_ACCOUNT_ID=101-1\n", encoding="utf-8")
+    os.chmod(f, 0o600)
     creds = load_credentials({"OANDA_ENV_FILE": str(f), "OANDA_ENV": "live"})
     assert (creds.env, creds.token, creds.account_id) == ("live", "from-file", "101-1")
     with pytest.raises(OandaConfigError):
         load_credentials({"OANDA_ENV_FILE": str(tmp_path / "missing"), "OANDA_API_TOKEN": "t"})  # no env given
     with pytest.raises(OandaConfigError):
         load_credentials({"OANDA_ENV_FILE": str(tmp_path / "missing"), "OANDA_ENV": "live"})  # no token
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_credentials_file_must_be_private(tmp_path):
+    f = tmp_path / "oanda.env"
+    f.write_text("OANDA_ENV=live\nOANDA_API_TOKEN=t\n", encoding="utf-8")
+    os.chmod(f, 0o644)
+    with pytest.raises(OandaConfigError, match="readable by other users"):
+        load_credentials({"OANDA_ENV_FILE": str(f)})
+    os.chmod(f, 0o600)
+    assert load_credentials({"OANDA_ENV_FILE": str(f)}).token == "t"
+
+
+def test_credentials_writer_is_atomic_and_private(tmp_path):
+    spec = importlib.util.spec_from_file_location("oanda_credentials", ROOT / "scripts" / "oanda_credentials.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    path = tmp_path / "forex" / "oanda.env"
+    mod.write_env(path, env="live", token="a" * 32 + "-" + "b" * 32, account_id="001-001-1234567-001")
+    mod.write_env(path, env="live", token="c" * 32 + "-" + "d" * 32, account_id="001-001-1234567-001")  # overwrite
+    creds = load_credentials({"OANDA_ENV_FILE": str(path)})
+    assert creds.token.startswith("c") and creds.account_id == "001-001-1234567-001"
+    assert not list(path.parent.glob(".*.tmp"))
+    if os.name == "posix":
+        assert path.stat().st_mode & 0o777 == 0o600 and path.parent.stat().st_mode & 0o777 == 0o700
 
 
 def test_firm_never_imports_forex():

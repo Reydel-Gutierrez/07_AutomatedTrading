@@ -6,7 +6,10 @@ be scoped to read-only, so this module is the read-only boundary. Order support
 will be added separately, behind its own explicit authorization.
 
 Credentials come from the environment, or from a KEY=VALUE file named by
-OANDA_ENV_FILE (default ~/.agentic-portfolio/oanda.env); the environment wins:
+OANDA_ENV_FILE (default ~/.agentic-portfolio/forex/oanda.env, written by
+scripts/oanda_credentials.py); the environment wins. It is a separate file from
+the equity engine's /etc/agentic-portfolio/env. On POSIX the file must be readable
+by its owner only (0600) and owned by the user reading it, or loading refuses:
 
     OANDA_ENV         live | practice          (required, no default)
     OANDA_API_TOKEN   personal access token     (required; never logged)
@@ -33,7 +36,7 @@ HOSTS = {
     "practice": ("https://api-fxpractice.oanda.com", "https://stream-fxpractice.oanda.com"),
 }
 MAX_CANDLES = 5000
-DEFAULT_ENV_FILE = Path.home() / ".agentic-portfolio" / "oanda.env"
+DEFAULT_ENV_FILE = Path.home() / ".agentic-portfolio" / "forex" / "oanda.env"
 
 # fetch(url, headers, timeout) -> (status, headers, body). GET only: there is no method argument.
 Fetch = Callable[[str, Mapping[str, str], float], tuple[int, Mapping[str, str], bytes]]
@@ -71,10 +74,22 @@ class Credentials:
         return f"Credentials(env={self.env!r}, token='***', account_id={self.account_id!r})"
 
 
+def check_private(path: Path) -> None:
+    """Refuse a credentials file that anyone but its owner could read (POSIX only)."""
+    if os.name != "posix":
+        return
+    st = path.stat()
+    if st.st_mode & 0o077:
+        raise OandaConfigError(f"{path} is readable by other users (mode {oct(st.st_mode & 0o777)}); run: chmod 600 {path}")
+    if st.st_uid != os.getuid():
+        raise OandaConfigError(f"{path} is not owned by the user reading it")
+
+
 def _read_env_file(path: Path) -> dict[str, str]:
     out: dict[str, str] = {}
     if not path.is_file():
         return out
+    check_private(path)
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#") or "=" not in line:

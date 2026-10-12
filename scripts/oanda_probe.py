@@ -5,7 +5,9 @@ execution constraints exposed by the API (margin rates, unit precision, minimum
 size, hedging flag), live pricing and spreads, candles (bid/ask, 17:00 New York
 alignment, the per-request limit), the pricing stream, and the transaction log.
 
-    python scripts/oanda_probe.py            # summary on screen + JSON in reports/oanda/
+    python scripts/oanda_probe.py            # summary on screen + JSON in state/forex/probe/ (owner-only)
+
+On the Pi:  sudo -u agentic /opt/agentic-portfolio/.venv/bin/python /opt/agentic-portfolio/scripts/oanda_probe.py
     python scripts/oanda_probe.py --quiet    # JSON path only
 
 Credentials: see src/forex/oanda.py (OANDA_ENV, OANDA_API_TOKEN, OANDA_ACCOUNT_ID).
@@ -15,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import statistics
 import sys
 import time
@@ -194,6 +197,7 @@ def print_summary(r: dict[str, Any]) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--quiet", action="store_true")
+    ap.add_argument("--out", default=str(ROOT / "state" / "forex" / "probe"), help="report directory")
     args = ap.parse_args()
     try:
         client = OandaClient(load_credentials())
@@ -201,8 +205,10 @@ def main() -> int:
         print(f"not configured: {exc}. Set OANDA_ENV / OANDA_API_TOKEN (see src/forex/oanda.py).", file=sys.stderr)
         return 2
     report = Probe(client).run()
-    out_dir = ROOT / "reports" / "oanda"
+    out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if os.name == "posix":
+        os.chmod(out_dir, 0o700)  # reports include the account balance
     path = out_dir / f"probe-{report['env']}-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.json"
     path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     if not args.quiet:
