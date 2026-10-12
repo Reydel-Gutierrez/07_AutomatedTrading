@@ -1,11 +1,12 @@
 import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { useLive } from "../App";
 import { type FirmEvent, type ManagerDetail, type Usage } from "../api";
 import { Donut } from "../components/charts";
 import { AGENTS, Avatar, Badge, Empty } from "../components/ui";
 import { usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
+import { Office } from "../space/Office";
 import { Foreground, Partition, RoomDecor, Shell, StateGradients, VB, Workstation, headPoint, type AgentId } from "../space/Building";
 import { type AgentState, CIO_TYPES, PHASE, type Space, STATE_META, cioState, etTime, managerState } from "../space/state";
 
@@ -54,6 +55,13 @@ export default function FirmSpace() {
   const now = useNow(5000);
   const [selected, setSelected] = useState<AgentId | null>(null);
   const header = useHeaderHeight();
+  const params = useParams();
+  const navigate = useNavigate();
+  const office = (IDS as string[]).includes(params.office ?? "") ? (params.office as AgentId) : null;
+  const enter = (id: AgentId) => {
+    setSelected(null);
+    navigate(`/firm/${id}`);
+  };
 
   const states = useMemo(() => {
     if (!space) return null;
@@ -93,14 +101,15 @@ export default function FirmSpace() {
             <Workstation id="max" state={states.max} selected={selected === "max"} onSelect={pick("max")} phase={unbuilt("max")} />
             <Foreground />
           </svg>
-          {IDS.map((id) => (
+          {!office && IDS.map((id) => (
             <Indicator key={id} id={id} state={states[id]} active={selected === id} onClick={pick(id)} />
           ))}
-          {selected && <SummaryCard id={selected} state={states[selected]} space={space} onClose={() => setSelected(null)} />}
+          {!office && selected && <SummaryCard id={selected} state={states[selected]} space={space} onClose={() => setSelected(null)} onEnter={() => enter(selected)} />}
           <p className="pointer-events-none absolute bottom-2 left-3 hidden text-[10px] text-slate-400/70 sm:block">
             Indicators come from live records. Breathing, plants, steam, and lighting are decorative.
           </p>
         </div>
+        {office && <Office id={office} state={states[office]} space={space} onClose={() => navigate("/firm")} />}
       </div>
       <ul className="divide-y divide-ink-800 border-t border-ink-800 bg-ink-950 lg:hidden" aria-label="What each person is doing">
         {IDS.map((id) => {
@@ -108,7 +117,7 @@ export default function FirmSpace() {
           const m = STATE_META[st.key];
           return (
             <li key={id}>
-              <button onClick={pick(id)} className="flex w-full items-start gap-3 px-4 py-3 text-left">
+              <button onClick={() => enter(id)} className="flex w-full items-start gap-3 px-4 py-3 text-left">
                 <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${m.working ? "fs-pulse-dot" : ""}`} style={{ background: m.working || st.key === "error" ? m.color : AGENTS[id].color }} />
                 <span className="min-w-0 flex-1">
                   <span className="text-sm font-semibold text-slate-100">{NAMES[id]}</span>
@@ -149,7 +158,7 @@ function Indicator({ id, state, active, onClick }: { id: AgentId; state: AgentSt
   );
 }
 
-function SummaryCard({ id, state, space, onClose }: { id: AgentId; state: AgentState; space: Space; onClose: () => void }) {
+function SummaryCard({ id, state, space, onClose, onEnter }: { id: AgentId; state: AgentState; space: Space; onClose: () => void; onEnter: () => void }) {
   const { overview, bump } = useLive();
   const wide = useWide();
   const detail = useResource<ManagerDetail>(id === "cio" ? null : `/api/managers/${id}`, { every: 30000, bump });
@@ -286,9 +295,10 @@ function SummaryCard({ id, state, space, onClose }: { id: AgentId; state: AgentS
         </>
       )}
 
-      <Link to={to} className="btn-primary mt-4 w-full">
-        {id === "cio" ? "Enter Graham's office" : `Enter ${NAMES[id]}'s workspace`} →
-      </Link>
+      <button onClick={onEnter} className="btn-primary mt-4 w-full">
+        {id === "cio" ? "Sit down with Graham" : `Sit down with ${NAMES[id]}`} →
+      </button>
+      <Link to={to} className="mt-2 block text-center text-xs text-slate-500 hover:text-slate-300">Full workspace ↗</Link>
     </div>
   );
 }

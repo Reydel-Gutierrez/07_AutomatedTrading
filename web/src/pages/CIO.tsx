@@ -15,12 +15,9 @@ const STARTERS = [
   "What changes would you recommend to our investment strategies?",
 ];
 
-export default function CioOffice() {
-  const { bump, reloadOverview } = useLive();
+/** Conversation state and actions, shared by the CIO Office page and Graham's desk in The Firm. */
+export function useCioChat(onChange: () => void) {
   const convs = useResource<{ conversations: Conversation[]; provider_ready: boolean }>("/api/cio/conversations", { every: 0 });
-  const proposals = useResource<{ proposals: Proposal[] }>("/api/cio/proposals", { every: 30000, bump });
-  const memory = useResource<{ memories: Memory[] }>("/api/cio/memory", { every: 0, bump });
-  const usage = useResource<Usage>("/api/cio/usage", { every: 60000 });
   const [active, setActive] = useState<number | null>(null);
   const [conv, setConv] = useState<Conversation | null>(null);
   const [draft, setDraft] = useState("");
@@ -36,15 +33,8 @@ export default function CioOffice() {
   }, [active]);
   useEffect(() => {
     // Statement body: some browsers return a Promise from scrollIntoView, which React would call as a cleanup.
-    bottom.current?.scrollIntoView({ behavior: "smooth" });
+    bottom.current?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }, [conv?.messages?.length, pending]);
-
-  const refreshSide = () => {
-    proposals.reload();
-    memory.reload();
-    usage.reload();
-    reloadOverview();
-  };
 
   const send = async (text: string) => {
     const content = text.trim();
@@ -63,7 +53,7 @@ export default function CioOffice() {
       await api.post<CioMessage>(`/api/cio/conversations/${id}/messages`, { content });
       setConv(await api.get<Conversation>(`/api/cio/conversations/${id}`));
       convs.reload();
-      refreshSide();
+      onChange();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setDraft(content);
@@ -78,6 +68,85 @@ export default function CioOffice() {
     setConv({ ...c, messages: [] });
     convs.reload();
   };
+  return { convs, active, setActive, conv, draft, setDraft, pending, error, bottom, send, newConversation };
+}
+
+export type CioChat = ReturnType<typeof useCioChat>;
+
+/** Messages, starters, and the composer. */
+export function ChatThread({ chat, proposalsById, onDecided, greeting = "Good to see you. What's on your mind?", starters = STARTERS }: { chat: CioChat; proposalsById: Record<number, Proposal>; onDecided: () => void; greeting?: string; starters?: string[] }) {
+  const { convs, conv, pending, draft, setDraft, send, error, bottom } = chat;
+  return (
+    <>
+      <div className="flex-1 space-y-5 overflow-y-auto p-5">
+        {convs.data && !convs.data.provider_ready && (
+          <p className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-200">Graham's AI provider is not configured on the Pi (no API key). Conversations will show an error until it is.</p>
+        )}
+        {!conv?.messages?.length && !pending && (
+          <div className="py-4">
+            <p className="font-display text-2xl text-slate-100">{greeting}</p>
+            <p className="mt-2 text-sm text-slate-400">I read the firm's books, the managers' decisions, and the market before I answer, and I show you the records I used. I can propose changes; only you can approve them.</p>
+            <div className="mt-5 flex flex-wrap gap-2">
+              {starters.map((q) => (
+                <button key={q} onClick={() => send(q)} className="rounded-full border border-ink-600 px-3 py-1.5 text-sm text-slate-300 hover:border-gold-500 hover:text-slate-100">{q}</button>
+              ))}
+            </div>
+          </div>
+        )}
+        {conv?.messages?.map((m) => <Message key={m.id} m={m} proposals={proposalsById} onDecided={onDecided} />)}
+        {pending && (
+          <>
+            <Bubble mine text={pending} />
+            <div className="flex items-center gap-3 text-sm text-slate-400">
+              <Avatar id="cio" size={28} working />
+              Reviewing the books…
+            </div>
+          </>
+        )}
+        <div ref={bottom} />
+      </div>
+      <form
+        className="border-t border-ink-800 p-4"
+        onSubmit={(e) => {
+          e.preventDefault();
+          send(draft);
+        }}
+      >
+        <textarea
+          className="input min-h-[56px] resize-y"
+          value={draft}
+          placeholder="Ask Graham about strategy, performance, allocations, or the market…"
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send(draft);
+            }
+          }}
+        />
+        <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
+          <span>Enter to send · Shift+Enter for a new line</span>
+          <button className="btn-primary" disabled={!draft.trim() || !!pending}>Send</button>
+        </div>
+        <ErrorLine error={error} />
+      </form>
+    </>
+  );
+}
+
+export default function CioOffice() {
+  const { bump, reloadOverview } = useLive();
+  const proposals = useResource<{ proposals: Proposal[] }>("/api/cio/proposals", { every: 30000, bump });
+  const memory = useResource<{ memories: Memory[] }>("/api/cio/memory", { every: 0, bump });
+  const usage = useResource<Usage>("/api/cio/usage", { every: 60000 });
+  const refreshSide = () => {
+    proposals.reload();
+    memory.reload();
+    usage.reload();
+    reloadOverview();
+  };
+  const chat = useCioChat(refreshSide);
+  const { convs, active, setActive, pending, newConversation } = chat;
 
   const byId = Object.fromEntries((proposals.data?.proposals ?? []).map((p) => [p.id, p]));
   const open = (proposals.data?.proposals ?? []).filter((p) => p.status === "PENDING");
@@ -105,58 +174,7 @@ export default function CioOffice() {
       </aside>
 
       <section className="card flex min-h-[70vh] flex-col p-0">
-        <div className="flex-1 space-y-5 overflow-y-auto p-5">
-          {convs.data && !convs.data.provider_ready && (
-            <p className="rounded-lg bg-amber-500/10 p-3 text-sm text-amber-200">The CIO's AI provider is not configured on the Pi (no API key). Conversations will show an error until it is.</p>
-          )}
-          {!conv?.messages?.length && !pending && (
-            <div className="py-6">
-              <p className="font-display text-2xl text-slate-100">Good to see you. What's on your mind?</p>
-              <p className="mt-2 text-sm text-slate-400">I read the firm's books, the managers' decisions, and the market before I answer, and I show you the records I used. I can propose changes; only you can approve them.</p>
-              <div className="mt-5 flex flex-wrap gap-2">
-                {STARTERS.map((s) => (
-                  <button key={s} onClick={() => send(s)} className="rounded-full border border-ink-600 px-3 py-1.5 text-sm text-slate-300 hover:border-gold-500 hover:text-slate-100">{s}</button>
-                ))}
-              </div>
-            </div>
-          )}
-          {conv?.messages?.map((m) => <Message key={m.id} m={m} proposals={byId} onDecided={refreshSide} />)}
-          {pending && (
-            <>
-              <Bubble mine text={pending} />
-              <div className="flex items-center gap-3 text-sm text-slate-400">
-                <Avatar id="cio" size={28} working />
-                Reviewing the books…
-              </div>
-            </>
-          )}
-          <div ref={bottom} />
-        </div>
-        <form
-          className="border-t border-ink-800 p-4"
-          onSubmit={(e) => {
-            e.preventDefault();
-            send(draft);
-          }}
-        >
-          <textarea
-            className="input min-h-[64px] resize-y"
-            value={draft}
-            placeholder="Ask your CIO about strategy, performance, allocations, or the market…"
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send(draft);
-              }
-            }}
-          />
-          <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
-            <span>Enter to send · Shift+Enter for a new line</span>
-            <button className="btn-primary" disabled={!draft.trim() || !!pending}>Send</button>
-          </div>
-          <ErrorLine error={error} />
-        </form>
+        <ChatThread chat={chat} proposalsById={byId} onDecided={refreshSide} />
       </section>
 
       <aside className="space-y-6">
@@ -217,7 +235,7 @@ function describe(p: Proposal): string[] {
   return [`Deposit split → ${Object.entries(x.split as Record<string, number>).map(([k, v]) => `${AGENTS[k]?.name ?? k} ${Math.round(v * 100)}%`).join(", ") || "all unallocated"}`];
 }
 
-function ProposalCard({ p, onDecided }: { p: Proposal; onDecided: () => void }) {
+export function ProposalCard({ p, onDecided }: { p: Proposal; onDecided: () => void }) {
   const [deciding, setDeciding] = useState<"approve" | "reject" | null>(null);
   const [note, setNote] = useState("");
   const act = useAction(() => api.post(`/api/cio/proposals/${p.id}/${deciding}`, { confirm: deciding === "approve", note }), () => {
@@ -254,7 +272,7 @@ function ProposalCard({ p, onDecided }: { p: Proposal; onDecided: () => void }) 
   );
 }
 
-function MemoryPanel({ memories, onChange }: { memories: Memory[]; onChange: () => void }) {
+export function MemoryPanel({ memories, onChange }: { memories: Memory[]; onChange: () => void }) {
   const [text, setText] = useState("");
   const add = useAction(() => api.post("/api/cio/memory", { kind: "preference", text }), () => {
     setText("");

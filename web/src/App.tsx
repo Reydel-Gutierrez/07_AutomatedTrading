@@ -21,6 +21,11 @@ const NAV: [string, string][] = [["/", "Headquarters"], ["/firm", "The Firm"], [
 function useDocumentTitle() {
   const { pathname } = useLocation();
   useEffect(() => {
+    const desk = pathname.match(/^\/firm\/(\w+)/)?.[1];
+    if (desk) {
+      document.title = `${desk === "cio" ? "Graham" : desk.replace(/^\w/, (c) => c.toUpperCase())}'s desk · ${BRAND.name}`;
+      return;
+    }
     const page = pathname.startsWith("/managers/") ? `${pathname.split("/")[2]?.replace(/^\w/, (c) => c.toUpperCase())}'s workspace` : NAV.find(([to]) => to === pathname)?.[1];
     document.title = page && pathname !== "/" ? `${page} · ${BRAND.name}` : `${BRAND.name} · Investment HQ`;
   }, [pathname]);
@@ -50,7 +55,7 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
   }, []);
   const c = overview?.controls;
   useDocumentTitle();
-  const fullBleed = useLocation().pathname === "/firm";
+  const fullBleed = useLocation().pathname.startsWith("/firm");
   return (
     <LiveContext.Provider value={{ events, bump, connected, overview, reloadOverview: reload }}>
       <div className="min-h-screen">
@@ -82,6 +87,7 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
             <Route path="/" element={<HQ />} />
             <Route path="/managers/:id" element={<ManagerPage />} />
             <Route path="/firm" element={<FirmSpace />} />
+            <Route path="/firm/:office" element={<FirmSpace />} />
             <Route path="/cio" element={<CioOffice />} />
             <Route path="/capital" element={<CapitalPage />} />
             <Route path="/activity" element={<Activity />} />

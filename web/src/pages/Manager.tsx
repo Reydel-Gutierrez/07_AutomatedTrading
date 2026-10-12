@@ -128,7 +128,7 @@ function describe(activity: string | null): string {
   return map[activity ?? ""] ?? (activity ? activity : "Waiting for the first run.");
 }
 
-function RunNow({ id, onDone }: { id: string; onDone: () => void }) {
+export function RunNow({ id, onDone }: { id: string; onDone: () => void }) {
   const act = useAction(() => api.post(`/api/managers/${id}/run`), onDone);
   return (
     <button className="btn-ghost text-xs" disabled={act.pending} onClick={() => act.run()} title="Request a run now. Orders still only go out inside market hours.">
@@ -137,7 +137,7 @@ function RunNow({ id, onDone }: { id: string; onDone: () => void }) {
   );
 }
 
-function ModeControl({ m, onDone }: { m: ManagerDetail; onDone: () => void }) {
+export function ModeControl({ m, onDone }: { m: ManagerDetail; onDone: () => void }) {
   const [target, setTarget] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [typed, setTyped] = useState("");
@@ -176,7 +176,7 @@ function ModeControl({ m, onDone }: { m: ManagerDetail; onDone: () => void }) {
   );
 }
 
-function Positions({ b }: { b: BookDetail }) {
+export function Positions({ b }: { b: BookDetail }) {
   const held = b.positions.filter((p) => p.quantity > 0);
   if (!held.length) return <Empty>No positions in this book yet.</Empty>;
   return (
@@ -199,7 +199,7 @@ function Positions({ b }: { b: BookDetail }) {
   );
 }
 
-function MandateCard({ m, onDone }: { m: ManagerDetail; onDone: () => void }) {
+export function MandateCard({ m, onDone }: { m: ManagerDetail; onDone: () => void }) {
   if (m.id === "alex") return <AlexMandateCard m={m} onDone={onDone} />;
   if (m.id === "max") return <AlexMandateCard m={m} onDone={onDone} fieldsList={MAX_FIELDS} summary={<MaxSummary p={m.mandate.params} />} />;
   return <TimMandateCard m={m} onDone={onDone} />;
@@ -402,7 +402,7 @@ function TimMandateCard({ m, onDone }: { m: ManagerDetail; onDone: () => void })
   );
 }
 
-function DecisionLog({ m }: { m: ManagerDetail }) {
+export function DecisionLog({ m }: { m: ManagerDetail }) {
   if (!m.runs.length) return <Empty>No decisions yet.</Empty>;
   return (
     <ol className="max-h-[420px] space-y-3 overflow-y-auto pr-2">
@@ -423,7 +423,7 @@ function DecisionLog({ m }: { m: ManagerDetail }) {
   );
 }
 
-function Orders({ m }: { m: ManagerDetail }) {
+export function Orders({ m }: { m: ManagerDetail }) {
   if (!m.orders.length) return <Empty>No orders yet.</Empty>;
   return (
     <div className="overflow-x-auto">
@@ -452,7 +452,7 @@ function Orders({ m }: { m: ManagerDetail }) {
 type Note = { id: number; symbol: string; verdict: "approve" | "reject"; conviction: number; thesis: string; risks: string[]; sources: { title: string; url: string }[]; rank: number | null; searches: number; cost: string; created_at: string };
 
 /** Alex's due-diligence notes: what the research desk read and decided, with its sources. */
-function ResearchDesk() {
+export function ResearchDesk() {
   const { bump } = useLive();
   const { data } = useResource<{ notes: Note[] }>("/api/managers/alex/research", { every: 60000, bump });
   const notes = data?.notes ?? [];

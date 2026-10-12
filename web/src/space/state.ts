@@ -149,7 +149,7 @@ export function managerState(a: SpaceAgent, live: FirmEvent[], now: number): Age
     return { ...base, key: "inactive", headline: `Not operational (Phase ${PHASE[a.id] ?? "—"})`, sub: "No research or trading yet", detail: `${a.name}'s engine is scheduled for Phase ${PHASE[a.id] ?? "—"}. Capital allocated to ${a.name} is held as cash until then.`, source: "Manager registry" };
   }
   if (a.mode === "INACTIVE") {
-    return { ...base, key: "inactive", headline: "Switched off", sub: "Manages no book right now", detail: `${a.name} is inactive and can be turned on from the workspace.`, source: "Manager registry" };
+    return { ...base, key: "inactive", headline: "Switched off", sub: "Manages no book right now", detail: `${a.name} is inactive. Open Controls at his desk to switch him on.`, source: "Manager registry" };
   }
   if (a.status === "DEGRADED") {
     const e = ev.find((x) => x.type === "MANAGER_DEGRADED");
@@ -294,5 +294,5 @@ export function cioState(c: Space["cio"], live: FirmEvent[], now: number): Agent
   if (n) {
     return { ...base, key: "waiting", headline: `Waiting on your decision: ${plural(n, "proposal")}`, sub: `#${c.pending_proposals[0].id} ${c.pending_proposals[0].title}`.slice(0, 70), detail: c.pending_proposals.map((p) => `#${p.id} ${p.title}`).join(" · "), at: c.pending_proposals[0].created_at, source: "Proposals" };
   }
-  return { ...base, key: "idle", headline: "Ready for your questions", sub: "No proposals pending", detail: "Graham works only when you ask; open the CIO Office to start a conversation.", source: "CIO office" };
+  return { ...base, key: "idle", headline: "Ready for your questions", sub: "No proposals pending", detail: "Ask me anything about the firm. I work only when you ask, and I show the records behind every answer.", source: "CIO office" };
 }
