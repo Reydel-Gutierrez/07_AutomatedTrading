@@ -1,8 +1,10 @@
-"""The CIO's tools: read-only views of the firm, plus proposals, memory, and the final answer.
+"""The CIO's tools: read-only views of the firm, plus proposals, memory, his pool, and the final answer.
 
 Everything returned carries database ids (events, orders, proposals, memory)
 so the CIO can cite its sources; citations are verified before the owner sees
-them. No tool here can trade, move capital, or change a mandate or mode.
+them. No tool here can trade or change a mandate or mode. The only capital the
+CIO can move is the pool the owner gave him, through firm.capital_pool, whose
+rules (caps, LIVE-only, recall only his own grants) are enforced in code.
 """
 
 from __future__ import annotations
@@ -14,12 +16,14 @@ from typing import Any, Callable
 from firm.ai.providers import ToolSpec
 from firm.api import views
 from firm.broker.errors import BrokerUnavailable
+from firm.capital_pool import CapitalPool
 from firm.cio.memory import KINDS as MEMORY_KINDS
 from firm.cio.memory import Memory
 from firm.cio.proposals import KINDS as PROPOSAL_KINDS
 from firm.cio.proposals import ProposalError, Proposals
 from firm.clock import et
 from firm.core import Firm
+from firm.money import D
 
 MAX_RESULT_CHARS = 14000
 CITATION_TYPES = ("event", "order", "proposal", "memory")
@@ -61,6 +65,23 @@ SPECS = [
         ),
     ),
     ToolSpec(
+        "get_capital_pool",
+        "Your capital pool (money the owner gave you to distribute): cash, the owner's per-manager caps (max share of the firm), "
+        "each manager's share, headroom under the cap, what you granted, and what you can recall.",
+        _obj({}),
+    ),
+    ToolSpec(
+        "allocate_from_pool",
+        "Move money from your pool to a manager trading real money (LIVE). Takes effect immediately and is logged and alerted. "
+        "Refused if it would push the manager above the owner's cap. Give an evidence-based reason the owner can read.",
+        _obj({"manager_id": {"type": "string", "enum": ["tim", "alex", "max"]}, "amount": {"type": "number"}, "reason": {"type": "string"}}, ["manager_id", "amount", "reason"]),
+    ),
+    ToolSpec(
+        "recall_to_pool",
+        "Return money you previously granted a manager back to your pool (only your own grants, only their free cash). Takes effect immediately.",
+        _obj({"manager_id": {"type": "string", "enum": ["tim", "alex", "max"]}, "amount": {"type": "number"}, "reason": {"type": "string"}}, ["manager_id", "amount", "reason"]),
+    ),
+    ToolSpec(
         "remember",
         "Save something durable the owner said or decided (objective, preference, decision, concern, fact). The owner sees and can edit every memory.",
         _obj({"kind": {"type": "string", "enum": list(MEMORY_KINDS)}, "text": {"type": "string"}}, ["kind", "text"]),
@@ -91,6 +112,7 @@ class CIOTools:
         self.conversation_id = conversation_id
         self.created_proposals: list[int] = []
         self.remembered: list[int] = []
+        self.pool_moves: list[int] = []
         self.final: dict[str, Any] | None = None
 
     def call(self, name: str, args: dict[str, Any]) -> str:
@@ -178,7 +200,20 @@ class CIOTools:
     def t_list_proposals(self, status: str | None = None) -> dict[str, Any]:
         return {"proposals": [{k: p[k] for k in ("id", "kind", "title", "status", "created_at", "decided_by", "decision_note", "payload")} for p in self.proposals.list(status or None, limit=20)]}
 
-    # -- the only side effects: proposals, memory, final answer ----------------
+    def t_get_capital_pool(self) -> dict[str, Any]:
+        return CapitalPool(self.firm).status()
+
+    # -- side effects: proposals, memory, the owner's pool, final answer ----------
+    def t_allocate_from_pool(self, manager_id: str, amount: float, reason: str) -> dict[str, Any]:
+        out = CapitalPool(self.firm).grant(manager_id, D(str(amount)), reason=reason, by="cio")
+        self.pool_moves.append(out["event_id"])
+        return {**out, "note": "Done. Cite this event in your answer."}
+
+    def t_recall_to_pool(self, manager_id: str, amount: float, reason: str) -> dict[str, Any]:
+        out = CapitalPool(self.firm).recall(manager_id, D(str(amount)), reason=reason, by="cio")
+        self.pool_moves.append(out["event_id"])
+        return {**out, "note": "Done. Cite this event in your answer."}
+
     def t_create_proposal(self, kind: str, title: str, rationale: str, payload: dict[str, Any], evidence_event_ids: list[int] | None = None) -> dict[str, Any]:
         p = self.proposals.create(kind, title, payload, rationale, evidence=evidence_event_ids or [], created_by="cio", conversation_id=self.conversation_id)
         self.created_proposals.append(p["id"])

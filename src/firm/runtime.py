@@ -141,6 +141,8 @@ class Service:
             add(Job(f"manager:{manager_id}", self._manager_due(manager_id), self._manager_run(manager_id), 600))
         if "alex" in f.managers:
             add(Job("research:alex", self._research_due, self.research, 1800))
+        if self.cio is not None:
+            add(Job("cio:pool_review", self._pool_review_due, self.pool_review, 900))
         add(Job("marks", lambda now, st: self._daily_after(now, "marks", time(16, 20), trading_only=True), self.marks, 300))
         add(Job("market_bars", lambda now, st: self._daily_after(now, "market_bars", time(17, 0)), self.market_bars, 300))
         add(Job("backup", lambda now, st: self._daily_after(now, "backup", time(2, 30)), self.backup, 900))
@@ -199,6 +201,24 @@ class Service:
             return {"summary": outcome.summary, "orders": outcome.orders}
 
         return run
+
+    # -- Graham's pool ---------------------------------------------------------
+    def _pool_review_due(self, now: datetime, st: JobState) -> bool:
+        """When the owner funds the pool, and weekly otherwise; trading days 10:30-15:00 ET."""
+        if CALENDAR.session_for(now) is None or not (time(10, 30) <= et(now).time() < time(15, 0)):
+            return False
+        if st.last_started and (now - st.last_started).total_seconds() < 3600:
+            return False
+        state = self.firm.settings.get("cio_pool_state") or {}
+        if state.get("review_requested"):
+            return True
+        last = state.get("last_review")
+        return last is None or (now - parse(last)).days >= 7
+
+    def pool_review(self) -> dict[str, Any]:
+        reply = self.cio.review_pool()
+        self.firm.settings.put("cio_pool_state", {"last_review": iso(self.clock()), "review_requested": False}, by="scheduler")
+        return {"reviewed": reply is not None, "role": reply and reply.get("role")}
 
     # -- research ------------------------------------------------------------
     def _research_due(self, now: datetime, st: JobState) -> bool:

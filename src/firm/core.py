@@ -18,7 +18,10 @@ from firm.events import EventLog, Sink
 from firm.ledger import Ledger
 from firm.managers.base import BookView, Manager, ManagerContext
 from firm.managers.registry import Registry
-from firm.managers.alex import DEFAULT_MANDATE as ALEX_MANDATE, Alex, needs_strategy
+from firm.managers import alex as alex_mod
+from firm.managers import max as max_mod
+from firm.managers.alex import Alex
+from firm.managers.max import Max
 from firm.managers.tim import Tim
 from firm.market import MarketData
 from firm.money import ZERO, cents
@@ -67,17 +70,20 @@ class Firm:
         )
         self.reconciler = Reconciler(db=db, ledger=self.ledger, events=self.events, settings=self.settings, controls=self.controls, desk=self.desk, clock=clock)
         self.performance = Performance(db, self.ledger, self.market, self.settings)
-        self.managers: dict[str, Manager] = dict(managers or {"tim": Tim(), "alex": Alex()})
-        if "alex" in self.managers:
-            self._ensure_alex_strategy()
+        self.managers: dict[str, Manager] = dict(managers or {"tim": Tim(), "alex": Alex(), "max": Max()})
+        self._ensure_strategies()
 
-    def _ensure_alex_strategy(self) -> None:
-        """Phase 3: replace Alex's placeholder mandate with his strategy, keeping the owner's risk policy."""
-        _, current = self.registry.mandate("alex")
-        if not needs_strategy(current):
-            return
-        risk = {k: current[k] for k in ("drawdown_policy", "sleeve_drawdown_pause", "daily_loss_pause") if k in current}
-        self.registry.update_mandate("alex", {**ALEX_MANDATE, **risk}, by="system", note="Phase 3: Alex's screen, research, and portfolio rules (risk policy unchanged)")
+    def _ensure_strategies(self) -> None:
+        """Replace a placeholder mandate with the built strategy once, keeping the owner's risk policy."""
+        notes = {"alex": "Phase 3: Alex's screen, research, and portfolio rules (risk policy unchanged)", "max": "Phase 4: Max's trend-pullback entries, exits, and per-trade stops (risk policy unchanged)"}
+        for mid, mod in (("alex", alex_mod), ("max", max_mod)):
+            if mid not in self.managers:
+                continue
+            _, current = self.registry.mandate(mid)
+            if not mod.needs_strategy(current):
+                continue
+            risk = {k: current[k] for k in ("drawdown_policy", "sleeve_drawdown_pause", "daily_loss_pause", "per_trade_stop_required") if k in current}
+            self.registry.update_mandate(mid, {**mod.DEFAULT_MANDATE, **risk}, by="system", note=notes[mid])
 
     # -- managers ----------------------------------------------------------
     def view(self, manager_id: str, book: str, symbols: list[str]) -> BookView:
@@ -161,16 +167,31 @@ class Firm:
             self.settings.put("manager_requests", pending, by="firm")
 
     # -- capital (owner actions) ---------------------------------------------
+    def _bucket_name(self, bucket: str) -> str:
+        from firm.capital_pool import POOL, POOL_NAME
+
+        return POOL_NAME if bucket == POOL else self.registry.get(bucket).display_name
+
     def allocate(self, manager_id: str, amount: Decimal, *, by: str, note: str = "") -> None:
-        self.registry.get(manager_id)
+        """Owner capital to a manager, or to the CIO's pool ('cio') for him to distribute."""
+        from firm.capital_pool import POOL
+
+        name = self._bucket_name(manager_id)
         self.ledger.allocate(manager_id, amount, by=by, memo=note or None)
-        self.events.emit("CAPITAL_ALLOCATED", f"${cents(amount)} allocated to {self.registry.get(manager_id).display_name}" + (f": {note}" if note else ""), actor=by, manager_id=manager_id, payload={"amount": str(cents(amount))})
-        self.request_run(manager_id, "allocation_changed")
+        self.events.emit("CAPITAL_ALLOCATED", f"${cents(amount)} allocated to {name}" + (f": {note}" if note else ""), actor=by, manager_id=None if manager_id == POOL else manager_id, payload={"amount": str(cents(amount)), "bucket": manager_id})
+        if manager_id == POOL:
+            self.settings.put("cio_pool_state", {**(self.settings.get("cio_pool_state") or {}), "review_requested": True}, by=by)
+        else:
+            self.request_run(manager_id, "allocation_changed")
 
     def deallocate(self, manager_id: str, amount: Decimal, *, by: str, note: str = "") -> None:
+        from firm.capital_pool import POOL
+
+        name = self._bucket_name(manager_id)
         self.ledger.deallocate(manager_id, amount, by=by, memo=note or None)
-        self.events.emit("CAPITAL_DEALLOCATED", f"${cents(amount)} returned from {self.registry.get(manager_id).display_name} to unallocated" + (f": {note}" if note else ""), actor=by, manager_id=manager_id, payload={"amount": str(cents(amount))})
-        self.request_run(manager_id, "allocation_changed")
+        self.events.emit("CAPITAL_DEALLOCATED", f"${cents(amount)} returned from {name} to unallocated" + (f": {note}" if note else ""), actor=by, manager_id=None if manager_id == POOL else manager_id, payload={"amount": str(cents(amount)), "bucket": manager_id})
+        if manager_id != POOL:
+            self.request_run(manager_id, "allocation_changed")
 
     def firm_nav(self, book: str = "LIVE") -> dict[str, Decimal]:
         balances = self.ledger.balances(book)

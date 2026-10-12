@@ -82,6 +82,10 @@ class MarketData:
                 out[sym.upper()] = [float(r["close"]) for r in reversed(rows)]
         return out
 
+    def last_bar_date(self, symbol: str) -> str | None:
+        row = self.db.one("SELECT max(date) AS d FROM market_bars WHERE symbol = ?", (symbol.upper(),))
+        return row["d"] if row and row["d"] else None
+
     def close_on(self, symbol: str, day: date) -> Decimal | None:
         row = self.db.one("SELECT close FROM market_bars WHERE symbol = ? AND date <= ? ORDER BY date DESC LIMIT 1", (symbol.upper(), day.isoformat()))
         return D(row["close"]) if row else None

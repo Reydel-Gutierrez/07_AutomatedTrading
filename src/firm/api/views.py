@@ -10,6 +10,7 @@ from typing import Any
 from firm.broker.errors import BrokerUnavailable
 from firm.clock import CALENDAR, EASTERN, et, iso, parse_hhmm
 from firm.core import Firm
+from firm.capital_pool import POOL, POOL_NAME, CapitalPool
 from firm.ledger import FIRM, SUSPENSE
 from firm.money import ZERO, cents
 
@@ -55,15 +56,19 @@ def _next_run(firm: Firm, manager_id: str) -> str | None:
     if impl is None or firm.registry.get(manager_id).book is None:
         return None
     _, mandate = firm.registry.mandate(manager_id)
-    run_at = parse_hhmm(str(mandate.get("run_time_et", "10:05")))
+    times = sorted(parse_hhmm(str(t)) for t in (mandate.get("run_times_et") or [mandate.get("run_time_et", "10:05")]))
     last = (firm.settings.get("manager_scheduled_runs") or {}).get(manager_id)
+    last_dt = datetime.fromisoformat(last) if last else None
+    multi = len(times) > 1
     day = et(firm.clock()).date()
     for _ in range(10):
         session = CALENDAR.session_on(day)
         if session is not None:
-            at = datetime.combine(day, run_at, tzinfo=EASTERN)
-            if at > firm.clock() - timedelta(minutes=1) and (not last or et(datetime.fromisoformat(last)).date() != day):
-                return at.isoformat()
+            for run_at in times:
+                at = datetime.combine(day, run_at, tzinfo=EASTERN)
+                done = last_dt is not None and (last_dt >= at if multi else et(last_dt).date() == day)
+                if at > firm.clock() - timedelta(minutes=1) and not done:
+                    return at.isoformat()
         day += timedelta(days=1)
     return None
 
@@ -82,8 +87,9 @@ def overview(firm: Firm, health: dict[str, Any]) -> dict[str, Any]:
     live = {m.id: _sleeve(firm, "LIVE", m.id, px) for m in managers}
     sim = {m.id: _sleeve(firm, "SIM", m.id, px) for m in managers}
     unallocated = firm.ledger.cash("LIVE", FIRM)
+    pool = firm.ledger.cash("LIVE", POOL)
     suspense = _sleeve(firm, "LIVE", SUSPENSE, px)
-    total = unallocated + suspense["nav"] + sum((v["nav"] for v in live.values()), ZERO)
+    total = unallocated + pool + suspense["nav"] + sum((v["nav"] for v in live.values()), ZERO)
     holdings = []
     for m in managers:
         for sym, qty in sorted(live[m.id]["holdings"].items()):
@@ -105,6 +111,7 @@ def overview(firm: Firm, health: dict[str, Any]) -> dict[str, Any]:
         },
         "allocation": [
             *({"id": m.id, "name": m.display_name, "nav": f(live[m.id]["nav"]), "pct": float(live[m.id]["nav"] / total) if total > 0 else 0.0} for m in managers),
+            *([{"id": POOL, "name": POOL_NAME, "nav": f(pool), "pct": float(pool / total) if total > 0 else 0.0}] if pool or firm.settings.get("cio_grants") else []),
             {"id": "unallocated", "name": "Unallocated", "nav": f(unallocated), "pct": float(unallocated / total) if total > 0 else 0.0},
         ],
         "managers": [
@@ -257,9 +264,10 @@ def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None, re
 
 
 def capital(firm: Firm) -> dict[str, Any]:
-    flows = [e.as_dict() for e in firm.events.recent(types=["EXTERNAL_FLOW", "DIVIDEND", "CAPITAL_ALLOCATED", "CAPITAL_DEALLOCATED", "SUSPENSE", "SUSPENSE_RESOLVED", "BOOKS_OPENED"], limit=100)]
+    flows = [e.as_dict() for e in firm.events.recent(types=["EXTERNAL_FLOW", "DIVIDEND", "CAPITAL_ALLOCATED", "CAPITAL_DEALLOCATED", "CIO_ALLOCATION", "SUSPENSE", "SUSPENSE_RESOLVED", "BOOKS_OPENED"], limit=100)]
     return {
         "unallocated": f(firm.ledger.free_cash("LIVE", FIRM)),
+        "pool": CapitalPool(firm).status(),
         "suspense_cash": f(firm.ledger.cash("LIVE", SUSPENSE)),
         "suspense_positions": {k: float(v) for k, v in firm.ledger.holdings("LIVE", SUSPENSE).get(SUSPENSE, {}).items()},
         "deposit_split": firm.settings.get("deposit_split"),

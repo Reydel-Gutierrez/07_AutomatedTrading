@@ -77,7 +77,7 @@ export const STATE_META: Record<StateKey, { label: string; color: string; workin
 };
 
 const MANAGER_TYPES = new Set(["MANAGER_RUN", "ORDER_FILLED", "ORDER_SUBMITTED", "ORDER_BLOCKED", "ORDER_DEFERRED", "ORDER_REJECTED", "ORDER_UNKNOWN", "ORDER_RECOVERED", "ORDER_NOT_FOUND", "MANAGER_DEGRADED", "MANAGER_WAITING", "MANAGER_MODE", "MANDATE_CHANGED", "CAPITAL_ALLOCATED", "CAPITAL_DEALLOCATED", "SLEEVE_PAUSED", "TURNOVER_LIMIT", "RESEARCH_NOTE", "RESEARCH_FAILED", "RESEARCH_PAUSED"]);
-export const CIO_TYPES = new Set(["PROPOSAL_CREATED", "PROPOSAL_APPLIED", "PROPOSAL_REJECTED", "PROPOSAL_FAILED", "CIO_MEMORY", "AI_PROVIDER_UNAVAILABLE"]);
+export const CIO_TYPES = new Set(["CIO_ALLOCATION", "PROPOSAL_CREATED", "PROPOSAL_APPLIED", "PROPOSAL_REJECTED", "PROPOSAL_FAILED", "CIO_MEMORY", "AI_PROVIDER_UNAVAILABLE"]);
 const ERROR_TYPES = new Set(["MANAGER_DEGRADED", "ORDER_REJECTED", "ORDER_UNKNOWN", "ORDER_NOT_FOUND"]);
 const sideOf = (e: FirmEvent) => (/\bSELL\b/.test(e.summary) ? "sell" : /\bBUY\b/.test(e.summary) ? "buy" : undefined);
 const MIN = 60_000;
@@ -248,7 +248,8 @@ export function managerState(a: SpaceAgent, live: FirmEvent[], now: number): Age
       return { ...base, key: "error", headline: "Order blocked by a safeguard", sub: codes(blocked[0]).join(", ") || blocked[0].summary.slice(0, 60), detail: blocked.map((e) => e.summary).join(" · "), symbols: blocked.filter((e) => e.symbol).map((e) => ({ symbol: e.symbol!, side: sideOf(e) })), at: blocked[0].ts, source: `Event #${blocked[0].id}` };
     }
     if (recent && latest?.id === lastRun.id) {
-      const verb = activity === "holding" ? "Decided to hold" : activity === "investing" ? "Decided to invest" : activity === "rebalancing" ? "Decided to rebalance" : "Decision recorded";
+      const verbs: Record<string, string> = { holding: "Decided to hold", investing: "Decided to invest", rebalancing: "Decided to rebalance", entering: "Entered pullback trades", exiting: "Exited trades", watching: "Stops checked", "waiting for research": "Waiting for research approvals" };
+      const verb = verbs[activity ?? ""] ?? "Decision recorded";
       return { ...base, key: "completed", headline: verb, sub: summary.slice(0, 80), detail: summary, symbols: intents(lastRun), book: runBook, at: lastRun.ts, source: `Event #${lastRun.id}` };
     }
   }
@@ -283,6 +284,11 @@ export function cioState(c: Space["cio"], live: FirmEvent[], now: number): Agent
   if (down) return { ...base, key: "error", headline: "AI provider unavailable", sub: "Check the API key or credits", detail: down.summary, at: down.ts, source: `Event #${down.id}` };
   if (!c.provider_ready) return { ...base, key: "waiting", headline: "Waiting for an AI provider key", sub: "Configured on the Pi", detail: "Conversations resume once the provider is configured on the Pi.", source: "Service" };
   const n = c.pending_proposals.length;
+  const moved = ev.find((e) => e.type === "CIO_ALLOCATION" && age(e.ts, now) < COMPLETED_FOR);
+  if (moved) {
+    const what = moved.summary.replace(/^Graham /, "").split(": ")[0];
+    return { ...base, key: "completed", headline: what.charAt(0).toUpperCase() + what.slice(1), sub: moved.summary.split(": ").slice(1).join(": ").slice(0, 80) || null, detail: moved.summary, at: moved.ts, source: `Event #${moved.id}` };
+  }
   const filed = ev.find((e) => e.type === "PROPOSAL_CREATED" && age(e.ts, now) < COMPLETED_FOR);
   if (filed) return { ...base, key: "completed", headline: `Filed proposal #${filed.payload?.proposal_id ?? ""}`.trim(), sub: n ? "Waiting on your decision" : null, detail: filed.summary, at: filed.ts, source: `Event #${filed.id}` };
   if (n) {

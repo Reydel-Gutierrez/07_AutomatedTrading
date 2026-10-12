@@ -358,7 +358,7 @@ function RoomDecor({ id, off }: { id: "tim" | "alex" | "max"; off: boolean }) {
         <g>
           <OnWallY x={25} y={G_Y0} z={6.6}>
             <rect width={10 * K} height={18} fill="#07090d" />
-            <text x={10 * K / 2} y={13} textAnchor="middle" fontSize="9" fill="#f59e0b" opacity=".35" letterSpacing="2.5" fontFamily="Inter, sans-serif">MARKET TAPE OFFLINE</text>
+            <text x={10 * K / 2} y={13} textAnchor="middle" fontSize="9" fill="#f59e0b" opacity={off ? 0.35 : 0.8} letterSpacing="2.5" fontFamily="Inter, sans-serif">{off ? "MARKET TAPE OFFLINE" : "WATCHLIST · SPY · QQQ · IWM · SMH · XLK"}</text>
           </OnWallY>
           <OnWallY x={30.5} y={G_Y0} z={5}>
             <rect width={4.5 * K} height={2.6 * K} rx={2} fill="#0a0d13" stroke="#2b3242" strokeWidth="3" />

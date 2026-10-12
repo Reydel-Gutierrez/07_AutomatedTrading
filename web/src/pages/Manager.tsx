@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useLive } from "../App";
 import { api, type BookDetail, type ManagerDetail } from "../api";
@@ -112,6 +112,9 @@ function describe(activity: string | null): string {
     rebalancing: "Rebalancing: selling overweight funds, then buying underweight ones.",
     holding: "Holding. The portfolio is within its bands.",
     "waiting for research": "Waiting for research approvals on today's top-ranked names before buying.",
+    watching: "Watching his positions' stops; entries are decided near the close.",
+    entering: "Entering pullback trades, each with a stop.",
+    exiting: "Exiting trades: target, stop, time, or trend.",
     "waiting for market data": "Waiting for market data.",
     idle: "Idle: not enough capital to trade.",
   };
@@ -190,7 +193,9 @@ function Positions({ b }: { b: BookDetail }) {
 }
 
 function MandateCard({ m, onDone }: { m: ManagerDetail; onDone: () => void }) {
-  return m.id === "alex" ? <AlexMandateCard m={m} onDone={onDone} /> : <TimMandateCard m={m} onDone={onDone} />;
+  if (m.id === "alex") return <AlexMandateCard m={m} onDone={onDone} />;
+  if (m.id === "max") return <AlexMandateCard m={m} onDone={onDone} fieldsList={MAX_FIELDS} summary={<MaxSummary p={m.mandate.params} />} />;
+  return <TimMandateCard m={m} onDone={onDone} />;
 }
 
 const ALEX_FIELDS: [string, string, number][] = [
@@ -201,16 +206,47 @@ const ALEX_FIELDS: [string, string, number][] = [
   ["research_daily_limit", "Research notes per day", 1],
 ];
 
-function AlexMandateCard({ m, onDone }: { m: ManagerDetail; onDone: () => void }) {
+const MAX_FIELDS: [string, string, number][] = [
+  ["max_positions", "Max positions", 1],
+  ["position_pct", "Per position (%)", 100],
+  ["stop_pct", "Stop below entry (%)", 100],
+  ["max_hold_days", "Max sessions held", 1],
+  ["rsi_entry_below", "Enter when RSI(2) below", 1],
+  ["min_trade_usd", "Minimum trade ($)", 1],
+];
+
+function MaxSummary({ p }: { p: Record<string, any> }) {
+  const universe: string[] = p.universe ?? [];
+  return (
+    <div className="space-y-3 text-sm text-slate-400">
+      <p>
+        Trend pullbacks in {universe.length} liquid ETFs and mega caps: buys when the price is above its {p.trend_sma_days}-day average and RSI({p.rsi_days}) is below {p.rsi_entry_below},
+        up to {p.max_positions} positions of {pct(p.position_pct, 0)} each.
+      </p>
+      <p>
+        Every trade has a stop {pct(p.stop_pct, 0)} below entry. Exits on a close above the {p.exit_sma_days}-day average, after {p.max_hold_days} sessions, or when the trend breaks.
+        Checks stops at {(p.run_times_et ?? [])[0]} ET and decides entries at {p.entry_time_et} ET. New buys pause at −{pct(p.sleeve_drawdown_pause, 0)} from the sleeve's peak or −{pct(p.daily_loss_pause, 0)} in a day.
+      </p>
+      <details className="text-xs text-slate-500">
+        <summary className="cursor-pointer">Universe ({universe.length})</summary>
+        <p className="mt-2 leading-relaxed">{universe.join(" · ")}</p>
+      </details>
+    </div>
+  );
+}
+
+function AlexMandateCard({ m, onDone, fieldsList = ALEX_FIELDS, summary }: { m: ManagerDetail; onDone: () => void; fieldsList?: [string, string, number][]; summary?: React.ReactNode }) {
+  const ALEX_FIELDS_ = fieldsList;
   const p = m.mandate.params;
+  const timed = "run_time_et" in p;
   const [editing, setEditing] = useState(false);
-  const [fields, setFields] = useState<Record<string, string>>(() => ({ ...Object.fromEntries(ALEX_FIELDS.map(([k, , scale]) => [k, String(Math.round(Number(p[k]) * scale * 100) / 100)])), run_time_et: String(p.run_time_et) }));
+  const [fields, setFields] = useState<Record<string, string>>(() => ({ ...Object.fromEntries(ALEX_FIELDS_.map(([k, , scale]) => [k, String(Math.round(Number(p[k]) * scale * 100) / 100)])), ...(timed ? { run_time_et: String(p.run_time_et) } : {}) }));
   const [note, setNote] = useState("");
   const save = useAction(
     () =>
       api.post(`/api/managers/${m.id}/mandate`, {
         note,
-        params: { ...p, ...Object.fromEntries(ALEX_FIELDS.map(([k, , scale]) => [k, Number(fields[k]) / scale])), run_time_et: fields.run_time_et },
+        params: { ...p, ...Object.fromEntries(ALEX_FIELDS_.map(([k, , scale]) => [k, Number(fields[k]) / scale])), ...(timed ? { run_time_et: fields.run_time_et } : {}) },
       }),
     () => {
       setEditing(false);
@@ -221,7 +257,15 @@ function AlexMandateCard({ m, onDone }: { m: ManagerDetail; onDone: () => void }
   const universe: string[] = p.universe ?? [];
   return (
     <Card title={`Strategy · mandate v${m.mandate.version}`} action={!editing && <button className="btn-ghost text-xs" onClick={() => setEditing(true)}>Adjust</button>}>
-      {!editing ? (
+      {!editing && summary ? (
+        <div className="space-y-3">
+          {summary}
+          <details className="text-xs text-slate-500">
+            <summary className="cursor-pointer">History</summary>
+            <ul className="mt-2 space-y-1">{m.mandate.history.map((h) => <li key={h.version}>v{h.version} · {when(h.created_at)} · {h.created_by}: {h.note}</li>)}</ul>
+          </details>
+        </div>
+      ) : !editing ? (
         <div className="space-y-3 text-sm text-slate-400">
           <p>
             Screens {universe.length} large US stocks by 12-1 month momentum ÷ volatility, keeping names above their {p.trend_sma_days}-day average. Buys the top {p.positions} names
@@ -243,14 +287,16 @@ function AlexMandateCard({ m, onDone }: { m: ManagerDetail; onDone: () => void }
       ) : (
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
-            {ALEX_FIELDS.map(([k, label]) => (
+            {ALEX_FIELDS_.map(([k, label]) => (
               <Field key={k} label={label}>
                 <input className="input" type="number" value={fields[k]} onChange={(e) => setFields({ ...fields, [k]: e.target.value })} />
               </Field>
             ))}
-            <Field label="Daily run (ET)">
-              <input className="input" value={fields.run_time_et} onChange={(e) => setFields({ ...fields, run_time_et: e.target.value })} />
-            </Field>
+            {timed && (
+              <Field label="Daily run (ET)">
+                <input className="input" value={fields.run_time_et} onChange={(e) => setFields({ ...fields, run_time_et: e.target.value })} />
+              </Field>
+            )}
           </div>
           <Field label="Why the change?">
             <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Required" />

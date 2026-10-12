@@ -158,6 +158,13 @@ class Ledger:
             raise LedgerError("deallocation must be positive")
         return self._capital(kind="DEALLOCATE", entries=[Entry(manager, -amt), Entry(FIRM, amt)], by=by, memo=memo, books=BOOKS)
 
+    def transfer(self, src: str, dst: str, amount: Decimal, *, kind: str, by: str, memo: str | None = None) -> str:
+        """Move free cash between two buckets (e.g. the CIO's pool and a manager), mirrored in both books."""
+        amt = cents(amount)
+        if amt <= 0 or src == dst:
+            raise LedgerError("transfer needs a positive amount between two different buckets")
+        return self._capital(kind=kind, entries=[Entry(src, -amt), Entry(dst, amt)], by=by, memo=memo, books=BOOKS)
+
     # -- book-specific -------------------------------------------------------
     def adjust(self, book: str, bucket: str, cash: Decimal, *, kind: str, by: str, memo: str) -> str:
         """Single-bucket cash adjustment (rounding true-up, suspense, dividend residue)."""

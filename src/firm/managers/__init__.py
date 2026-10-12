@@ -1,4 +1,4 @@
-"""Managers: Tim (core ETFs), Alex (systematic growth with research), Max (Phase 4)."""
+"""Managers: Tim (core ETFs), Alex (systematic growth with research), Max (swing trading with stops)."""
 
 from __future__ import annotations
 
@@ -15,4 +15,8 @@ def validate_mandate(manager_id: str, mandate: Mapping[str, Any]) -> list[str]:
         from firm.managers.alex import validate_mandate as alex
 
         return alex(mandate)
+    if manager_id == "max":
+        from firm.managers.max import validate_mandate as max_
+
+        return max_(mandate)
     return []

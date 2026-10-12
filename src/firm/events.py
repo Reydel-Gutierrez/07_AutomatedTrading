@@ -35,6 +35,7 @@ ALERT_TYPES = frozenset(
         "DRAWDOWN_BRAKE",
         "DRAWDOWN_ALERT",
         "PROPOSAL_CREATED",
+        "CIO_ALLOCATION",
         "AI_PROVIDER_UNAVAILABLE",
         "TURNOVER_LIMIT",
         "SLEEVE_PAUSED",

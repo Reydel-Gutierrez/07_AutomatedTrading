@@ -75,8 +75,18 @@ export type ManagerDetail = {
   implemented: boolean;
 };
 
+export type PoolStatus = {
+  cash: string;
+  free: string;
+  firm_nav: string;
+  moves_today: number;
+  policy: { caps: Record<string, number>; eligible_modes: string[]; min_move_usd: number; max_moves_per_day: number };
+  managers: { id: string; name: string; mode: string; eligible: boolean; share: number; cap: number; headroom: string; granted: string; recallable: string }[];
+};
+
 export type Capital = {
   unallocated: number;
+  pool: PoolStatus;
   suspense_cash: number;
   suspense_positions: Record<string, number>;
   deposit_split: Record<string, number>;

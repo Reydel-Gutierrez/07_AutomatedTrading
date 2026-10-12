@@ -7,7 +7,7 @@ import { Feed } from "../components/Feed";
 import { AGENTS, Avatar, Badge, Card, Empty, Stat } from "../components/ui";
 import { ago, money, pct, shares, signedPct, tone, until } from "../format";
 
-const ALLOC_COLORS: Record<string, string> = { tim: AGENTS.tim.color, alex: AGENTS.alex.color, max: AGENTS.max.color, unallocated: "#475569" };
+const ALLOC_COLORS: Record<string, string> = { tim: AGENTS.tim.color, alex: AGENTS.alex.color, max: AGENTS.max.color, cio: AGENTS.cio.color, unallocated: "#475569" };
 const WORKING = new Set(["investing", "rebalancing"]);
 
 export function isWorking(m: { activity: string | null }, events: FirmEvent[], id: string): boolean {

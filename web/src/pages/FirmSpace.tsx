@@ -11,7 +11,7 @@ import { type AgentState, CIO_TYPES, PHASE, type Space, STATE_META, cioState, et
 
 const IDS: AgentId[] = ["cio", "tim", "alex", "max"];
 const NAMES: Record<AgentId, string> = { cio: "Graham", tim: "Tim", alex: "Alex", max: "Max" };
-const ALLOC_COLORS: Record<string, string> = { tim: AGENTS.tim.color, alex: AGENTS.alex.color, max: AGENTS.max.color, unallocated: "#475569" };
+const ALLOC_COLORS: Record<string, string> = { tim: AGENTS.tim.color, alex: AGENTS.alex.color, max: AGENTS.max.color, cio: AGENTS.cio.color, unallocated: "#475569" };
 
 function useNow(every: number) {
   const [now, setNow] = useState(() => Date.now());

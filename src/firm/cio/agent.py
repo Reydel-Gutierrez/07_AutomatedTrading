@@ -9,7 +9,7 @@ from typing import Any, Callable
 from firm.ai.budget import Budget, BudgetExceeded
 from firm.ai.providers import Provider, ProviderError, ToolCall
 from firm.cio.memory import Memory
-from firm.cio.prompt import INSTRUCTIONS, SUMMARY_INSTRUCTIONS
+from firm.cio.prompt import INSTRUCTIONS, POOL_REVIEW_PROMPT, SUMMARY_INSTRUCTIONS
 from firm.cio.proposals import Proposals
 from firm.cio.tools import SPECS, CIOTools
 from firm.clock import et, iso, is_regular_hours
@@ -84,6 +84,19 @@ class CIO:
             ).lastrowid
             conn.execute("UPDATE cio_conversations SET updated_at = ? WHERE id = ?", (now, cid))
         return _msg(self.firm.db.one("SELECT * FROM cio_messages WHERE id = ?", (mid,)))
+
+    # -- the pool review (scheduled) ----------------------------------------------
+    def review_pool(self) -> dict[str, Any] | None:
+        """Graham's own look at his pool, recorded as a conversation the owner can read."""
+        from firm.capital_pool import CapitalPool
+        from firm.money import D
+
+        st = CapitalPool(self.firm).status()
+        min_move = D(str(st["policy"]["min_move_usd"]))
+        if D(st["free"]) < min_move and not any(D(m["granted"]) > 0 for m in st["managers"]):
+            return None
+        conv = self.create_conversation(f"Capital pool review · {et(self.firm.clock()).strftime('%b %d')}")
+        return self.ask(conv["id"], POOL_REVIEW_PROMPT)
 
     # -- a turn ------------------------------------------------------------------
     def ask(self, cid: int, text: str) -> dict[str, Any]:

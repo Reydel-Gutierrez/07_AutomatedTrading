@@ -8,10 +8,10 @@ and Investment HQ shows everything they do.
 
 | Agent | Role | Status |
 |---|---|---|
-| Graham (CIO) | Chief Investment Officer: conversation, oversight, allocation advice | Phase 2 |
+| Graham (CIO) | Chief Investment Officer: conversation, oversight, allocation advice, distributes his capital pool | Phase 2 |
 | Tim | Core manager: diversified ETFs, contributions, rebalancing (no AI) | Phase 1 |
 | Alex | Strategic growth: momentum screen with AI research veto ([design](docs/firm/PHASE3_ALEX.md)) | Phase 3 (built) |
-| Max | Short-term swing trading (simulation first) | Phase 4 |
+| Max | Short-term swing trading: trend pullbacks with per-trade stops ([design](docs/firm/PHASE4_MAX.md)) | Phase 4 (built) |
 
 **Read next:** [ARCHITECTURE.md](ARCHITECTURE.md) (how it works),
 [RUNBOOK.md](RUNBOOK.md) (operating it), [deploy/README.md](deploy/README.md)

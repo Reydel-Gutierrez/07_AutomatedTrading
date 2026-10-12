@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from firm.api import views
+from firm.capital_pool import POOL, CapitalPool
 from firm.api.auth import CSRF_COOKIE, SESSION_COOKIE, SESSION_TTL, Sessions
 from firm.core import Firm
 from firm.ledger import LedgerError
@@ -62,6 +63,10 @@ class SwitchBody(BaseModel):
 
 class SplitBody(BaseModel):
     split: dict[str, float]
+
+
+class PoolBody(BaseModel):
+    caps: dict[str, float]
 
 
 class BudgetBody(BaseModel):
@@ -220,7 +225,8 @@ def create_app(host: Host) -> FastAPI:
 
     @app.post("/api/capital/allocate")
     def allocate(body: CapitalBody, who: str = Depends(user)) -> dict[str, Any]:
-        firm.registry.get(body.manager)
+        if body.manager != POOL:
+            firm.registry.get(body.manager)
         try:
             total = sum(firm.firm_nav("LIVE").values(), D(0))  # percent of the whole firm's value
         except Exception:  # noqa: BLE001 — no prices: fall back to cash capital
@@ -243,11 +249,21 @@ def create_app(host: Host) -> FastAPI:
 
     @app.put("/api/settings/deposit_split")
     def deposit_split(body: SplitBody, who: str = Depends(user)) -> dict[str, Any]:
-        known = {m.id for m in firm.registry.all()}
+        known = {m.id for m in firm.registry.all()} | {POOL}
         if set(body.split) - known or any(v < 0 for v in body.split.values()) or sum(body.split.values()) > 1.0001:
-            raise HTTPException(422, "split must name managers, be non-negative, and total at most 100%")
+            raise HTTPException(422, "split must name managers (or 'cio' for Graham's pool), be non-negative, and total at most 100%")
         firm.settings.put("deposit_split", body.split, by=who)
         firm.events.emit("SETTINGS_CHANGED", f"Deposit split set to {', '.join(f'{k} {v:.0%}' for k, v in body.split.items()) or 'all unallocated'}.", actor=who)
+        return {"ok": True}
+
+    @app.put("/api/settings/cio_pool")
+    def cio_pool(body: PoolBody, who: str = Depends(user)) -> dict[str, Any]:
+        known = {m.id for m in firm.registry.all()}
+        if set(body.caps) - known or any(not 0 <= v <= 1 for v in body.caps.values()):
+            raise HTTPException(422, "caps must name managers and be between 0 and 1")
+        policy = {**CapitalPool(firm).policy(), "caps": body.caps}
+        firm.settings.put("cio_pool", policy, by=who)
+        firm.events.emit("SETTINGS_CHANGED", "Graham's pool caps set to " + ", ".join(f"{k} {v:.0%}" for k, v in body.caps.items()) + ".", actor=who)
         return {"ok": True}
 
     @app.put("/api/settings/ai_budget")
