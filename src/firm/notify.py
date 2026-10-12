@@ -32,7 +32,7 @@ def telegram_sink(environ: Mapping[str, str] | None = None):
     def sink(event: Event) -> None:
         if event.type not in ALERT_TYPES and event.severity != "critical":
             return
-        text = f"{EMOJI.get(event.severity, '')} {event.summary}".strip()
+        text = f"{EMOJI.get(event.severity, '')} The 537 Firm · {event.summary}".strip()
         if public:
             text += f"\n{public}"
         body = json.dumps({"chat_id": chat, "text": text[:3500], "disable_web_page_preview": True}).encode()

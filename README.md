@@ -1,4 +1,6 @@
-# Agentic Capital — an autonomous investment firm
+# The 537 Firm — an autonomous private investment firm
+
+_Formerly "Agentic Capital". Service names, paths, and the database keep their original `agentic-*` identifiers._
 
 The owner provides capital; a team of managers invests it on the dedicated
 Robinhood **Agentic** account, each with an independent virtual portfolio,

@@ -1,10 +1,12 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api, type FirmEvent, type Overview } from "./api";
 import { useEventStream, useResource } from "./hooks";
 import Activity from "./pages/Activity";
 import CapitalPage from "./pages/Capital";
+import { BRAND, Wordmark } from "./brand";
 import CioOffice from "./pages/CIO";
+import FirmSpace from "./pages/FirmSpace";
 import HQ from "./pages/HQ";
 import Login from "./pages/Login";
 import ManagerPage from "./pages/Manager";
@@ -14,13 +16,23 @@ type Live = { events: FirmEvent[]; bump: number; connected: boolean; overview: O
 const LiveContext = createContext<Live>({ events: [], bump: 0, connected: false, overview: null, reloadOverview: () => {} });
 export const useLive = () => useContext(LiveContext);
 
+const NAV: [string, string][] = [["/", "Headquarters"], ["/firm", "The Firm"], ["/cio", "CIO Office"], ["/capital", "Capital"], ["/activity", "Activity"], ["/system", "System"]];
+
+function useDocumentTitle() {
+  const { pathname } = useLocation();
+  useEffect(() => {
+    const page = pathname.startsWith("/managers/") ? `${pathname.split("/")[2]?.replace(/^\w/, (c) => c.toUpperCase())}'s workspace` : NAV.find(([to]) => to === pathname)?.[1];
+    document.title = page && pathname !== "/" ? `${page} · ${BRAND.name}` : `${BRAND.name} · Investment HQ`;
+  }, [pathname]);
+}
+
 export default function App() {
   const [session, setSession] = useState<{ user: string | null; has_admin: boolean } | null>(null);
   const check = useCallback(() => api.get<{ user: string | null; has_admin: boolean }>("/api/session").then(setSession).catch(() => setSession({ user: null, has_admin: true })), []);
   useEffect(() => {
     check();
   }, [check]);
-  if (!session) return <div className="grid min-h-screen place-items-center text-slate-500">Opening HQ…</div>;
+  if (!session) return <div className="grid min-h-screen place-items-center text-slate-500">Opening The 537 Firm…</div>;
   if (!session.user) return <Login hasAdmin={session.has_admin} onLogin={check} />;
   return <Shell user={session.user} onLogout={() => api.post("/api/logout").finally(check)} />;
 }
@@ -37,17 +49,18 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
     api.get<{ events: FirmEvent[] }>("/api/events?limit=60").then((r) => setEvents(r.events)).catch(() => {});
   }, []);
   const c = overview?.controls;
+  useDocumentTitle();
   return (
     <LiveContext.Provider value={{ events, bump, connected, overview, reloadOverview: reload }}>
       <div className="min-h-screen">
-        <header className="sticky top-0 z-40 border-b border-ink-800 bg-ink-950/90 backdrop-blur">
+        <header className="z-40 md:sticky md:top-0 border-b border-ink-800 bg-ink-950/90 backdrop-blur">
           <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3">
-            <NavLink to="/" className="font-display text-lg text-slate-50">
-              Agentic <span className="text-gold-400">Capital</span>
+            <NavLink to="/" aria-label={`${BRAND.name} home`}>
+              <Wordmark />
             </NavLink>
-            <nav className="flex gap-1 text-sm">
-              {[["/", "Headquarters"], ["/cio", "CIO Office"], ["/capital", "Capital"], ["/activity", "Activity"], ["/system", "System"]].map(([to, label]) => (
-                <NavLink key={to} to={to} end className={({ isActive }) => `rounded-lg px-3 py-1.5 ${isActive ? "bg-ink-800 text-slate-50" : "text-slate-400 hover:text-slate-200"}`}>
+            <nav className="-mx-1 flex max-w-full gap-1 overflow-x-auto text-sm">
+              {NAV.map(([to, label]) => (
+                <NavLink key={to} to={to} end className={({ isActive }) => `whitespace-nowrap rounded-lg px-3 py-1.5 ${isActive ? "bg-ink-800 text-slate-50" : "text-slate-400 hover:text-slate-200"}`}>
                   {label}
                 </NavLink>
               ))}
@@ -67,12 +80,16 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
           <Routes>
             <Route path="/" element={<HQ />} />
             <Route path="/managers/:id" element={<ManagerPage />} />
+            <Route path="/firm" element={<FirmSpace />} />
             <Route path="/cio" element={<CioOffice />} />
             <Route path="/capital" element={<CapitalPage />} />
             <Route path="/activity" element={<Activity />} />
             <Route path="/system" element={<SystemPage />} />
           </Routes>
         </main>
+        <footer className="mx-auto max-w-7xl px-4 pb-8 pt-2 text-[11px] tracking-wide text-slate-600">
+          {BRAND.name} · {BRAND.descriptor}
+        </footer>
       </div>
     </LiveContext.Provider>
   );

@@ -66,7 +66,10 @@ export default function HQ() {
       </section>
 
       <section>
-        <h2 className="label mb-3">Your investment team</h2>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="label">Your investment team</h2>
+          <Link to="/firm" className="text-xs text-gold-400 hover:underline">See them at work in The Firm →</Link>
+        </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <CioCard />
           {o.managers.map((m) => (

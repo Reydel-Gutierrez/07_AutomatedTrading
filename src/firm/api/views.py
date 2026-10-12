@@ -1,4 +1,4 @@
-"""Read models for Investment HQ. Every number comes from the ledger, marks, or the broker."""
+"""Read models for Investment HQ (The 537 Firm). Every number comes from the ledger, marks, or the broker."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any
 
 from firm.broker.errors import BrokerUnavailable
-from firm.clock import CALENDAR, EASTERN, et, parse_hhmm
+from firm.clock import CALENDAR, EASTERN, et, iso, parse_hhmm
 from firm.core import Firm
 from firm.ledger import FIRM, SUSPENSE
 from firm.money import ZERO, cents
@@ -184,6 +184,64 @@ def manager_detail(firm: Firm, manager_id: str) -> dict[str, Any]:
         "books": books, "price_source": source, "orders": orders, "runs": runs, "activity_feed": activity,
         "last_run": _last_run(firm, manager_id), "next_run": _next_run(firm, manager_id),
         "implemented": manager_id in firm.managers,
+    }
+
+
+SPACE_EVENTS = (*ACTIVITY_EVENTS, "ORDER_UNKNOWN", "ORDER_RECOVERED", "ORDER_NOT_FOUND", "SLEEVE_PAUSED", "TURNOVER_LIMIT")
+CIO_EVENTS = ("PROPOSAL_CREATED", "PROPOSAL_APPLIED", "PROPOSAL_REJECTED", "PROPOSAL_FAILED", "CIO_MEMORY", "AI_PROVIDER_UNAVAILABLE")
+
+
+def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None) -> dict[str, Any]:
+    """Who is doing what right now, for the Firm Space. Cheap: no quotes, no performance math.
+
+    Every field is a fact from the scheduler, the ledger's orders, the event log, or the
+    CIO's in-memory turn state; the browser animates it but never invents it.
+    """
+    agents = []
+    for m in firm.registry.all():
+        job = jobs.get(f"manager:{m.id}") or {}
+        running = bool(job.get("running"))
+        open_orders = [
+            {k: r[k] for k in ("id", "book", "symbol", "side", "notional", "quantity", "status", "created_at", "submitted_at")}
+            for r in firm.db.query(
+                "SELECT * FROM orders WHERE manager_id = ? AND status IN ('PENDING','SUBMITTED','UNKNOWN') ORDER BY id DESC LIMIT 10", (m.id,)
+            )
+        ]
+        last = _last_run(firm, m.id)
+        if last:
+            last.pop("detail", None)
+        agents.append({
+            "id": m.id, "name": m.display_name, "role": m.role, "mode": m.mode, "book": m.book,
+            "status": m.status, "activity": m.status_detail, "implemented": m.id in firm.managers,
+            "running": running, "run_started": job.get("last_started") if running else None,
+            "last_run": last, "next_run": _next_run(firm, m.id), "open_orders": open_orders,
+            "recent": [e.as_dict() for e in firm.events.recent(manager_id=m.id, types=list(SPACE_EVENTS), limit=8)],
+        })
+    now = iso(firm.clock())
+    pending = [
+        dict(r) for r in firm.db.query(
+            "SELECT id, kind, title, created_at, expires_at FROM proposals WHERE status = 'PENDING' AND expires_at > ? ORDER BY id DESC LIMIT 5", (now,)
+        )
+    ]
+    ks = firm.controls.kill_switch()
+    return {
+        "as_of": firm.clock().isoformat(),
+        "market": health.get("market") or {},
+        "broker_connected": health.get("broker_connected"),
+        "controls": {
+            "kill_switch": ks.engaged,
+            "reconcile_hold": bool(firm.controls.reconcile_hold().get("active")),
+            "drawdown_brake": bool(firm.controls.brake().get("engaged")),
+            "live_writes_enabled": bool(health.get("live_writes_enabled")),
+        },
+        "cio": {
+            "configured": cio is not None,
+            "provider_ready": bool(cio is not None and cio.provider.available()),
+            "working": cio.working() if cio is not None else None,
+            "pending_proposals": pending,
+            "recent": [e.as_dict() for e in firm.events.recent(types=list(CIO_EVENTS), limit=6)],
+        },
+        "agents": agents,
     }
 
 

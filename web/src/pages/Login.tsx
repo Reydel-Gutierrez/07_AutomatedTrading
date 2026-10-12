@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
+import { Wordmark } from "../brand";
 import { ErrorLine, useAction } from "../components/ui";
 
 export default function Login({ hasAdmin, onLogin }: { hasAdmin: boolean; onLogin: () => void }) {
@@ -15,10 +16,10 @@ export default function Login({ hasAdmin, onLogin }: { hasAdmin: boolean; onLogi
           login.run();
         }}
       >
-        <h1 className="font-display text-2xl text-slate-50">
-          Agentic <span className="text-gold-400">Capital</span>
-        </h1>
-        <p className="mb-6 mt-1 text-sm text-slate-400">Investment Headquarters</p>
+        <h1 className="sr-only">The 537 Firm · Investment HQ</h1>
+        <div className="mb-7 mt-2">
+          <Wordmark size="lg" />
+        </div>
         {!hasAdmin ? (
           <p className="text-sm text-amber-300">No admin account yet. On the Pi run <code className="text-slate-200">scripts/firm_admin.py set-password</code>.</p>
         ) : (

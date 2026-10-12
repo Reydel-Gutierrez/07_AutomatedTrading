@@ -188,3 +188,23 @@ def test_api_approval_requires_owner_session_and_confirmation(firm):
     assert client.post(f"/api/cio/proposals/{p['id']}/approve", json={}, headers=h).status_code == 422
     assert client.post(f"/api/cio/proposals/{p['id']}/approve", json={"confirm": True}, headers=h).json()["status"] == "APPLIED"
     assert firm.settings.get("deposit_split") == {"tim": 1.0}
+
+
+def test_firm_space_shows_cio_presence_only_while_answering(firm):
+    seen = []
+
+    class Watching(ScriptedProvider):
+        def step(self, **kw):
+            seen.append(cio.working())
+            return super().step(**kw)
+
+    cio = build_cio(firm, lambda: {}, {}, provider=Watching([
+        Step(tool_calls=[call("get_manager", manager_id="tim")]),
+        Step(tool_calls=[call("respond", message="Holding.", citations=[])]),
+    ]))
+    conv = cio.create_conversation()
+    assert cio.working() is None
+    cio.ask(conv["id"], "What is Tim doing?")
+    assert seen[0]["conversation_id"] == conv["id"] and seen[0]["tool"] is None
+    assert seen[1]["tool"] == "get_manager" and seen[1]["steps"] == 1
+    assert cio.working() is None

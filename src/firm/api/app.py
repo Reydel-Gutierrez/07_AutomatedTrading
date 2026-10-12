@@ -1,4 +1,4 @@
-"""Investment HQ API. Admin-only; localhost-bound; Cloudflare Access in front for remote use."""
+"""Investment HQ API (The 537 Firm). Admin-only; localhost-bound; Cloudflare Access in front for remote use."""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ class MemoryBody(BaseModel):
 def create_app(host: Host) -> FastAPI:
     firm = host.firm
     sessions = Sessions(firm.db, firm.settings)
-    app = FastAPI(title="Investment HQ", docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="The 537 Firm · Investment HQ", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
     async def csrf_and_headers(request: Request, call_next):
@@ -174,6 +174,10 @@ def create_app(host: Host) -> FastAPI:
     @app.get("/api/system")
     def system(_: str = Depends(user)) -> dict[str, Any]:
         return views.system(firm, host.health(), host.jobs())
+
+    @app.get("/api/space")
+    def space(_: str = Depends(user)) -> dict[str, Any]:
+        return views.space(firm, host.health(), host.jobs(), getattr(host, "cio", None))
 
     @app.get("/api/events")
     def events(before_id: int | None = None, manager: str | None = None, type: str | None = None, limit: int = 100, _: str = Depends(user)) -> dict[str, Any]:

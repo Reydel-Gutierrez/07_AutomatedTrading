@@ -37,7 +37,7 @@ export function Donut({ slices, size = 180 }: { slices: { label: string; value: 
 }
 
 /** Growth of $1 for the bucket (flow-adjusted) vs SPY over the same dates. */
-export function PerformanceChart({ series, color = "#e8c46a", height = 180 }: { series: Series; color?: string; height?: number }) {
+export function PerformanceChart({ series, color = "#dcc287", height = 180 }: { series: Series; color?: string; height?: number }) {
   const [hover, setHover] = useState<number | null>(null);
   const pts = series.filter((p) => p.nav > 0);
   if (pts.length < 2) {

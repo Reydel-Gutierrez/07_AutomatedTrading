@@ -118,3 +118,22 @@ def test_session_cookie_is_secure_behind_https_proxy(client):
     cookies = res.headers.get_list("set-cookie")
     session = next(c for c in cookies if c.startswith("firm_session="))
     assert "Secure" in session and "HttpOnly" in session and "SameSite=strict" in session.replace("samesite", "SameSite")
+
+
+def test_space_reports_real_state_without_side_effects(client, firm):
+    headers = _login(client)
+    client.post("/api/capital/allocate", json={"manager": "tim", "percent": 90}, headers=headers)
+    client.post("/api/managers/tim/mode", json={"mode": "SIM", "note": "start"}, headers=headers)
+    firm.run_manager("tim")
+    before = firm.events.recent(limit=1)[0].id
+    space = client.get("/api/space").json()
+    agents = {a["id"]: a for a in space["agents"]}
+    assert set(agents) == {"tim", "alex", "max"}
+    assert agents["tim"]["implemented"] and agents["tim"]["mode"] == "SIM" and not agents["tim"]["running"]
+    assert agents["tim"]["last_run"]["summary"].startswith("Tim:") and "detail" not in agents["tim"]["last_run"]
+    assert any(e["type"] == "MANAGER_RUN" for e in agents["tim"]["recent"])
+    assert not agents["alex"]["implemented"] and agents["alex"]["mode"] == "INACTIVE"
+    assert space["cio"] == {"configured": False, "provider_ready": False, "working": None, "pending_proposals": [], "recent": []}
+    assert firm.events.recent(limit=1)[0].id == before  # reading the space writes nothing
+    client.cookies.clear()
+    assert client.get("/api/space").status_code == 401

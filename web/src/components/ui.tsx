@@ -1,7 +1,8 @@
 import { type ReactNode, useEffect, useState } from "react";
+import { Portrait } from "../space/Character";
 
 export const AGENTS: Record<string, { name: string; title: string; color: string; initial: string; blurb: string }> = {
-  cio: { name: "CIO", title: "Chief Investment Officer", color: "#e8c46a", initial: "C", blurb: "Oversees the firm, allocates capital, and advises you." },
+  cio: { name: "CIO", title: "Chief Investment Officer", color: "#dcc287", initial: "C", blurb: "Oversees the firm, allocates capital, and advises you." },
   tim: { name: "Tim", title: "Core Investment Manager", color: "#4f9cf9", initial: "T", blurb: "Diversified long-term ETFs, contributions, rebalancing." },
   alex: { name: "Alex", title: "Strategic Growth Manager", color: "#a78bfa", initial: "A", blurb: "Systematic stock selection with AI research." },
   max: { name: "Max", title: "Short-Term Trading Manager", color: "#f59e0b", initial: "M", blurb: "Swing trading with defined entries, exits, and stops." },
@@ -46,11 +47,11 @@ export function Avatar({ id, size = 48, working = false }: { id: string; size?: 
   const a = AGENTS[id] ?? AGENTS.cio;
   return (
     <div
-      className={`grid shrink-0 place-items-center rounded-2xl font-display font-semibold text-ink-950 ${working ? "agent-working" : ""}`}
-      style={{ width: size, height: size, background: `linear-gradient(135deg, ${a.color}, ${a.color}99)`, fontSize: size * 0.42, ["--ring" as string]: `${a.color}66` }}
+      className={`grid shrink-0 place-items-end overflow-hidden rounded-2xl ${working ? "agent-working" : ""}`}
+      style={{ width: size, height: size, background: `linear-gradient(160deg, ${a.color}, ${a.color}55)`, ["--ring" as string]: `${a.color}66` }}
       aria-label={a.name}
     >
-      {a.initial}
+      <Portrait id={id in AGENTS ? id : "cio"} size={size * 0.92} />
     </div>
   );
 }

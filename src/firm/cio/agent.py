@@ -45,6 +45,12 @@ class CIO:
         self.owner = owner
         self.proposals = Proposals(firm)
         self.memory = Memory(firm.db, firm.events, clock=firm.clock)
+        self._working: dict[str, Any] | None = None  # in-memory presence for the Firm Space; never persisted
+
+    def working(self) -> dict[str, Any] | None:
+        """What the CIO is doing right now (answering a question, which tool), or None."""
+        w = self._working
+        return dict(w) if w else None
 
     # -- conversations -----------------------------------------------------------
     def create_conversation(self, title: str = "New conversation") -> dict[str, Any]:
@@ -81,6 +87,13 @@ class CIO:
 
     # -- a turn ------------------------------------------------------------------
     def ask(self, cid: int, text: str) -> dict[str, Any]:
+        self._working = {"since": iso(self.firm.clock()), "conversation_id": cid, "steps": 0, "tool": None}
+        try:
+            return self._ask(cid, text)
+        finally:
+            self._working = None
+
+    def _ask(self, cid: int, text: str) -> dict[str, Any]:
         text = text.strip()
         if not text:
             raise ValueError("empty message")
@@ -120,6 +133,8 @@ class CIO:
                     break
                 results = []
                 for call in step.tool_calls:
+                    if self._working is not None:
+                        self._working.update(steps=self._working["steps"] + 1, tool=call.name)
                     out = tools.call(call.name, call.arguments)
                     results.append((call, out))
                     if call.name != "respond":
