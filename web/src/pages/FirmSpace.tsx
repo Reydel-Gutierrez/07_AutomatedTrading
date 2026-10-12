@@ -109,7 +109,7 @@ export default function FirmSpace() {
             Indicators come from live records. Breathing, plants, steam, and lighting are decorative.
           </p>
         </div>
-        {office && <Office id={office} state={states[office]} space={space} onClose={() => navigate("/firm")} />}
+        {office && <Office id={office} state={states[office]} space={space} top={header} onClose={() => navigate("/firm")} />}
       </div>
       <ul className="divide-y divide-ink-800 border-t border-ink-800 bg-ink-950 lg:hidden" aria-label="What each person is doing">
         {IDS.map((id) => {
