@@ -170,6 +170,32 @@ def test_credentials_writer_is_atomic_and_private(tmp_path):
         assert path.stat().st_mode & 0o777 == 0o600 and path.parent.stat().st_mode & 0o777 == 0o700
 
 
+def test_probe_runs_end_to_end_and_report_is_json(tmp_path):
+    spec = importlib.util.spec_from_file_location("oanda_probe", ROOT / "scripts" / "oanda_probe.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    aid = "001-001-1-001"
+    inst = {"name": "EUR_USD", "type": "CURRENCY", "pipLocation": -4, "tradeUnitsPrecision": 0, "minimumTradeSize": "1", "marginRate": "0.02"}
+    price = {"instrument": "EUR_USD", "time": "2026-10-12T20:00:01.000000000Z", "tradeable": True, "bids": [{"price": "1.08001"}], "asks": [{"price": "1.08013"}]}
+    candle = {"time": "2026-10-11T21:00:00.000000000Z", "volume": 1, "complete": True, "bid": {"o": "1", "h": "1", "l": "1", "c": "1"}, "ask": {"o": "1", "h": "1", "l": "1", "c": "1"}}
+    c, _ = client({
+        **ACCOUNTS,
+        f"/v3/accounts/{aid}/summary": {"account": {"currency": "USD", "balance": "50", "NAV": "50", "marginRate": "0.02", "hedgingEnabled": False, "lastTransactionID": "3"}},
+        f"/v3/accounts/{aid}/instruments": {"instruments": [inst]},
+        f"/v3/accounts/{aid}/pricing": {"prices": [price]},
+        "/v3/instruments/EUR_USD/candles": {"candles": [candle]},
+        f"/v3/accounts/{aid}/transactions/sinceid": {"transactions": [{"id": "2", "type": "TRANSFER_FUNDS", "amount": "50"}], "lastTransactionID": "3"},
+        f"/v3/accounts/{aid}/openTrades": {"trades": []},
+        f"/v3/accounts/{aid}/openPositions": {"positions": []},
+        f"/v3/accounts/{aid}/pendingOrders": {"orders": []},
+    }, open_stream=lambda url, h, t: iter([b'{"type":"PRICE"}\n', b'{"type":"HEARTBEAT"}\n']))
+    report = mod.Probe(c).run()
+    json.dumps(report)  # must serialize
+    assert report["account"]["account_max_leverage"] == "50.0"
+    assert report["spreads_all"]["median_pips"] == 1.2 and report["transactions"]["funding"][0]["amount"] == "50"
+    assert report["instruments"]["leverage_tiers"] == {"50:1": ["EUR_USD"]}
+
+
 def test_firm_never_imports_forex():
     """Tim's engine stays isolated: nothing under src/firm references the forex package."""
     offenders = [str(p) for p in (ROOT / "src" / "firm").rglob("*.py") if "import forex" in p.read_text(encoding="utf-8") or "from forex" in p.read_text(encoding="utf-8")]

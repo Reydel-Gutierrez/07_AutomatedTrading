@@ -16,6 +16,7 @@ Credentials: see src/forex/oanda.py (OANDA_ENV, OANDA_API_TOKEN, OANDA_ACCOUNT_I
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
 import statistics
@@ -40,6 +41,8 @@ def _jsonable(x: Any) -> Any:
         return str(x)
     if isinstance(x, datetime):
         return x.isoformat()
+    if dataclasses.is_dataclass(x) and not isinstance(x, type):
+        return {k: _jsonable(v) for k, v in dataclasses.asdict(x).items() if k != "raw"}
     if isinstance(x, dict):
         return {k: _jsonable(v) for k, v in x.items()}
     if isinstance(x, (list, tuple)):
@@ -52,11 +55,12 @@ class Probe:
         self.client = client
         self.report: dict[str, Any] = {"env": client.env, "started_at": datetime.now(timezone.utc).isoformat(), "checks": {}, "latency_ms": []}
 
-    def check(self, name: str, fn: Callable[[], Any]) -> Any:
+    def check(self, name: str, fn: Callable[[], Any], *, keep: bool = True) -> Any:
         t0 = time.perf_counter()
         try:
             result = fn()
-            self.report["checks"][name] = {"ok": True, "result": _jsonable(result)}
+            stored = _jsonable(result) if keep else {"count": len(result)} if hasattr(result, "__len__") else None
+            self.report["checks"][name] = {"ok": True, "result": stored}
             return result
         except (OandaError, ValueError, KeyError) as exc:
             self.report["checks"][name] = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "code": getattr(exc, "code", None)}
@@ -90,7 +94,7 @@ class Probe:
             "created": summary.get("createdTime"),
         }
 
-        instruments = self.check("instruments", lambda: c.instruments(account_id)) or []
+        instruments = self.check("instruments", lambda: c.instruments(account_id), keep=False) or []
         by_name = {i.name: i for i in instruments}
         self.report["instruments"] = {
             "count": len(instruments),
@@ -100,6 +104,7 @@ class Probe:
             "min_trade_sizes": dict(Counter(str(i.minimum_trade_size) for i in instruments)),
             "unit_precisions": dict(Counter(i.trade_units_precision for i in instruments)),
             "max_leverage_by_pair": {n: str(round(by_name[n].max_leverage, 1)) for n in MAJORS if n in by_name},
+            "leverage_tiers": {f"{round(lev)}:1": sorted(n for n, i in by_name.items() if round(i.max_leverage) == round(lev)) for lev in sorted({i.max_leverage for i in instruments}, reverse=True)},
             "majors": {
                 n: {
                     "pip": str(by_name[n].pip), "min_units": str(by_name[n].minimum_trade_size),
@@ -123,6 +128,25 @@ class Probe:
             }
             for p in prices
         }
+
+        def all_spreads() -> dict[str, Any]:
+            names = sorted(by_name)
+            ps = [p for k in range(0, len(names), 40) for p in c.pricing(account_id, names[k : k + 40])]
+            spreads = {p.instrument: float(round(p.spread_pips(by_name[p.instrument].pip_location), 2)) for p in ps if p.spread_pips(by_name[p.instrument].pip_location) is not None}
+            ranked = sorted(spreads.items(), key=lambda kv: kv[1])
+            return {
+                "priced": len(ps), "tradeable": sum(p.tradeable for p in ps), "not_tradeable": sorted(p.instrument for p in ps if not p.tradeable),
+                "median_pips": statistics.median(spreads.values()) if spreads else None,
+                "tightest": ranked[:10], "widest": ranked[-8:], "all": dict(ranked),
+            }
+
+        self.report["spreads_all"] = self.check("pricing_all_pairs", all_spreads)
+
+        def depth(gran: str) -> dict[str, Any]:
+            first = c.candles("EUR_USD", gran, start="2000-01-01T00:00:00Z", count=1)
+            return {"earliest": first[0].time.isoformat() if first else None}
+
+        self.report["history_depth"] = {g: self.check(f"history_{g}", lambda g=g: depth(g)) for g in ("D", "H1", "M5", "M1")}
 
         def candle_check(gran: str, count: int) -> dict[str, Any]:
             cs = c.candles("EUR_USD", gran, count=count)
@@ -156,8 +180,12 @@ class Probe:
         last_id = int(summary.get("lastTransactionID") or 0)
 
         def txns() -> dict[str, Any]:
-            items, last = c.transactions_since(account_id, max(0, last_id - 50))
-            return {"count": len(items), "types": dict(Counter(t.get("type") for t in items)), "last_id": last}
+            items, last = c.transactions_since(account_id, max(0, last_id - 500))
+            return {
+                "count": len(items), "types": dict(Counter(t.get("type") for t in items)), "last_id": last,
+                "funding": [{"id": t.get("id"), "time": t.get("time"), "amount": t.get("amount"), "reason": t.get("fundingReason")} for t in items if t.get("type") == "TRANSFER_FUNDS"],
+                "configuration": [{"id": t.get("id"), "type": t.get("type"), "marginRate": t.get("marginRate"), "alias": t.get("alias")} for t in items if t.get("type") in ("CREATE", "CLIENT_CONFIGURE", "CLIENT_CONFIGURE_REJECT")],
+            }
 
         self.report["transactions"] = self.check("transactions_sinceid", txns)
         self.report["open_state"] = {
@@ -189,6 +217,13 @@ def print_summary(r: dict[str, Any]) -> None:
     if cd := r.get("candles"):
         print(f"  candles: M5 {cd.get('M5_max')} | over-limit refused: {cd.get('over_limit_refused')}")
         print(f"           D  {cd.get('D_aligned_17NY')}")
+    if sa := r.get("spreads_all"):
+        print(f"  all pairs: {sa['priced']} priced, {sa['tradeable']} tradeable, median spread {sa['median_pips']} pips")
+        print(f"    tightest: {sa['tightest']}")
+        print(f"    widest:   {sa['widest']}")
+    if i := r.get("instruments"):
+        print(f"  leverage tiers: { {k: len(v) for k, v in i['leverage_tiers'].items()} }")
+    print(f"  history depth (EUR_USD): {r.get('history_depth')}")
     print(f"  stream: {r.get('stream')}")
     print(f"  transactions: {r.get('transactions')} | open: {r.get('open_state')}")
     print(f"  latency: {r.get('latency_summary_ms')}")
