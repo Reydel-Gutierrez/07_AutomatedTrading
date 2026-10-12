@@ -297,7 +297,7 @@ const Shell = memo(function Shell() {
       <Plant x={1.2} y={9} z={UP_Z} s={1.15} />
       <Plant x={12.6} y={1.2} z={UP_Z} s={1} />
       {(() => {
-        const [gx, gy] = P(12, 7.5, UP_Z);
+        const [gx, gy] = P(1.6, 5.6, UP_Z);
         return (
           <g transform={`translate(${gx} ${gy})`}>
             <path d="M-8 0 h16 l-3 -6 h-10 Z" fill="#6b5a3a" />
@@ -309,7 +309,9 @@ const Shell = memo(function Shell() {
         );
       })()}
       <Glow x={7} y={5} z={UP_Z} r={4.2} />
-      <Poly p={wallXQ(14, 0, G_Y0, UP_Z, UP_Z + UP_H)} fill="url(#fs-glass)" stroke="#ffffff22" />
+      <Poly p={wallXQ(14, 0, 7.4, UP_Z, UP_Z + UP_H)} fill="url(#fs-glass)" stroke="#ffffff22" />
+      <Poly p={wallXQ(14, 7.4, 7.6, UP_Z, UP_Z + UP_H)} fill="#4a3b30" />
+      <Poly p={wallXQ(14, 7.6, G_Y0, UP_Z + 5.4, UP_Z + UP_H)} fill="url(#fs-glass)" stroke="#ffffff22" />
 
       {/* investment floor */}
       <Poly p={floorQ(0, G_Y0, 36, G_Y1, 0)} fill="url(#fs-plank)" />
@@ -322,10 +324,10 @@ const Shell = memo(function Shell() {
 });
 
 function CoffeeStation({ x }: { x: number }) {
-  const [mx, my] = P(x + 0.15, G_Y0 + 0.35, 1.5);
+  const [mx, my] = P(x + 0.45, 19.75, 1.5);
   return (
     <g>
-      <Box x={x - 0.7} y={G_Y0} w={1.4} d={0.8} z={0} h={1.5} top="#4a3a2e" left="#3a2d24" right="#2e241d" />
+      <Box x={x + 0.05} y={19.1} w={0.8} d={1.3} z={0} h={1.5} top="#4a3a2e" left="#3a2d24" right="#2e241d" />
       <g transform={`translate(${mx} ${my})`}>
         <rect x={-7} y={-16} width={14} height={16} rx={2} fill="#1f2430" />
         <rect x={-4} y={-13} width={8} height={4} rx={1} fill="#f59e0b" opacity=".7" />
@@ -341,7 +343,7 @@ function RoomDecor({ id, off }: { id: "tim" | "alex" | "max"; off: boolean }) {
   return (
     <g className={off ? "fs-off" : undefined}>
       <Glow x={mid} y={15.5} z={0} r={off ? 3 : 4.6} />
-      <CoffeeStation x={{ tim: 6.5, alex: 18.5, max: 30.5 }[id]} />
+      <CoffeeStation x={r.x0} />
       {id === "tim" && (
         <g>
           <Box x={1} y={G_Y0} w={4.4} d={0.9} z={0} h={4.6} top="#3a2a20" left="#2e2119" right="#241a14" />
@@ -354,7 +356,7 @@ function RoomDecor({ id, off }: { id: "tim" | "alex" | "max"; off: boolean }) {
             ))}
           </OnWallY>
           <Plant x={10.8} y={G_Y0 + 1} z={0} s={1.2} />
-          <Plant x={1} y={20.8} z={0} s={1.1} />
+          <Plant x={11} y={20.8} z={0} s={1.1} />
         </g>
       )}
       {id === "alex" && (
@@ -379,7 +381,7 @@ function RoomDecor({ id, off }: { id: "tim" | "alex" | "max"; off: boolean }) {
           <OnWallY x={30.5} y={G_Y0} z={5}>
             <rect width={4.5 * K} height={2.6 * K} rx={2} fill="#0a0d13" stroke="#2b3242" strokeWidth="3" />
           </OnWallY>
-          <Box x={25} y={20} w={1.6} d={1.2} z={0} h={1} top="#a07c56" left="#8a6b4a" right="#765a3d" />
+          <Box x={33.4} y={19.8} w={1.6} d={1.2} z={0} h={1} top="#a07c56" left="#8a6b4a" right="#765a3d" />
           <Plant x={35} y={G_Y0 + 1} z={0} s={1.1} />
         </g>
       )}
@@ -418,7 +420,7 @@ function Mug({ x, y, z, steam }: { x: number; y: number; z: number; steam: boole
 }
 
 /** One person at their desk. Clickable; keyboard reachable. */
-export function Workstation({ id, state, mood, selected, onSelect, pending = 0, phase, away = false, visited = false }: { id: AgentId; state: AgentState; mood: Mood; selected: boolean; onSelect: () => void; pending?: number; phase?: number; away?: boolean; visited?: boolean }) {
+export function Workstation({ id, state, mood, selected, onSelect, pending = 0, phase, away = false, visited = false, behind, front }: { id: AgentId; state: AgentState; mood: Mood; selected: boolean; onSelect: () => void; pending?: number; phase?: number; away?: boolean; visited?: boolean; behind?: ReactNode; front?: ReactNode }) {
   const r = ROOMS[id];
   const { x, y, w, d } = r.desk;
   const z = r.z;
@@ -456,6 +458,7 @@ export function Workstation({ id, state, mood, selected, onSelect, pending = 0, 
         <g transform={`translate(${ax} ${ay}) scale(${s})`}>
           <Chair look={look} />
         </g>
+        {behind}
         {!away && (
           <g transform={`translate(${ax} ${ay}) scale(${s})`}>
             <rect x={-34} y={-2} width={68} height={22} fill={look.top} />
@@ -488,6 +491,7 @@ export function Workstation({ id, state, mood, selected, onSelect, pending = 0, 
         )}
         {asleep && !away && <Zzz x={ax + 16} y={ay - 92 * s} size={7} />}
         {visited && !away && <ChatDots x={ax + 22} y={ay - 100 * s} />}
+        {front}
         <Monitor x={x + w - 1.85} y={y + 0.3} z={z + DESK_H} w={1.7} h={1.15} k={k} accent={look.accent} off={off} />
         {id === "max" && <Monitor x={x + 0.15} y={y + 0.3} z={z + DESK_H} w={1.7} h={1.15} k={k} accent={look.accent} off={off} />}
       </g>
@@ -549,20 +553,20 @@ export const Foreground = memo(function Foreground() {
   );
 });
 
-/** People away from their desks (office life). Drawn after the offices so they walk in front of furniture. */
-export function Strollers({ life }: { life: Record<AgentId, Life | null> }) {
+/** The walkers drawn in one office's layer (behind or in front of its desk). */
+export function walkersIn(life: Record<AgentId, Life | null>, room: AgentId, layer: "behind" | "front"): ReactNode {
+  const here = (Object.keys(life) as AgentId[]).filter((id) => life[id] && life[id]!.room === room && life[id]!.layer === layer);
+  if (!here.length) return null;
   return (
     <g pointerEvents="none">
-      {(Object.keys(life) as AgentId[]).map((id) => {
-        const l = life[id];
-        if (!l) return null;
+      {here.map((id) => {
+        const l = life[id]!;
         const s = (id === "cio" ? 0.78 : 0.74) * 0.9;
-        const look = LOOKS[id];
         return (
           <g key={id} style={{ transform: `translate(${l.pos[0]}px, ${l.pos[1]}px)`, transition: `transform ${l.dur}s linear, opacity .6s`, opacity: l.hidden ? 0 : 1 }}>
             <g transform={`scale(${s})`}>
               <g style={{ transform: `scaleX(${l.facing})` }}>
-                <Walker look={look} walking={l.walking} holding={l.holding} />
+                <Walker look={LOOKS[id]} walking={l.walking} holding={l.holding} />
               </g>
             </g>
             {l.chatWith && !l.hidden && <ChatDots x={18} y={-118 * s} />}

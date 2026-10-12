@@ -8,7 +8,7 @@ import { usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
 import { useOfficeLife } from "../space/life";
 import { Office } from "../space/Office";
-import { Foreground, Partition, RoomDecor, Shell, StateGradients, Strollers, VB, Workstation, headPoint, type AgentId } from "../space/Building";
+import { Foreground, Partition, RoomDecor, Shell, StateGradients, VB, Workstation, headPoint, walkersIn, type AgentId } from "../space/Building";
 import { type AgentState, CIO_TYPES, MOOD_LABEL, type Mood, PHASE, type Space, STATE_META, cioState, etTime, managerState, moodOf } from "../space/state";
 
 const IDS: AgentId[] = ["cio", "tim", "alex", "max"];
@@ -101,16 +101,15 @@ export default function FirmSpace() {
             <g onClick={() => setSelected(null)}>
               <Shell />
             </g>
-            <Workstation id="cio" state={states.cio} mood={moods.cio} away={!!life.cio} visited={visitedBy("cio")} selected={selected === "cio"} onSelect={pick("cio")} pending={space.cio.pending_proposals.length} />
+            <Workstation id="cio" state={states.cio} mood={moods.cio} away={!!life.cio} visited={visitedBy("cio")} behind={walkersIn(life, "cio", "behind")} front={walkersIn(life, "cio", "front")} selected={selected === "cio"} onSelect={pick("cio")} pending={space.cio.pending_proposals.length} />
             <RoomDecor id="tim" off={states.tim.key === "inactive"} />
-            <Workstation id="tim" state={states.tim} mood={moods.tim} away={!!life.tim} visited={visitedBy("tim")} selected={selected === "tim"} onSelect={pick("tim")} />
+            <Workstation id="tim" state={states.tim} mood={moods.tim} away={!!life.tim} visited={visitedBy("tim")} behind={walkersIn(life, "tim", "behind")} front={walkersIn(life, "tim", "front")} selected={selected === "tim"} onSelect={pick("tim")} />
             <Partition x={12} />
             <RoomDecor id="alex" off={states.alex.key === "inactive"} />
-            <Workstation id="alex" state={states.alex} mood={moods.alex} away={!!life.alex} visited={visitedBy("alex")} selected={selected === "alex"} onSelect={pick("alex")} phase={unbuilt("alex")} />
+            <Workstation id="alex" state={states.alex} mood={moods.alex} away={!!life.alex} visited={visitedBy("alex")} behind={walkersIn(life, "alex", "behind")} front={walkersIn(life, "alex", "front")} selected={selected === "alex"} onSelect={pick("alex")} phase={unbuilt("alex")} />
             <Partition x={24} />
             <RoomDecor id="max" off={states.max.key === "inactive"} />
-            <Workstation id="max" state={states.max} mood={moods.max} away={!!life.max} visited={visitedBy("max")} selected={selected === "max"} onSelect={pick("max")} phase={unbuilt("max")} />
-            <Strollers life={life} />
+            <Workstation id="max" state={states.max} mood={moods.max} away={!!life.max} visited={visitedBy("max")} behind={walkersIn(life, "max", "behind")} front={walkersIn(life, "max", "front")} selected={selected === "max"} onSelect={pick("max")} phase={unbuilt("max")} />
             <Foreground />
           </svg>
           {!office && IDS.map((id) => (
