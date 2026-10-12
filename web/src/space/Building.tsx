@@ -402,7 +402,7 @@ function Mug({ x, y, z, steam }: { x: number; y: number; z: number; steam: boole
 }
 
 /** One person at their desk. Clickable; keyboard reachable. */
-export function Workstation({ id, state, selected, onSelect, pending = 0 }: { id: AgentId; state: AgentState; selected: boolean; onSelect: () => void; pending?: number }) {
+export function Workstation({ id, state, selected, onSelect, pending = 0, phase }: { id: AgentId; state: AgentState; selected: boolean; onSelect: () => void; pending?: number; phase?: number }) {
   const r = ROOMS[id];
   const { x, y, w, d } = r.desk;
   const z = r.z;
@@ -418,7 +418,7 @@ export function Workstation({ id, state, selected, onSelect, pending = 0 }: { id
     <g
       role="button"
       tabIndex={0}
-      aria-label={`${id === "cio" ? "CIO" : id[0].toUpperCase() + id.slice(1)}: ${state.headline}. Open summary.`}
+      aria-label={`${id === "cio" ? "Graham, CIO" : id[0].toUpperCase() + id.slice(1)}: ${state.headline}. Open summary.`}
       onClick={onSelect}
       onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onSelect())}
       className="fs-station cursor-pointer outline-none"
@@ -457,12 +457,12 @@ export function Workstation({ id, state, selected, onSelect, pending = 0 }: { id
         <Monitor x={x + w - 1.85} y={y + 0.3} z={z + DESK_H} w={1.7} h={1.15} k={k} accent={look.accent} off={off} />
         {id === "max" && <Monitor x={x + 0.15} y={y + 0.3} z={z + DESK_H} w={1.7} h={1.15} k={k} accent={look.accent} off={off} />}
       </g>
-      {off && (
+      {off && phase && (
         <g transform={`translate(${P(x + w / 2, y + d + 1.3, z)[0]} ${P(x + w / 2, y + d + 1.3, z)[1]})`} fontFamily="Inter, sans-serif">
           <path d="M-34 -2 L-38 16 M34 -2 L38 16" stroke="#d4a017" strokeWidth="2.5" />
           <rect x={-42} y={-12} width={84} height={14} rx={2} fill="#d4a017" />
           <text y={-2} textAnchor="middle" fontSize="7.5" fontWeight="700" fill="#141414" letterSpacing="1">
-            OPENS IN PHASE {id === "alex" ? 3 : 4}
+            OPENS IN PHASE {phase}
           </text>
         </g>
       )}

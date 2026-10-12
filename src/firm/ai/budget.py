@@ -85,8 +85,8 @@ class Budget:
                 f"this request could cost up to ${worst:.3f}."
             )
 
-    def record(self, agent: str, *, provider: str, model: str, purpose: str, input_tokens: int, output_tokens: int, ok: bool, error: str | None = None, cache_read_tokens: int = 0, cache_write_tokens: int = 0) -> Decimal:
-        amount = cost(model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens)
+    def record(self, agent: str, *, provider: str, model: str, purpose: str, input_tokens: int, output_tokens: int, ok: bool, error: str | None = None, cache_read_tokens: int = 0, cache_write_tokens: int = 0, extra_cost: Decimal = ZERO) -> Decimal:
+        amount = cost(model, input_tokens, output_tokens, cache_read_tokens, cache_write_tokens) + extra_cost  # extra: server-tool fees (web search)
         with self.db.tx() as conn:
             conn.execute(
                 "INSERT INTO ai_usage (ts, month, agent, provider, model, purpose, input_tokens, output_tokens, cost, ok, error) VALUES (?,?,?,?,?,?,?,?,?,?,?)",

@@ -18,6 +18,7 @@ from firm.events import EventLog, Sink
 from firm.ledger import Ledger
 from firm.managers.base import BookView, Manager, ManagerContext
 from firm.managers.registry import Registry
+from firm.managers.alex import DEFAULT_MANDATE as ALEX_MANDATE, Alex, needs_strategy
 from firm.managers.tim import Tim
 from firm.market import MarketData
 from firm.money import ZERO, cents
@@ -66,7 +67,17 @@ class Firm:
         )
         self.reconciler = Reconciler(db=db, ledger=self.ledger, events=self.events, settings=self.settings, controls=self.controls, desk=self.desk, clock=clock)
         self.performance = Performance(db, self.ledger, self.market, self.settings)
-        self.managers: dict[str, Manager] = dict(managers or {"tim": Tim()})
+        self.managers: dict[str, Manager] = dict(managers or {"tim": Tim(), "alex": Alex()})
+        if "alex" in self.managers:
+            self._ensure_alex_strategy()
+
+    def _ensure_alex_strategy(self) -> None:
+        """Phase 3: replace Alex's placeholder mandate with his strategy, keeping the owner's risk policy."""
+        _, current = self.registry.mandate("alex")
+        if not needs_strategy(current):
+            return
+        risk = {k: current[k] for k in ("drawdown_policy", "sleeve_drawdown_pause", "daily_loss_pause") if k in current}
+        self.registry.update_mandate("alex", {**ALEX_MANDATE, **risk}, by="system", note="Phase 3: Alex's screen, research, and portfolio rules (risk policy unchanged)")
 
     # -- managers ----------------------------------------------------------
     def view(self, manager_id: str, book: str, symbols: list[str]) -> BookView:
@@ -91,6 +102,7 @@ class Firm:
                 view=self.view(manager_id, row.book, impl.symbols(mandate)),
                 last_run=(last.payload.get("detail") if last else None),
                 drawdown=self.performance.drawdown(self.performance.marks(row.book, manager_id)),
+                extras=impl.inputs(self, mandate) if hasattr(impl, "inputs") else {},
             )
             result = impl.run(ctx)
         except BrokerUnavailable as exc:

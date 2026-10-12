@@ -89,7 +89,7 @@ export default function CioOffice() {
         <div className="flex items-center gap-3">
           <Avatar id="cio" size={44} working={!!pending} />
           <div>
-            <div className="font-display text-lg text-slate-50">CIO Office</div>
+            <div className="font-display text-lg text-slate-50">Graham</div>
             <div className="text-xs text-slate-400">{AGENTS.cio.title}</div>
           </div>
         </div>
@@ -263,7 +263,7 @@ function MemoryPanel({ memories, onChange }: { memories: Memory[]; onChange: () 
   const remove = useAction((id: number) => api.put(`/api/cio/memory/${id}`, { active: false }), onChange);
   const live = memories.filter((m) => m.active);
   return (
-    <Card title="What the CIO remembers">
+    <Card title="What Graham remembers">
       {live.length ? (
         <ul className="max-h-72 space-y-2 overflow-y-auto pr-1 text-sm">
           {live.map((m) => (
@@ -275,10 +275,10 @@ function MemoryPanel({ memories, onChange }: { memories: Memory[]; onChange: () 
           ))}
         </ul>
       ) : (
-        <p className="text-sm text-slate-500">Nothing yet. Tell the CIO your goals and preferences; it will note them here, and you can edit or remove any of them.</p>
+        <p className="text-sm text-slate-500">Nothing yet. Tell Graham your goals and preferences; they will be noted here, and you can edit or remove any of them.</p>
       )}
       <div className="mt-3 flex gap-2">
-        <input className="input" placeholder="Add a note for the CIO" value={text} onChange={(e) => setText(e.target.value)} />
+        <input className="input" placeholder="Add a note for Graham" value={text} onChange={(e) => setText(e.target.value)} />
         <button className="btn-ghost" disabled={!text.trim()} onClick={() => add.run()}>Add</button>
       </div>
     </Card>

@@ -17,7 +17,7 @@ from firm.api.auth import CSRF_COOKIE, SESSION_COOKIE, SESSION_TTL, Sessions
 from firm.core import Firm
 from firm.ledger import LedgerError
 from firm.managers.registry import MODES
-from firm.managers.tim import validate_mandate
+from firm.managers import validate_mandate
 from firm.money import D, cents
 from firm.paths import project_root
 
@@ -177,7 +177,14 @@ def create_app(host: Host) -> FastAPI:
 
     @app.get("/api/space")
     def space(_: str = Depends(user)) -> dict[str, Any]:
-        return views.space(firm, host.health(), host.jobs(), getattr(host, "cio", None))
+        return views.space(firm, host.health(), host.jobs(), getattr(host, "cio", None), getattr(host, "researching", None))
+
+    @app.get("/api/managers/{manager_id}/research")
+    def research_notes(manager_id: str, _: str = Depends(user)) -> dict[str, Any]:
+        from firm.research import Research
+
+        firm.registry.get(manager_id)
+        return {"notes": Research(firm.db, clock=firm.clock).recent(manager_id, limit=60)}
 
     @app.get("/api/events")
     def events(before_id: int | None = None, manager: str | None = None, type: str | None = None, limit: int = 100, _: str = Depends(user)) -> dict[str, Any]:
@@ -273,10 +280,9 @@ def create_app(host: Host) -> FastAPI:
     def set_mandate(manager_id: str, body: MandateBody, who: str = Depends(user)) -> dict[str, Any]:
         if not body.note.strip():
             raise HTTPException(422, "a note explaining the change is required")
-        if manager_id == "tim":
-            problems = validate_mandate(body.params)
-            if problems:
-                raise HTTPException(422, "; ".join(problems))
+        problems = validate_mandate(manager_id, body.params)
+        if problems:
+            raise HTTPException(422, "; ".join(problems))
         version = firm.registry.update_mandate(manager_id, body.params, by=who, note=body.note)
         firm.request_run(manager_id, "mandate_changed")
         return {"ok": True, "version": version}

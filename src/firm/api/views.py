@@ -115,6 +115,7 @@ def overview(firm: Firm, health: dict[str, Any]) -> dict[str, Any]:
                 "mode": m.mode,
                 "status": m.status,
                 "activity": m.status_detail,
+                "implemented": m.id in firm.managers,
                 "last_run": _last_run(firm, m.id),
                 "next_run": _next_run(firm, m.id),
                 "live": {"nav": f(live[m.id]["nav"]), "cash": f(live[m.id]["cash"]), "invested": f(live[m.id]["invested"])},
@@ -187,11 +188,11 @@ def manager_detail(firm: Firm, manager_id: str) -> dict[str, Any]:
     }
 
 
-SPACE_EVENTS = (*ACTIVITY_EVENTS, "ORDER_UNKNOWN", "ORDER_RECOVERED", "ORDER_NOT_FOUND", "SLEEVE_PAUSED", "TURNOVER_LIMIT")
+SPACE_EVENTS = (*ACTIVITY_EVENTS, "ORDER_UNKNOWN", "ORDER_RECOVERED", "ORDER_NOT_FOUND", "SLEEVE_PAUSED", "TURNOVER_LIMIT", "RESEARCH_NOTE", "RESEARCH_FAILED", "RESEARCH_PAUSED")
 CIO_EVENTS = ("PROPOSAL_CREATED", "PROPOSAL_APPLIED", "PROPOSAL_REJECTED", "PROPOSAL_FAILED", "CIO_MEMORY", "AI_PROVIDER_UNAVAILABLE")
 
 
-def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None) -> dict[str, Any]:
+def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None, researching: dict[str, Any] | None = None) -> dict[str, Any]:
     """Who is doing what right now, for the Firm Space. Cheap: no quotes, no performance math.
 
     Every field is a fact from the scheduler, the ledger's orders, the event log, or the
@@ -215,6 +216,7 @@ def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None) ->
             "status": m.status, "activity": m.status_detail, "implemented": m.id in firm.managers,
             "running": running, "run_started": job.get("last_started") if running else None,
             "last_run": last, "next_run": _next_run(firm, m.id), "open_orders": open_orders,
+            "research": ({"running": bool((jobs.get(f"research:{m.id}") or {}).get("running")), "symbol": (researching or {}).get("symbol"), "since": (researching or {}).get("since")} if f"research:{m.id}" in jobs else None),
             "recent": [e.as_dict() for e in firm.events.recent(manager_id=m.id, types=list(SPACE_EVENTS), limit=8)],
         })
     now = iso(firm.clock())

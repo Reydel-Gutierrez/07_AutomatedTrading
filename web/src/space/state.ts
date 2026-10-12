@@ -31,6 +31,7 @@ export type SpaceAgent = {
   next_run: string | null;
   open_orders: SpaceOrder[];
   recent: FirmEvent[];
+  research?: { running: boolean; symbol: string | null; since: string | null } | null;
 };
 
 export type Space = {
@@ -75,7 +76,7 @@ export const STATE_META: Record<StateKey, { label: string; color: string; workin
   error: { label: "Error", color: "#f43f5e", working: false },
 };
 
-const MANAGER_TYPES = new Set(["MANAGER_RUN", "ORDER_FILLED", "ORDER_SUBMITTED", "ORDER_BLOCKED", "ORDER_DEFERRED", "ORDER_REJECTED", "ORDER_UNKNOWN", "ORDER_RECOVERED", "ORDER_NOT_FOUND", "MANAGER_DEGRADED", "MANAGER_WAITING", "MANAGER_MODE", "MANDATE_CHANGED", "CAPITAL_ALLOCATED", "CAPITAL_DEALLOCATED", "SLEEVE_PAUSED", "TURNOVER_LIMIT"]);
+const MANAGER_TYPES = new Set(["MANAGER_RUN", "ORDER_FILLED", "ORDER_SUBMITTED", "ORDER_BLOCKED", "ORDER_DEFERRED", "ORDER_REJECTED", "ORDER_UNKNOWN", "ORDER_RECOVERED", "ORDER_NOT_FOUND", "MANAGER_DEGRADED", "MANAGER_WAITING", "MANAGER_MODE", "MANDATE_CHANGED", "CAPITAL_ALLOCATED", "CAPITAL_DEALLOCATED", "SLEEVE_PAUSED", "TURNOVER_LIMIT", "RESEARCH_NOTE", "RESEARCH_FAILED", "RESEARCH_PAUSED"]);
 export const CIO_TYPES = new Set(["PROPOSAL_CREATED", "PROPOSAL_APPLIED", "PROPOSAL_REJECTED", "PROPOSAL_FAILED", "CIO_MEMORY", "AI_PROVIDER_UNAVAILABLE"]);
 const ERROR_TYPES = new Set(["MANAGER_DEGRADED", "ORDER_REJECTED", "ORDER_UNKNOWN", "ORDER_NOT_FOUND"]);
 const sideOf = (e: FirmEvent) => (/\bSELL\b/.test(e.summary) ? "sell" : /\bBUY\b/.test(e.summary) ? "buy" : undefined);
@@ -176,6 +177,21 @@ export function managerState(a: SpaceAgent, live: FirmEvent[], now: number): Age
     }
     return { ...base, key: "analyzing", headline: "Analyzing prices, drift and cash", sub: `Run started ${etTime(a.run_started, false) ?? "just now"}`, detail: "Checking the book against the mandate. The decision appears here the moment it is recorded.", at: a.run_started, source: "Scheduler (run in progress)" };
   }
+  const note = ev.find((e) => e.type === "RESEARCH_NOTE");
+  if (a.research?.running) {
+    const since = a.research.since;
+    const done = ev.filter((e) => e.type === "RESEARCH_NOTE" && since && Date.parse(e.ts) >= Date.parse(since) - 600_000).length;
+    return {
+      ...base,
+      key: "analyzing",
+      headline: a.research.symbol ? `Researching ${a.research.symbol}` : "Researching screen candidates",
+      sub: `Due diligence with web search${done ? ` · ${done} done this session` : ""}`,
+      detail: "Reading recent earnings, guidance, and news on the screen's top-ranked names. Each verdict is recorded with its sources.",
+      symbols: a.research.symbol ? [{ symbol: a.research.symbol }] : [],
+      at: since,
+      source: "Research desk (in progress)",
+    };
+  }
   if (a.open_orders.length) {
     const o = a.open_orders;
     return {
@@ -193,6 +209,10 @@ export function managerState(a: SpaceAgent, live: FirmEvent[], now: number): Age
   const latest = ev[0];
   if (latest?.type === "MANAGER_WAITING" && age(latest.ts, now) < ERROR_FOR) {
     return { ...base, key: "waiting", headline: "Waiting for market data", sub: next ? `Next run ${next}` : null, detail: latest.summary, at: latest.ts, source: `Event #${latest.id}` };
+  }
+  if (note && age(note.ts, now) < COMPLETED_FOR && (!lastRun || note.id > lastRun.id)) {
+    const verdict = note.payload?.verdict === "approve" ? "approved" : "rejected";
+    return { ...base, key: "completed", headline: `Researched ${note.symbol}: ${verdict} (${note.payload?.conviction ?? "?"}/5)`, sub: next ? `Next decision ${next}` : null, detail: note.summary, symbols: note.symbol ? [{ symbol: note.symbol }] : [], at: note.ts, source: `Event #${note.id}` };
   }
   if (lastRun) {
     const after = ev.filter((e) => e.id > lastRun.id);
@@ -268,5 +288,5 @@ export function cioState(c: Space["cio"], live: FirmEvent[], now: number): Agent
   if (n) {
     return { ...base, key: "waiting", headline: `Waiting on your decision: ${plural(n, "proposal")}`, sub: `#${c.pending_proposals[0].id} ${c.pending_proposals[0].title}`.slice(0, 70), detail: c.pending_proposals.map((p) => `#${p.id} ${p.title}`).join(" · "), at: c.pending_proposals[0].created_at, source: "Proposals" };
   }
-  return { ...base, key: "idle", headline: "Ready for your questions", sub: "No proposals pending", detail: "The CIO works only when you ask; open the CIO Office to start a conversation.", source: "CIO office" };
+  return { ...base, key: "idle", headline: "Ready for your questions", sub: "No proposals pending", detail: "Graham works only when you ask; open the CIO Office to start a conversation.", source: "CIO office" };
 }

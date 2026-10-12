@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from firm.cio import CIO_NAME
 from firm.clock import Clock, iso, utc_now
 from firm.db import Database
 from firm.events import EventLog
@@ -33,7 +34,7 @@ class Memory:
                 (kind, text, by, conversation_id, now, now),
             )
             mid = int(cur.lastrowid)
-        self.events.emit("CIO_MEMORY", f"CIO will remember ({kind}): {text}", actor=by, payload={"memory_id": mid})
+        self.events.emit("CIO_MEMORY", f"{CIO_NAME} (CIO) will remember ({kind}): {text}", actor=by, payload={"memory_id": mid})
         return self.get(mid)
 
     def get(self, mid: int) -> dict[str, Any]:

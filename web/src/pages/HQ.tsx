@@ -98,7 +98,7 @@ function CioCard() {
       <div className="flex items-center gap-3">
         <Avatar id="cio" />
         <div>
-          <div className="font-display text-lg text-slate-50">CIO</div>
+          <div className="font-display text-lg text-slate-50">Graham</div>
           <div className="text-xs text-slate-400">{AGENTS.cio.title}</div>
         </div>
       </div>
@@ -134,7 +134,7 @@ function ManagerTile({ m, working }: { m: ManagerCard; working: boolean }) {
       </div>
       <p className="mt-3 flex-1 text-sm text-slate-300">
         {!active
-          ? m.mode === "INACTIVE" && m.id !== "tim"
+          ? !m.implemented
             ? `${a.blurb} Activates in Phase ${m.id === "alex" ? 3 : 4}.`
             : `${m.name} is ${m.mode.toLowerCase()}.`
           : m.status === "DEGRADED"

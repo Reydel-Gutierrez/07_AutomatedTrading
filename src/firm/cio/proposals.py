@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING, Any
 
 from firm.clock import iso, parse
 from firm.ledger import FIRM, LedgerError
-from firm.managers.tim import validate_mandate
+from firm.managers import validate_mandate
+from firm.cio import CIO_NAME
 from firm.money import D, cents
 
 if TYPE_CHECKING:
@@ -72,10 +73,9 @@ class Proposals:
                 raise ProposalError("mandate_change needs a non-empty 'changes' object")
             version, current = f.registry.mandate(manager_id)
             new = {**current, **changes}
-            if manager_id == "tim":
-                problems = validate_mandate(new)
-                if problems:
-                    raise ProposalError("; ".join(problems))
+            problems = validate_mandate(manager_id, new)
+            if problems:
+                raise ProposalError("; ".join(problems))
             diff = {k: {"from": current.get(k), "to": new.get(k)} for k in changes if current.get(k) != new.get(k)}
             if not diff:
                 raise ProposalError("the proposed values equal the current mandate")
@@ -109,7 +109,7 @@ class Proposals:
             pid = int(cur.lastrowid)
         self.firm.events.emit(
             "PROPOSAL_CREATED",
-            f"{created_by.upper()} proposes #{pid}: {title.strip()} (awaiting your decision)",
+            f"{CIO_NAME + ' (CIO)' if created_by == 'cio' else created_by} proposes #{pid}: {title.strip()} (awaiting your decision)",
             actor=created_by,
             manager_id=normalized.get("manager_id"),
             payload={"proposal_id": pid, "kind": kind},

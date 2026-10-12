@@ -7,10 +7,10 @@ import { AGENTS, Avatar, Badge, Empty } from "../components/ui";
 import { usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
 import { Foreground, Partition, RoomDecor, Shell, StateGradients, VB, Workstation, headPoint, type AgentId } from "../space/Building";
-import { type AgentState, CIO_TYPES, type Space, STATE_META, cioState, etTime, managerState } from "../space/state";
+import { type AgentState, CIO_TYPES, PHASE, type Space, STATE_META, cioState, etTime, managerState } from "../space/state";
 
 const IDS: AgentId[] = ["cio", "tim", "alex", "max"];
-const NAMES: Record<AgentId, string> = { cio: "CIO", tim: "Tim", alex: "Alex", max: "Max" };
+const NAMES: Record<AgentId, string> = { cio: "Graham", tim: "Tim", alex: "Alex", max: "Max" };
 const ALLOC_COLORS: Record<string, string> = { tim: AGENTS.tim.color, alex: AGENTS.alex.color, max: AGENTS.max.color, unallocated: "#475569" };
 
 function useNow(every: number) {
@@ -70,6 +70,7 @@ export default function FirmSpace() {
 
   if (error) return <div className="p-6"><Empty>{error.message}</Empty></div>;
   if (!space || !states) return <div className="p-6 text-slate-500">Opening the building…</div>;
+  const unbuilt = (id: AgentId) => (space.agents.find((a) => a.id === id)?.implemented ? undefined : PHASE[id]);
   const pick = (id: AgentId) => () => setSelected((cur) => (cur === id ? null : id));
 
   return (
@@ -86,10 +87,10 @@ export default function FirmSpace() {
             <Workstation id="tim" state={states.tim} selected={selected === "tim"} onSelect={pick("tim")} />
             <Partition x={12} />
             <RoomDecor id="alex" off={states.alex.key === "inactive"} />
-            <Workstation id="alex" state={states.alex} selected={selected === "alex"} onSelect={pick("alex")} />
+            <Workstation id="alex" state={states.alex} selected={selected === "alex"} onSelect={pick("alex")} phase={unbuilt("alex")} />
             <Partition x={24} />
             <RoomDecor id="max" off={states.max.key === "inactive"} />
-            <Workstation id="max" state={states.max} selected={selected === "max"} onSelect={pick("max")} />
+            <Workstation id="max" state={states.max} selected={selected === "max"} onSelect={pick("max")} phase={unbuilt("max")} />
             <Foreground />
           </svg>
           {IDS.map((id) => (
@@ -286,7 +287,7 @@ function SummaryCard({ id, state, space, onClose }: { id: AgentId; state: AgentS
       )}
 
       <Link to={to} className="btn-primary mt-4 w-full">
-        {id === "cio" ? "Enter the CIO Office" : `Enter ${NAMES[id]}'s workspace`} →
+        {id === "cio" ? "Enter Graham's office" : `Enter ${NAMES[id]}'s workspace`} →
       </Link>
     </div>
   );

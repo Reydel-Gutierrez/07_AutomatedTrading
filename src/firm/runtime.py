@@ -111,6 +111,8 @@ class Service:
         )
         self.scheduler = Scheduler(clock=clock, on_failure=self._job_failed)
         self.cio = build_cio(self.firm, self.health, self.environ)
+        self.research_desk = build_research(self.firm, self.environ, on_progress=self._research_progress)
+        self.researching: dict[str, Any] | None = None  # in-memory presence for the Firm Space
         self._last_failure_event: dict[str, datetime] = {}
         self._install_jobs()
 
@@ -137,6 +139,8 @@ class Service:
         add(Job("broker_sync", self._sync_due, self.broker_sync, 240))
         for manager_id in f.managers:
             add(Job(f"manager:{manager_id}", self._manager_due(manager_id), self._manager_run(manager_id), 600))
+        if "alex" in f.managers:
+            add(Job("research:alex", self._research_due, self.research, 1800))
         add(Job("marks", lambda now, st: self._daily_after(now, "marks", time(16, 20), trading_only=True), self.marks, 300))
         add(Job("market_bars", lambda now, st: self._daily_after(now, "market_bars", time(17, 0)), self.market_bars, 300))
         add(Job("backup", lambda now, st: self._daily_after(now, "backup", time(2, 30)), self.backup, 900))
@@ -195,6 +199,29 @@ class Service:
             return {"summary": outcome.summary, "orders": outcome.orders}
 
         return run
+
+    # -- research ------------------------------------------------------------
+    def _research_due(self, now: datetime, st: JobState) -> bool:
+        """Once per trading day from 08:30 ET (or as soon as Alex is switched on), while Alex runs."""
+        row = self.firm.registry.get("alex")
+        if row.book is None or not self.firm.reconciler.bootstrapped() or CALENDAR.session_for(now) is None:
+            return False
+        if et(now).time() < time(8, 30):
+            return False
+        if st.last_started and (now - st.last_started).total_seconds() < 1800:
+            return False
+        done = (self.firm.settings.get("daily_jobs") or {}).get("research_alex")
+        return done != et_date(now).isoformat()
+
+    def _research_progress(self, symbol: str | None) -> None:
+        self.researching = {"symbol": symbol, "since": iso(self.clock())} if symbol else None
+
+    def research(self) -> dict[str, Any]:
+        result = self.research_desk.run()
+        self._mark_daily("research_alex")
+        if result.approved or result.rejected:
+            self.firm.request_run("alex", "research_updated")
+        return {"researched": result.researched, "approved": result.approved, "rejected": result.rejected, "skipped": result.skipped, "bars_refreshed": result.bars_refreshed}
 
     def heartbeat(self) -> None:
         self.firm.settings.put(
@@ -269,6 +296,17 @@ class Service:
                 log.exception("scheduler tick failed")
             stop.wait(interval)
         self.scheduler.shutdown()
+
+
+def build_research(firm: Firm, environ: Mapping[str, str], researcher=None, on_progress=None):
+    """Alex's research desk on Claude with web search (settings.ai_models.alex)."""
+    from firm.ai.budget import Budget
+    from firm.research import AnthropicResearcher, ResearchDesk
+
+    cfg = (firm.settings.get("ai_models") or {}).get("alex") or {}
+    if researcher is None:
+        researcher = AnthropicResearcher(api_key=str(environ.get("ANTHROPIC_API_KEY") or ""), model=str(cfg.get("model") or "claude-opus-5-5"), effort=str(cfg.get("effort") or "medium"))
+    return ResearchDesk(firm, researcher, Budget(firm.db, firm.settings, clock=firm.clock), on_progress=on_progress)
 
 
 def build_cio(firm: Firm, health, environ: Mapping[str, str], provider=None):

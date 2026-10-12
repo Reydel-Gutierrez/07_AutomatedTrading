@@ -33,6 +33,7 @@ DEFAULTS: dict[str, Any] = {
     # Provider is configurable: "anthropic" (default) or "openai". Keys live only in the Pi env file.
     "ai_models": {
         "cio": {"provider": "anthropic", "model": "claude-opus-5-5", "summary_model": "claude-haiku-5-5", "effort": "high"},
+        "alex": {"provider": "anthropic", "model": "claude-opus-5-5", "effort": "medium"},
     },
     "kill_switch": {"engaged": False, "reason": None, "by": None, "at": None},
     "drawdown_brake": {"engaged": False, "hwm": None, "at": None},

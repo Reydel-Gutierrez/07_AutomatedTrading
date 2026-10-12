@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { Portrait } from "../space/Character";
 
 export const AGENTS: Record<string, { name: string; title: string; color: string; initial: string; blurb: string }> = {
-  cio: { name: "CIO", title: "Chief Investment Officer", color: "#dcc287", initial: "C", blurb: "Oversees the firm, allocates capital, and advises you." },
+  cio: { name: "Graham", title: "Chief Investment Officer", color: "#dcc287", initial: "G", blurb: "Oversees the firm, allocates capital, and advises you." },
   tim: { name: "Tim", title: "Core Investment Manager", color: "#4f9cf9", initial: "T", blurb: "Diversified long-term ETFs, contributions, rebalancing." },
   alex: { name: "Alex", title: "Strategic Growth Manager", color: "#a78bfa", initial: "A", blurb: "Systematic stock selection with AI research." },
   max: { name: "Max", title: "Short-Term Trading Manager", color: "#f59e0b", initial: "M", blurb: "Swing trading with defined entries, exits, and stops." },

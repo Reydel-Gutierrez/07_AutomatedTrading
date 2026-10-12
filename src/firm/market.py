@@ -73,6 +73,15 @@ class MarketData:
             stored += len(bars)
         return stored
 
+    def recent_closes(self, symbols: list[str], *, sessions: int) -> dict[str, list[float]]:
+        """The last `sessions` stored daily closes per symbol, oldest first."""
+        out: dict[str, list[float]] = {}
+        for sym in symbols:
+            rows = self.db.query("SELECT close FROM market_bars WHERE symbol = ? ORDER BY date DESC LIMIT ?", (sym.upper(), sessions))
+            if rows:
+                out[sym.upper()] = [float(r["close"]) for r in reversed(rows)]
+        return out
+
     def close_on(self, symbol: str, day: date) -> Decimal | None:
         row = self.db.one("SELECT close FROM market_bars WHERE symbol = ? AND date <= ? ORDER BY date DESC LIMIT 1", (symbol.upper(), day.isoformat()))
         return D(row["close"]) if row else None

@@ -63,6 +63,7 @@ class ManagerContext:
     view: BookView
     last_run: Mapping[str, Any] | None = None  # this manager's previous run summary
     drawdown: float = 0.0  # this sleeve's flow-adjusted decline from its peak, in this book
+    extras: Mapping[str, Any] = field(default_factory=dict)  # manager-specific inputs (stored closes, research)
 
 
 @dataclass

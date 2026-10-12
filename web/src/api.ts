@@ -23,6 +23,7 @@ export type ManagerCard = {
   mode: "INACTIVE" | "SIM" | "LIVE" | "PAUSED";
   status: string;
   activity: string | null;
+  implemented: boolean;
   last_run: { at: string; summary: string; activity: string; book: string } | null;
   next_run: string | null;
   live: { nav: number; cash: number; invested: number };

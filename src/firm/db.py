@@ -240,6 +240,23 @@ CREATE TABLE IF NOT EXISTS market_bars (
     volume TEXT,
     PRIMARY KEY (symbol, date)
 );
+-- Alex's research desk: one row per AI due-diligence note (newest per symbol counts).
+CREATE TABLE IF NOT EXISTS research_notes (
+    id INTEGER PRIMARY KEY,
+    manager_id TEXT NOT NULL,
+    symbol TEXT NOT NULL,
+    verdict TEXT NOT NULL CHECK (verdict IN ('approve','reject')),
+    conviction INTEGER NOT NULL,
+    thesis TEXT NOT NULL,
+    risks_json TEXT NOT NULL DEFAULT '[]',
+    sources_json TEXT NOT NULL DEFAULT '[]',
+    rank INTEGER,
+    model TEXT,
+    searches INTEGER NOT NULL DEFAULT 0,
+    cost TEXT NOT NULL DEFAULT '0',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS research_notes_symbol ON research_notes (manager_id, symbol, id);
 """
 
 

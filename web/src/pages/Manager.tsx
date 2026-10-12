@@ -94,8 +94,11 @@ export default function ManagerPage() {
 
           <Card title="Orders"><Orders m={m} /></Card>
           <Card title={`Activity · ${m.name}`}><Feed events={m.activity_feed} compact /></Card>
-          <Card title={`Talk to ${m.name}`}>
-            <p className="text-sm text-slate-400">Conversations with your managers and the CIO open in Phase 2. Today, change {m.name}'s strategy through the mandate above; every change is versioned and logged.</p>
+          {m.id === "alex" && <ResearchDesk />}
+          <Card title={`Questions about ${m.name}`}>
+            <p className="text-sm text-slate-400">
+              Ask Graham in the <a href="/cio" className="text-gold-400 hover:underline">CIO Office</a>; he reads {m.name}'s decisions, orders{m.id === "alex" ? ", and research notes" : ""} before answering. Change {m.name}'s strategy through the mandate above; every change is versioned and logged.
+            </p>
           </Card>
         </>
       )}
@@ -108,6 +111,7 @@ function describe(activity: string | null): string {
     investing: "Investing new cash toward his targets.",
     rebalancing: "Rebalancing: selling overweight funds, then buying underweight ones.",
     holding: "Holding. The portfolio is within its bands.",
+    "waiting for research": "Waiting for research approvals on today's top-ranked names before buying.",
     "waiting for market data": "Waiting for market data.",
     idle: "Idle: not enough capital to trade.",
   };
@@ -186,6 +190,83 @@ function Positions({ b }: { b: BookDetail }) {
 }
 
 function MandateCard({ m, onDone }: { m: ManagerDetail; onDone: () => void }) {
+  return m.id === "alex" ? <AlexMandateCard m={m} onDone={onDone} /> : <TimMandateCard m={m} onDone={onDone} />;
+}
+
+const ALEX_FIELDS: [string, string, number][] = [
+  ["positions", "Positions held", 1],
+  ["max_position_pct", "Max per position (%)", 100],
+  ["cash_buffer_pct", "Cash buffer (%)", 100],
+  ["min_trade_usd", "Minimum trade ($)", 1],
+  ["research_daily_limit", "Research notes per day", 1],
+];
+
+function AlexMandateCard({ m, onDone }: { m: ManagerDetail; onDone: () => void }) {
+  const p = m.mandate.params;
+  const [editing, setEditing] = useState(false);
+  const [fields, setFields] = useState<Record<string, string>>(() => ({ ...Object.fromEntries(ALEX_FIELDS.map(([k, , scale]) => [k, String(Math.round(Number(p[k]) * scale * 100) / 100)])), run_time_et: String(p.run_time_et) }));
+  const [note, setNote] = useState("");
+  const save = useAction(
+    () =>
+      api.post(`/api/managers/${m.id}/mandate`, {
+        note,
+        params: { ...p, ...Object.fromEntries(ALEX_FIELDS.map(([k, , scale]) => [k, Number(fields[k]) / scale])), run_time_et: fields.run_time_et },
+      }),
+    () => {
+      setEditing(false);
+      setNote("");
+      onDone();
+    },
+  );
+  const universe: string[] = p.universe ?? [];
+  return (
+    <Card title={`Strategy · mandate v${m.mandate.version}`} action={!editing && <button className="btn-ghost text-xs" onClick={() => setEditing(true)}>Adjust</button>}>
+      {!editing ? (
+        <div className="space-y-3 text-sm text-slate-400">
+          <p>
+            Screens {universe.length} large US stocks by 12-1 month momentum ÷ volatility, keeping names above their {p.trend_sma_days}-day average. Buys the top {p.positions} names
+            with a fresh research approval (≤ {p.research_max_age_days} days), equal weight, at most {pct(p.max_position_pct, 0)} each, keeping {pct(p.cash_buffer_pct, 0)} cash.
+          </p>
+          <p>
+            Rebalances on the first run of each month; sells right away when a trend breaks or research turns to reject. Never trades less than {money(p.min_trade_usd)}. Decides daily at {p.run_time_et} ET.
+            New buys pause if the sleeve falls {pct(p.sleeve_drawdown_pause, 0)} below its peak.
+          </p>
+          <details className="text-xs text-slate-500">
+            <summary className="cursor-pointer">Universe ({universe.length})</summary>
+            <p className="mt-2 leading-relaxed">{universe.join(" · ")}</p>
+          </details>
+          <details className="text-xs text-slate-500">
+            <summary className="cursor-pointer">History</summary>
+            <ul className="mt-2 space-y-1">{m.mandate.history.map((h) => <li key={h.version}>v{h.version} · {when(h.created_at)} · {h.created_by}: {h.note}</li>)}</ul>
+          </details>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            {ALEX_FIELDS.map(([k, label]) => (
+              <Field key={k} label={label}>
+                <input className="input" type="number" value={fields[k]} onChange={(e) => setFields({ ...fields, [k]: e.target.value })} />
+              </Field>
+            ))}
+            <Field label="Daily run (ET)">
+              <input className="input" value={fields.run_time_et} onChange={(e) => setFields({ ...fields, run_time_et: e.target.value })} />
+            </Field>
+          </div>
+          <Field label="Why the change?">
+            <input className="input" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Required" />
+          </Field>
+          <div className="flex gap-2">
+            <button className="btn-primary" disabled={!note || save.pending} onClick={() => save.run()}>Save as v{m.mandate.version + 1}</button>
+            <button className="btn-ghost" onClick={() => setEditing(false)}>Cancel</button>
+          </div>
+          <ErrorLine error={save.error} />
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function TimMandateCard({ m, onDone }: { m: ManagerDetail; onDone: () => void }) {
   const p = m.mandate.params;
   const [editing, setEditing] = useState(false);
   const [targets, setTargets] = useState<Record<string, string>>(() => Object.fromEntries(Object.entries(p.targets ?? {}).map(([k, v]) => [k, String(Math.round(Number(v) * 1000) / 10)])));
@@ -312,5 +393,42 @@ function Orders({ m }: { m: ManagerDetail }) {
         </tbody>
       </table>
     </div>
+  );
+}
+
+type Note = { id: number; symbol: string; verdict: "approve" | "reject"; conviction: number; thesis: string; risks: string[]; sources: { title: string; url: string }[]; rank: number | null; searches: number; cost: string; created_at: string };
+
+/** Alex's due-diligence notes: what the research desk read and decided, with its sources. */
+function ResearchDesk() {
+  const { bump } = useLive();
+  const { data } = useResource<{ notes: Note[] }>("/api/managers/alex/research", { every: 60000, bump });
+  const notes = data?.notes ?? [];
+  return (
+    <Card title="Research desk" action={<span className="text-xs text-slate-500">AI due diligence with web search · research can veto, never add</span>}>
+      {!notes.length ? (
+        <Empty>No research yet. Once Alex is switched on, the desk researches the screen's top candidates each trading morning from 8:30 ET.</Empty>
+      ) : (
+        <ul className="divide-y divide-ink-800">
+          {notes.map((n) => (
+            <li key={n.id} className="py-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold text-slate-100">{n.symbol}</span>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${n.verdict === "approve" ? "bg-emerald-500/15 text-emerald-300" : "bg-rose-500/15 text-rose-300"}`}>{n.verdict === "approve" ? "Approved" : "Rejected"}</span>
+                <span className="text-xs text-slate-500">conviction {n.conviction}/5{n.rank ? ` · ranked #${n.rank}` : " · held name"} · {ago(n.created_at)} · {n.searches} searches · ${Number(n.cost).toFixed(2)}</span>
+              </div>
+              <p className="mt-1 text-sm text-slate-300">{n.thesis}</p>
+              {n.risks.length > 0 && <p className="mt-1 text-xs text-slate-500">Risks: {n.risks.join(" · ")}</p>}
+              {n.sources.length > 0 && (
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">
+                  {n.sources.map((src) => (
+                    <a key={src.url} href={src.url} target="_blank" rel="noreferrer noopener" className="truncate text-gold-400/90 hover:underline" title={src.url}>{src.title}</a>
+                  ))}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }

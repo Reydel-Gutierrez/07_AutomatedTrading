@@ -83,7 +83,7 @@ def test_allocate_by_percent_and_overview(client, firm):
 def test_mode_live_needs_confirmation_and_unbuilt_managers_cannot_trade(client, firm):
     headers = _login(client)
     assert client.post("/api/managers/tim/mode", json={"mode": "LIVE"}, headers=headers).status_code == 422
-    assert client.post("/api/managers/alex/mode", json={"mode": "SIM"}, headers=headers).status_code == 409
+    assert client.post("/api/managers/max/mode", json={"mode": "SIM"}, headers=headers).status_code == 409
     assert client.post("/api/managers/tim/mode", json={"mode": "SIM", "note": "start"}, headers=headers).status_code == 200
     assert firm.registry.get("tim").mode == "SIM"
 
@@ -134,7 +134,8 @@ def test_space_reports_real_state_without_side_effects(client, firm):
     assert agents["tim"]["implemented"] and agents["tim"]["mode"] == "SIM" and not agents["tim"]["running"]
     assert agents["tim"]["last_run"]["summary"].startswith("Tim:") and "detail" not in agents["tim"]["last_run"]
     assert any(e["type"] == "MANAGER_RUN" for e in agents["tim"]["recent"])
-    assert not agents["alex"]["implemented"] and agents["alex"]["mode"] == "INACTIVE"
+    assert agents["alex"]["implemented"] and agents["alex"]["mode"] == "INACTIVE"
+    assert not agents["max"]["implemented"]
     assert space["cio"] == {"configured": False, "provider_ready": False, "working": None, "pending_proposals": [], "recent": []}
     assert space["market"]["next_open"] and space["benchmarks"] == []  # no stored bars yet: nothing shown
     firm.market.store_bars("SPY", [Bar("2026-10-09", D("660"), D("671"), D("659"), D("668"), 1), Bar("2026-10-12", D("668"), D("675"), D("667"), D("672"), 1)])
