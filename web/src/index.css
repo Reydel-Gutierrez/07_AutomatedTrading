@@ -80,7 +80,19 @@
   .fs-building *, .fs-scene *, .fs-flash { animation: none !important; }
 }
 
-/* Firm Space: clickable floor zones and empty furniture on floors that are not open yet */
-.fs-zone { cursor: pointer; }
-.fs-zone:hover polygon, .fs-zone:focus-visible polygon, .fs-zone-on polygon { stroke: #cdb27a; stroke-opacity: .55; stroke-dasharray: 6 5; fill: #cdb27a; fill-opacity: .05; }
+/* The Firm map: pan/zoom viewport, rooms, people, and labels that stay readable when zoomed out */
 .fs-off-soft { filter: brightness(.85); }
+.fm-viewport { cursor: grab; background: #0b1222; }
+.fm-viewport.fm-dragging, .fm-viewport.fm-dragging * { cursor: grabbing !important; }
+.fm-viewport:focus-visible { box-shadow: inset 0 0 0 2px #cdb27a80; }
+.fm-lbl { transform: scale(var(--lbl, 1)); }
+.fm-compact { display: none; }
+.fm-far .fm-near { display: none; }
+.fm-far .fm-compact { display: inline; }
+.fm-room { cursor: pointer; }
+.fm-hl { fill: transparent; stroke: transparent; stroke-width: 2.5; }
+.fm-room:hover > .fm-hl, .fm-room:focus-visible > .fm-hl { fill: #cdb27a; fill-opacity: .05; stroke: #cdb27a; stroke-opacity: .5; stroke-dasharray: 8 6; }
+.fm-room-on > .fm-hl { fill: #cdb27a; fill-opacity: .07; stroke: #cdb27a; stroke-opacity: .95; stroke-dasharray: none; }
+.fm-person { cursor: pointer; }
+.fm-person:hover .fm-ring, .fm-person:focus-visible .fm-ring { stroke: #cdb27a; stroke-opacity: .7; }
+.fm-tag:hover rect, .fm-tag:focus-visible rect { stroke-opacity: .95; }

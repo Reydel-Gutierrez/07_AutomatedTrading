@@ -1,21 +1,30 @@
-import { type ReactNode, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+// The Firm: the whole company on one map you can drag and zoom. Click a person for what they
+// are doing and their numbers, click a room for its department and its folders (the pages
+// that hold its records), click a floor tag to fly there. Everything shown comes from live
+// records; furniture, plants, and the city are decoration.
+
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { useLive } from "../App";
 import { type FirmEvent, type ManagerDetail, type Usage } from "../api";
 import { Donut } from "../components/charts";
 import { AGENTS, Avatar, Badge, Empty } from "../components/ui";
-import { usePageVisible, useResource } from "../hooks";
+import { useHeaderHeight, usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
-import { useOfficeLife } from "../space/life";
 import { Office } from "../space/Office";
-import { Foreground, HqLabels, Partition, RoomDecor, Shell, StateGradients, VB, Workstation, headPoint, walkersIn, type AgentId } from "../space/Building";
-import { AcademyAnnex, ForexFloor } from "../space/Campus";
-import { FLOORS, type FloorId, type Zone, floorById, fxMarketOpen } from "../space/floors";
-import { type AgentState, CIO_TYPES, MOOD_LABEL, type Mood, PHASE, type Space, STATE_META, cioState, etTime, managerState, moodOf } from "../space/state";
+import { type Camera, PanZoom } from "../space/PanZoom";
+import { ALLOC_COLORS, type AgentId, FirmMap, NAMES, type Selection, signedPctOf, traineeDoing } from "../space/FirmMap";
+import { ACADEMY, DEPTS, GROUND, type Dept, type DeptId, FLOORS, type Floor, type FloorId, type Folder, type Rect, TOWER, WORLD, deptById, deptOf, floorById, fxMarketOpen } from "../space/departments";
+import { type AcademySpaceAgent, type AgentState, CIO_TYPES, MOOD_LABEL, type Mood, type Space, STATE_META, cioState, etTime, managerState, moodOf } from "../space/state";
 
 const IDS: AgentId[] = ["cio", "tim", "alex", "max"];
-const NAMES: Record<AgentId, string> = { cio: "Graham", tim: "Tim", alex: "Alex", max: "Max" };
-const ALLOC_COLORS: Record<string, string> = { tim: AGENTS.tim.color, alex: AGENTS.alex.color, max: AGENTS.max.color, cio: AGENTS.cio.color, unallocated: "#475569" };
+
+/** Engine timestamps arrive as epoch seconds or ISO strings. */
+function tsIso(ts: string | number): string | null {
+  const ms = typeof ts === "number" || /^\d+(\.\d+)?$/.test(ts) ? Number(ts) * 1000 : Date.parse(ts);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+}
+const PANEL_W = 384;
 
 function useNow(every: number) {
   const [now, setNow] = useState(() => Date.now());
@@ -24,40 +33,6 @@ function useNow(every: number) {
     return () => window.clearInterval(t);
   }, [every]);
   return now;
-}
-
-/** Height of the app header, which wraps on narrower screens. */
-function useHeaderHeight() {
-  const [h, setH] = useState(57);
-  useEffect(() => {
-    const el = document.querySelector("header");
-    if (!el) return;
-    const ro = new ResizeObserver(() => setH(el.getBoundingClientRect().height));
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  return h;
-}
-
-/** Name plates on or off; remembered per browser. */
-function useLabels(): [boolean, () => void] {
-  const [on, setOn] = useState(() => {
-    try {
-      return localStorage.getItem("fs-labels") !== "off";
-    } catch {
-      return true;
-    }
-  });
-  const toggle = () =>
-    setOn((v) => {
-      try {
-        localStorage.setItem("fs-labels", v ? "off" : "on");
-      } catch {
-        /* storage unavailable: keep the in-memory choice */
-      }
-      return !v;
-    });
-  return [on, toggle];
 }
 
 function useWide() {
@@ -71,31 +46,25 @@ function useWide() {
   return wide;
 }
 
+const ACADEMY_RECT: Rect = [ACADEMY.x0 - 20, ACADEMY.top - 100, ACADEMY.x1 - ACADEMY.x0 + 40, GROUND - ACADEMY.top + 120];
+const TOWER_RECT: Rect = [TOWER.x0 - 20, TOWER.top - 110, TOWER.x1 - TOWER.x0 + 40, GROUND - TOWER.top + 130];
+
 export default function FirmSpace() {
   const { events, bump } = useLive();
   const visible = usePageVisible();
   // Poll only while the tab is visible (refreshes on return); live events refresh immediately via `bump`.
   const { data: space, error } = useResource<Space>("/api/space", { every: visible ? 5000 : 0, bump });
+  const { overview } = useLive();
   const now = useNow(5000);
-  const [selected, setSelected] = useState<AgentId | null>(null);
   const header = useHeaderHeight();
   const params = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
+  const wide = useWide();
+  const camera = useRef<Camera>(null);
+  const [sel, setSel] = useState<Selection | null>(null);
+  const [panel, setPanel] = useState(() => window.matchMedia("(min-width: 1024px)").matches);
   const office = (IDS as string[]).includes(params.office ?? "") ? (params.office as AgentId) : null;
-  const floor: FloorId = params.office === "forex" || params.office === "academy" ? params.office : "hq";
-  const [zone, setZone] = useState<Zone | null>(null);
-  const [labels, toggleLabels] = useLabels();
-  const clock = useNow(30000);
-  const enter = (id: AgentId) => {
-    setSelected(null);
-    navigate(`/firm/${id}`);
-  };
-  const goFloor = (id: FloorId) => {
-    setSelected(null);
-    setZone(null);
-    navigate(id === "hq" ? "/firm" : `/firm/${id}`);
-  };
-  const pickZone = (z: Zone) => setZone((cur) => (cur?.id === z.id ? null : z));
 
   const states = useMemo(() => {
     if (!space) return null;
@@ -111,156 +80,187 @@ export default function FirmSpace() {
     return out;
   }, [space, states, now]);
 
+  const select = useCallback((s: Selection | null) => {
+    setSel(s);
+    if (s) setPanel(true);
+  }, []);
+  const focus = useCallback((r: Rect) => camera.current?.flyTo(r), []);
+  const goTo = useCallback(
+    (s: Selection) => {
+      select(s);
+      if (s.kind === "dept") focus(deptById(s.id).rect);
+      else if (s.kind === "floor") focus(floorById(s.id).rect);
+      else if (s.kind === "person") focus(deptOf(s.id)!.rect);
+      else focus(deptById("hall").rect);
+    },
+    [select, focus],
+  );
+  const openFolder = useCallback((path: string) => navigate(`${location.pathname}?open=${encodeURIComponent(path)}`), [navigate, location.pathname]);
+
+  // Old floor links (/firm/forex, /firm/academy) open on that part of the map.
+  const start = useRef(params.office === "forex" ? floorById("forex").rect : params.office === "academy" ? ACADEMY_RECT : undefined).current;
+  useEffect(() => {
+    if (params.office === "forex") select({ kind: "floor", id: "forex" });
+    if (params.office === "academy") select({ kind: "floor", id: "academy-hall" });
+  }, [params.office, select]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      setSelected(null);
-      setZone(null);
+      if (e.key === "Escape" && !office && !new URLSearchParams(location.search).get("open")) setSel(null);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
-
-  const life = useOfficeLife(moods, floor === "hq" && !office && visible);
-  const visitedBy = (id: AgentId) => Object.values(life).some((l) => l?.chatWith === id && !l.hidden);
+  }, [office, location.search]);
 
   if (error) return <div className="p-6"><Empty>{error.message}</Empty></div>;
   if (!space || !states || !moods) return <div className="p-6 text-slate-500">Opening the building…</div>;
-  const unbuilt = (id: AgentId) => (space.agents.find((a) => a.id === id)?.implemented ? undefined : PHASE[id]);
-  const pick = (id: AgentId) => () => setSelected((cur) => (cur === id ? null : id));
 
+  const sheet = !wide && panel;
   return (
-    <div className="grid bg-[#0a0e19] lg:grid-cols-[minmax(0,1fr)_360px]" style={{ ["--fs-h" as string]: `calc(100dvh - ${header}px)` }}>
-      <div className="relative flex items-center justify-center overflow-hidden bg-gradient-to-b from-[#070b17] via-[#141a2e] to-[#14201a] lg:h-[var(--fs-h)]">
-        <div className="relative w-full" style={{ aspectRatio: `${VB.w} / ${VB.h}`, maxWidth: `calc(var(--fs-h) * ${(VB.w / VB.h).toFixed(4)})` }}>
-          {floor !== "hq" && (
-            <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className="fs-building fs-scene absolute inset-0 h-full w-full" role="group" aria-label={`${floorById(floor).building}, ${floorById(floor).name}`}>
-              {floor === "forex" ? (
-                <ForexFloor floor={floorById("forex")} now={clock} active={zone?.id ?? null} onPick={pickZone} labels={labels} academy={space.academy} />
-              ) : (
-                <AcademyAnnex floor={floorById("academy")} active={zone?.id ?? null} onPick={pickZone} labels={labels} academy={space.academy} onAgent={(id) => navigate(`/academy/${id}`)} />
-              )}
-            </svg>
-          )}
-          {floor === "hq" && (
-          <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className={`fs-building fs-scene absolute inset-0 h-full w-full ${office ? "fs-paused" : ""}`} role="group" aria-label="HQ Tower">
-            <StateGradients />
-            <g onClick={() => setSelected(null)}>
-              <Shell />
-            </g>
-            <Workstation id="cio" state={states.cio} mood={moods.cio} away={!!life.cio} visited={visitedBy("cio")} behind={walkersIn(life, "cio", "behind")} front={walkersIn(life, "cio", "front")} selected={selected === "cio"} onSelect={pick("cio")} pending={space.cio.pending_proposals.length} />
-            <RoomDecor id="tim" off={states.tim.key === "inactive"} />
-            <Workstation id="tim" state={states.tim} mood={moods.tim} away={!!life.tim} visited={visitedBy("tim")} behind={walkersIn(life, "tim", "behind")} front={walkersIn(life, "tim", "front")} selected={selected === "tim"} onSelect={pick("tim")} />
-            <Partition x={12} />
-            <RoomDecor id="alex" off={states.alex.key === "inactive"} />
-            <Workstation id="alex" state={states.alex} mood={moods.alex} away={!!life.alex} visited={visitedBy("alex")} behind={walkersIn(life, "alex", "behind")} front={walkersIn(life, "alex", "front")} selected={selected === "alex"} onSelect={pick("alex")} phase={unbuilt("alex")} />
-            <Partition x={24} />
-            <RoomDecor id="max" off={states.max.key === "inactive"} />
-            <Workstation id="max" state={states.max} mood={moods.max} away={!!life.max} visited={visitedBy("max")} behind={walkersIn(life, "max", "behind")} front={walkersIn(life, "max", "front")} selected={selected === "max"} onSelect={pick("max")} phase={unbuilt("max")} />
-            <Foreground />
-            {labels && <HqLabels />}
-          </svg>
-          )}
-          {!office && <FloorSwitcher floor={floor} onPick={goFloor} labels={labels} onLabels={toggleLabels} />}
-          {floor !== "hq" && zone && <ZoneCard zone={zone} floor={floor} onClose={() => setZone(null)} />}
-          {floor === "hq" && !office && IDS.map((id) => (
-            <Indicator key={id} id={id} state={states[id]} mood={moods[id]} active={selected === id} onClick={pick(id)} />
-          ))}
-          {floor === "hq" && !office && selected && <SummaryCard id={selected} state={states[selected]} space={space} onClose={() => setSelected(null)} onEnter={() => enter(selected)} />}
-          <p className="pointer-events-none absolute bottom-2 left-3 hidden text-[10px] text-slate-400/70 sm:block">
-            {floor === "hq"
-              ? "Indicators come from live records. Breathing, plants, steam, and lighting are decorative."
-              : floor === "academy"
-                ? "Agents, their states, and the Lab's activity come from the Forex engine's records. Furniture and lighting are decorative."
-                : "The chairs are open: no agent trades live capital. Rates come from OANDA; clocks follow the market schedule."}
-          </p>
-        </div>
-        {office && <Office id={office} state={states[office]} mood={moods[office]} space={space} top={header} onClose={() => navigate("/firm")} />}
-      </div>
-      {floor !== "hq" ? (
-        <ul className="divide-y divide-ink-800 border-t border-ink-800 bg-ink-950 lg:hidden" aria-label={`Spaces on the ${floorById(floor).name}`}>
-          {floorById(floor).zones.map((z) => (
-            <li key={z.id} className="px-4 py-3">
-              <span className="text-sm font-semibold text-slate-100">{z.name}</span>
-              <span className="block text-sm text-slate-300">{z.today}</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-      <ul className="divide-y divide-ink-800 border-t border-ink-800 bg-ink-950 lg:hidden" aria-label="What each person is doing">
-        {IDS.map((id) => {
-          const st = states[id];
-          const m = STATE_META[st.key];
-          return (
-            <li key={id}>
-              <button onClick={() => enter(id)} className="flex w-full items-start gap-3 px-4 py-3 text-left">
-                <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${m.working ? "fs-pulse-dot" : ""}`} style={{ background: m.working || st.key === "error" ? m.color : AGENTS[id].color }} />
-                <span className="min-w-0 flex-1">
-                  <span className="text-sm font-semibold text-slate-100">{NAMES[id]}</span>
-                  <span className="block text-sm text-slate-300">{st.headline}</span>
-                  {st.sub && <span className="block truncate text-xs text-slate-500">{st.sub}</span>}
-                </span>
-                <span className="text-slate-500" aria-hidden="true">›</span>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
+    <div className="relative overflow-hidden" style={{ height: `calc(100dvh - ${header}px)` }}>
+      <PanZoom ref={camera} world={WORLD} start={start} label="Map of The 537 Firm" insetRight={wide && panel ? PANEL_W : 0} insetBottom={sheet ? Math.round(window.innerHeight * 0.45) : 0}>
+        <FirmMap space={space} states={states} moods={moods} overview={overview} events={events} now={now} sel={sel} onSelect={select} onFocus={focus} onBackground={() => setSel(null)} />
+      </PanZoom>
+
+      <Controls camera={camera} onJump={goTo} onTower={() => focus(TOWER_RECT)} onAcademy={() => focus(ACADEMY_RECT)} />
+
+      {!panel && (
+        <button onClick={() => setPanel(true)} className="absolute bottom-8 right-3 z-20 rounded-xl lg:bottom-auto lg:top-3 border border-white/10 bg-ink-950/90 px-3 py-2 text-xs font-medium text-slate-200 shadow-lg backdrop-blur hover:border-gold-500/50">
+          {sel ? "Show details" : "Firm overview"} ‹
+        </button>
       )}
-      <OverviewPanel space={space} events={events} floor={floor} onFloor={goFloor} />
+      {panel && (
+        <aside
+          className={`absolute z-20 flex flex-col border-ink-700 bg-ink-950/95 shadow-2xl backdrop-blur ${wide ? "bottom-0 right-0 top-0 border-l" : "inset-x-0 bottom-0 max-h-[45dvh] rounded-t-2xl border-t"}`}
+          style={wide ? { width: PANEL_W } : undefined}
+          aria-label={sel ? "Details" : "Firm overview"}
+        >
+          <div className="flex items-center gap-2 border-b border-ink-800 px-4 py-2">
+            {sel ? (
+              <button onClick={() => setSel(null)} className="text-xs text-slate-400 hover:text-slate-200">← Firm overview</button>
+            ) : (
+              <span className="text-xs font-semibold uppercase tracking-[0.22em] text-gold-300">Firm overview</span>
+            )}
+            <button onClick={() => setPanel(false)} className="ml-auto rounded-md px-2 py-1 text-xs text-slate-500 hover:bg-ink-800 hover:text-slate-200" aria-label="Hide panel">
+              Hide ›
+            </button>
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto p-4">
+            {sel?.kind === "person" && <PersonPanel key={sel.id} id={sel.id} state={states[sel.id]} mood={moods[sel.id]} space={space} onFolder={openFolder} onSit={() => navigate(`/firm/${sel.id}`)} />}
+            {sel?.kind === "trainee" && <TraineePanel a={space.academy?.agents?.find((a) => a.id === sel.id)} space={space} onFolder={openFolder} />}
+            {sel?.kind === "dept" && <DeptPanel d={deptById(sel.id)} space={space} states={states} events={events} now={now} onPick={goTo} onFolder={openFolder} />}
+            {sel?.kind === "floor" && <FloorPanel f={floorById(sel.id)} onPick={goTo} />}
+            {!sel && <OverviewPanel space={space} events={events} onPick={goTo} onFolder={openFolder} />}
+          </div>
+        </aside>
+      )}
+
+      <p className="pointer-events-none absolute bottom-2 left-3 z-10 hidden text-[10px] text-slate-400/70 sm:block" style={wide && panel ? { right: PANEL_W } : undefined}>
+        People, screens, and boards show live records. Furniture, plants, lighting, and the city are decorative.
+      </p>
+      {office && <Office id={office} state={states[office]} mood={moods[office]} space={space} top={header} onClose={() => navigate("/firm")} />}
     </div>
   );
 }
 
-function Indicator({ id, state, mood, active, onClick }: { id: AgentId; state: AgentState; mood: Mood; active: boolean; onClick: () => void }) {
-  const [x, y] = headPoint(id);
-  const m = STATE_META[state.key];
-  const color = AGENTS[id].color;
+// -- map controls ---------------------------------------------------------------------------------
+
+function Controls({ camera, onJump, onTower, onAcademy }: { camera: React.RefObject<Camera>; onJump: (s: Selection) => void; onTower: () => void; onAcademy: () => void }) {
+  const [floors, setFloors] = useState(false);
+  const btn = "grid h-9 w-9 shrink-0 place-items-center rounded-lg text-base text-slate-200 hover:bg-ink-800";
   return (
-    <button
-      onClick={onClick}
-      aria-label={`${NAMES[id]}: ${state.headline}${state.sub ? `. ${state.sub}` : ""}. Open summary.`}
-      className={`absolute z-10 max-w-[44%] -translate-x-1/2 -translate-y-full rounded-lg border bg-ink-950/85 px-1.5 py-1 text-left shadow-lg backdrop-blur transition hover:border-gold-500/60 sm:max-w-[240px] sm:px-2.5 sm:py-1.5 ${active ? "border-gold-500/70" : mood.kind === "stressed" ? "border-rose-500/60 shadow-rose-900/40" : "border-white/10"}`}
-      style={{ left: `${(x / VB.w) * 100}%`, top: `${(y / VB.h) * 100}%` }}
-    >
-      <span className="flex items-center gap-1.5">
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full sm:h-2 sm:w-2 ${m.working ? "fs-pulse-dot" : ""}`} style={{ background: m.working || state.key === "error" ? m.color : color }} />
-        <span className="text-[10px] font-semibold text-slate-50 sm:text-xs">{NAMES[id]}</span>
-        <span className="ml-auto hidden pl-2 text-slate-500 sm:inline" aria-hidden="true">›</span>
-      </span>
-      <span className="mt-0.5 hidden text-[11px] leading-snug text-slate-200 sm:line-clamp-2">{state.headline}</span>
-      {state.sub && <span className="hidden text-[10px] leading-snug text-slate-400 md:line-clamp-1">{state.sub}</span>}
-      {mood.kind === "stressed" && <span className="hidden text-[10px] leading-snug text-rose-300 md:line-clamp-1">{MOOD_LABEL.stressed}{mood.reason ? ` · ${mood.reason}` : ""}</span>}
-      <span className="absolute left-1/2 top-full h-2 w-2 -translate-x-1/2 -translate-y-1 rotate-45 border-b border-r border-white/10 bg-ink-950" aria-hidden="true" />
-    </button>
+    <div className="absolute left-3 right-3 top-3 z-20 flex flex-col items-start gap-2 lg:right-auto">
+      <div className="flex max-w-full shrink-0 items-center gap-1 overflow-x-auto whitespace-nowrap rounded-xl border border-white/10 bg-ink-950/90 p-1 shadow-lg backdrop-blur">
+        <button className={btn} onClick={() => camera.current?.zoomBy(1 / 1.3)} aria-label="Zoom out" title="Zoom out (−)">−</button>
+        <button className={btn} onClick={() => camera.current?.zoomBy(1.3)} aria-label="Zoom in" title="Zoom in (+)">+</button>
+        <button className="h-9 rounded-lg px-2.5 text-xs text-slate-200 hover:bg-ink-800" onClick={() => camera.current?.fit()} title="See everything (0)">Everything</button>
+        <span className="mx-0.5 hidden h-5 w-px bg-white/10 sm:block" aria-hidden="true" />
+        <button className="h-9 rounded-lg px-2.5 text-xs text-slate-200 hover:bg-ink-800" onClick={onTower}>HQ Tower</button>
+        <button className="h-9 rounded-lg px-2.5 text-xs text-slate-200 hover:bg-ink-800" onClick={onAcademy}>Academy</button>
+        <button className={`h-9 rounded-lg px-2.5 text-xs hover:bg-ink-800 ${floors ? "bg-ink-800 text-gold-200" : "text-slate-200"}`} onClick={() => setFloors((v) => !v)} aria-expanded={floors}>
+          Floors ▾
+        </button>
+      </div>
+      {floors && (
+        <ul className="w-56 rounded-xl border border-white/10 bg-ink-950/95 p-1 text-sm shadow-lg backdrop-blur">
+          {FLOORS.map((f) => (
+            <li key={f.id}>
+              <button
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left hover:bg-ink-800"
+                onClick={() => {
+                  setFloors(false);
+                  onJump({ kind: "floor", id: f.id });
+                }}
+              >
+                <span className="w-7 font-semibold text-gold-300">{f.level}</span>
+                <span className="text-slate-200">{f.name}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="hidden rounded-lg bg-ink-950/70 px-2.5 py-1.5 text-[11px] text-slate-300 backdrop-blur sm:block">Drag to look around · scroll or pinch to zoom · click anyone or any room</p>
+    </div>
   );
 }
 
-function SummaryCard({ id, state, space, onClose, onEnter }: { id: AgentId; state: AgentState; space: Space; onClose: () => void; onEnter: () => void }) {
+// -- inspector: people ---------------------------------------------------------------------------
+
+function FolderButtons({ folders, onFolder }: { folders: Folder[]; onFolder: (p: string) => void }) {
+  if (!folders.length) return null;
+  return (
+    <section className="mt-4">
+      <h3 className="label mb-2">Folders</h3>
+      <ul className="space-y-1.5">
+        {folders.map((f) => (
+          <li key={f.path + f.label}>
+            <button onClick={() => onFolder(f.path)} className="group flex w-full items-center gap-3 rounded-xl border border-ink-700 bg-ink-900 px-3 py-2 text-left transition hover:border-gold-500/50">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-gold-500/10 text-gold-300" aria-hidden="true">▤</span>
+              <span className="min-w-0 flex-1">
+                <span className="block text-sm font-medium text-slate-100">{f.label}</span>
+                <span className="block truncate text-xs text-slate-500 group-hover:text-slate-400">{f.note}</span>
+              </span>
+              <span className="text-slate-600 group-hover:text-slate-300" aria-hidden="true">›</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+function RightNow({ state }: { state: AgentState }) {
+  const m = STATE_META[state.key];
+  return (
+    <section className="mt-4 rounded-xl border border-ink-700 bg-ink-850 p-3">
+      <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider" style={{ color: m.color }}>
+        <span className={`h-1.5 w-1.5 rounded-full ${m.working ? "fs-pulse-dot" : ""}`} style={{ background: m.color }} />
+        Right now
+      </div>
+      <p className="mt-1.5 text-sm font-medium text-slate-100">{state.headline}</p>
+      {state.detail && <p className="mt-1 text-xs leading-relaxed text-slate-400">{state.detail}</p>}
+      {state.symbols.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1">
+          {state.symbols.slice(0, 6).map((s, i) => (
+            <span key={`${s.symbol}-${i}`} className="rounded border border-ink-600 px-1.5 py-0.5 text-[10px] font-semibold text-slate-200">
+              {s.side && <span className={s.side === "sell" ? "text-rose-300" : "text-emerald-300"}>{s.side.toUpperCase()} </span>}
+              {s.symbol}
+            </span>
+          ))}
+          {state.book === "SIM" && <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-300">simulation</span>}
+        </div>
+      )}
+      <p className="mt-2 text-[10px] text-slate-500" title={when(state.at)}>
+        {state.at ? `${ago(state.at)} · ` : ""}source: {state.source}
+      </p>
+    </section>
+  );
+}
+
+function PersonPanel({ id, state, mood, space, onFolder, onSit }: { id: AgentId; state: AgentState; mood: Mood; space: Space; onFolder: (p: string) => void; onSit: () => void }) {
   const { overview, bump } = useLive();
-  const wide = useWide();
   const detail = useResource<ManagerDetail>(id === "cio" ? null : `/api/managers/${id}`, { every: 30000, bump });
   const usage = useResource<Usage>(id === "cio" ? "/api/cio/usage" : null, { every: 60000 });
-  const [x, y] = headPoint(id);
-  const ref = useRef<HTMLDivElement>(null);
-  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
-  // Beside the person, on whichever side has room, clamped inside the building view.
-  useLayoutEffect(() => {
-    const el = ref.current;
-    const box = el?.parentElement;
-    if (!wide || !el || !box) return setPos(null);
-    const place = () => {
-      const W = box.clientWidth, H = box.clientHeight, w = el.offsetWidth, h = el.offsetHeight;
-      const ax = (x / VB.w) * W, ay = (y / VB.h) * H + 40;
-      const left = ax + 30 + w < W - 8 ? ax + 30 : Math.max(8, ax - 30 - w);
-      setPos({ left, top: Math.min(Math.max(8, ay - h / 2), Math.max(8, H - h - 8)) });
-    };
-    place();
-    const ro = new ResizeObserver(place);
-    ro.observe(box);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [wide, x, y, id]);
   const m = STATE_META[state.key];
   const card = overview?.managers.find((c) => c.id === id);
   const d = detail.data;
@@ -268,59 +268,33 @@ function SummaryCard({ id, state, space, onClose, onEnter }: { id: AgentId; stat
   const b = d?.books[book];
   const perf = b?.performance;
   const positions = b?.positions.filter((p) => p.quantity > 0 || p.target > 0) ?? [];
-  const to = id === "cio" ? "/cio" : `/managers/${id}`;
-
+  const dept = deptOf(id)!;
   return (
-    <div
-      role="dialog"
-      aria-label={`${NAMES[id]} summary`}
-      ref={ref}
-      className="fixed inset-x-2 bottom-2 z-30 max-h-[72vh] overflow-y-auto rounded-2xl border border-ink-600 bg-ink-900/95 p-4 shadow-2xl backdrop-blur lg:absolute lg:inset-x-auto lg:bottom-auto lg:max-h-[calc(100%-16px)] lg:w-[340px]"
-      style={wide ? (pos ? { left: pos.left, top: pos.top } : { visibility: "hidden" }) : undefined}
-    >
+    <div>
       <header className="flex items-start gap-3">
-        <Avatar id={id} size={44} working={m.working} />
+        <Avatar id={id} size={48} working={m.working} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-display text-lg text-slate-50">{NAMES[id]}</span>
+            <span className="font-display text-xl text-slate-50">{NAMES[id]}</span>
             {card && <Badge tone={card.mode}>{card.mode}</Badge>}
           </div>
           <div className="truncate text-xs text-slate-400">{AGENTS[id].title}</div>
+          <div className="text-[11px] text-slate-500">{floorById(dept.floor).level} · {dept.name}</div>
         </div>
-        <button onClick={onClose} className="rounded-md px-2 py-1 text-slate-500 hover:bg-ink-800 hover:text-slate-200" aria-label="Close summary">✕</button>
       </header>
-
-      <section className="mt-4 rounded-xl border border-ink-700 bg-ink-850 p-3">
-        <div className="flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider" style={{ color: m.color }}>
-          <span className={`h-1.5 w-1.5 rounded-full ${m.working ? "fs-pulse-dot" : ""}`} style={{ background: m.color }} />
-          Right now
-        </div>
-        <p className="mt-1.5 text-sm font-medium text-slate-100">{state.headline}</p>
-        {state.detail && <p className="mt-1 text-xs leading-relaxed text-slate-400">{state.detail}</p>}
-        {state.symbols.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1">
-            {state.symbols.slice(0, 6).map((s, i) => (
-              <span key={`${s.symbol}-${i}`} className="rounded border border-ink-600 px-1.5 py-0.5 text-[10px] font-semibold text-slate-200">
-                {s.side && <span className={s.side === "sell" ? "text-rose-300" : "text-emerald-300"}>{s.side.toUpperCase()} </span>}
-                {s.symbol}
-              </span>
-            ))}
-            {state.book === "SIM" && <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-300">simulation</span>}
-          </div>
-        )}
-        <p className="mt-2 text-[10px] text-slate-500" title={when(state.at)}>
-          {state.at ? `${ago(state.at)} · ` : ""}source: {state.source}
+      <RightNow state={state} />
+      {mood.kind !== "calm" && mood.kind !== "focused" && (
+        <p className={`mt-2 text-xs ${mood.kind === "stressed" ? "text-rose-300" : mood.kind === "pleased" ? "text-emerald-300" : "text-slate-400"}`}>
+          {MOOD_LABEL[mood.kind]}{mood.reason ? ` · ${mood.reason}` : ""}
         </p>
-      </section>
+      )}
 
       {id === "cio" ? (
         <>
           <section className="mt-4">
             <h3 className="label mb-2">Awaiting your decision</h3>
             {space.cio.pending_proposals.length ? (
-              <ul className="space-y-1.5 text-sm">
-                {space.cio.pending_proposals.map((p) => <li key={p.id} className="text-slate-200">#{p.id} {p.title}</li>)}
-              </ul>
+              <ul className="space-y-1.5 text-sm">{space.cio.pending_proposals.map((p) => <li key={p.id} className="text-slate-200">#{p.id} {p.title}</li>)}</ul>
             ) : (
               <p className="text-sm text-slate-500">No open proposals.</p>
             )}
@@ -329,11 +303,7 @@ function SummaryCard({ id, state, space, onClose, onEnter }: { id: AgentId; stat
             <h3 className="label mb-2">Recent decisions</h3>
             <EventList events={space.cio.recent.slice(0, 3)} empty="No proposals or memories recorded yet." />
           </section>
-          {usage.data && (
-            <p className="mt-4 text-xs text-slate-500">
-              AI spend this month: {money(usage.data.agents.cio?.spent ?? 0)} of {money(usage.data.agents.cio?.cap ?? usage.data.monthly_usd)}
-            </p>
-          )}
+          {usage.data && <p className="mt-4 text-xs text-slate-500">AI spend this month: {money(usage.data.agents.cio?.spent ?? 0)} of {money(usage.data.agents.cio?.cap ?? usage.data.monthly_usd)}</p>}
         </>
       ) : !d ? (
         <p className="mt-4 text-sm text-slate-500">{detail.error ? detail.error.message : "Loading the portfolio…"}</p>
@@ -373,10 +343,299 @@ function SummaryCard({ id, state, space, onClose, onEnter }: { id: AgentId; stat
         </>
       )}
 
-      <button onClick={onEnter} className="btn-primary mt-4 w-full">
-        {id === "cio" ? "Sit down with Graham" : `Sit down with ${NAMES[id]}`} →
-      </button>
-      <Link to={to} className="mt-2 block text-center text-xs text-slate-500 hover:text-slate-300">Full workspace ↗</Link>
+      <button onClick={onSit} className="btn-primary mt-4 w-full">Sit down with {NAMES[id]} →</button>
+      <FolderButtons folders={dept.folders} onFolder={onFolder} />
+    </div>
+  );
+}
+
+function TraineePanel({ a, space, onFolder }: { a: AcademySpaceAgent | undefined; space: Space; onFolder: (p: string) => void }) {
+  if (!a) return <p className="text-sm text-slate-500">This agent is no longer in the Academy's records.</p>;
+  const paused = !!a.paused || a.status === "PAUSED";
+  return (
+    <div>
+      <header className="flex items-start gap-3">
+        <span className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl text-lg font-semibold text-ink-950" style={{ background: a.persona.color }}>{a.name[0]}</span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="font-display text-xl text-slate-50">{a.name}</span>
+            <span className="rounded-full bg-slate-500/10 px-2 py-0.5 text-[11px] text-slate-300">{a.style === "day" ? "Day trader" : "Swing trader"}</span>
+          </div>
+          <div className="text-xs text-slate-400">{a.persona.tagline}</div>
+          <div className="text-[11px] text-slate-500">A1 · Trading Hall · paper trading · v{a.version}</div>
+        </div>
+      </header>
+      <section className="mt-4 rounded-xl border border-ink-700 bg-ink-850 p-3">
+        <div className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Right now</div>
+        <p className="mt-1.5 text-sm font-medium text-slate-100">{paused ? `Paused${a.paused ? `: ${a.paused}` : ""}` : traineeDoing(a, !!space.academy?.engine?.data_ready).replace(/^\w/, (ch) => ch.toUpperCase())}</p>
+        {a.last_event && (
+          <p className="mt-1 text-xs leading-relaxed text-slate-400">
+            {a.last_event.summary} {tsIso(a.last_event.ts) && <span className="text-slate-500">· {ago(tsIso(a.last_event.ts))}</span>}
+          </p>
+        )}
+        <p className="mt-2 text-[10px] text-slate-500">source: Forex engine records</p>
+      </section>
+      <section className="mt-4">
+        <h3 className="label mb-2">Virtual account</h3>
+        <div className="grid grid-cols-3 gap-2 text-sm">
+          <Mini label="Equity" value={money(a.equity)} />
+          <Mini label="Return" value={<span className={tone(a.return_pct)}>{signedPctOf(a.return_pct)}</span>} />
+          <Mini label="Open" value={a.positions} />
+        </div>
+        {a.validation && <p className="mt-2 text-xs text-slate-400">Validation: {a.validation}</p>}
+      </section>
+      <FolderButtons folders={[{ label: `${a.name}'s record`, path: `/academy/${a.id}`, note: "Trades, validation evidence, revisions" }, { label: "The 537 Academy", path: "/academy", note: "Leaderboard, journal, and rates" }]} onFolder={onFolder} />
+    </div>
+  );
+}
+
+// -- inspector: departments and floors -----------------------------------------------------------
+
+function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, events: FirmEvent[], now: number, overview: ReturnType<typeof useLive>["overview"]): string[] {
+  const ac = space.academy;
+  const c = space.controls;
+  switch (d.id) {
+    case "cio": case "tim": case "alex": case "max":
+      return [`${NAMES[d.id]}: ${states[d.id].headline}`];
+    case "boardroom": {
+      const p = space.cio.pending_proposals;
+      return p.length ? [`${p.length} proposal${p.length > 1 ? "s" : ""} awaiting your decision.`, ...p.slice(0, 4).map((x) => `#${x.id} ${x.title} · expires ${ago(x.expires_at)}`)] : ["No proposals awaiting your decision."];
+    }
+    case "treasury":
+      return overview ? [`Firm capital ${money(overview.firm.nav)}, of which ${money(overview.firm.unallocated)} is unallocated.`, ...overview.allocation.map((a) => `${a.name}: ${money(a.nav)} (${pct(a.pct, 0)})`)] : ["Loading capital…"];
+    case "market-room": {
+      const prices = ac?.prices ?? [];
+      const fresh = prices.length > 0 && now / 1000 - Math.max(...prices.map((p) => p.time)) < 900;
+      return [`FX market by schedule: ${fxMarketOpen(now) ? "open" : "closed"} (Sunday 5 PM to Friday 5 PM New York).`, !ac?.available ? "The Forex engine is not running." : prices.length ? `${prices.length} OANDA rates on the board${fresh ? ", live" : ", from before the close"}.` : "Waiting for OANDA prices."];
+    }
+    case "day-1": case "day-2": case "swing-1": case "swing-2":
+      return ["Open. No agent has been promoted to live forex trading."];
+    case "lobby":
+      return overview ? [`Firm capital ${money(overview.firm.nav)}.`, ...overview.managers.map((m) => `${m.name}: ${m.mode.toLowerCase()}${m.status !== "OK" && m.status ? ` · ${m.status.toLowerCase()}` : ""}`)] : ["Loading…"];
+    case "records":
+      return events.length ? [`Latest: ${events[0].summary}`, `Event #${events[0].id} · ${ago(events[0].ts)}`] : ["Nothing recorded yet."];
+    case "operations": {
+      const flags = [c.kill_switch && "kill switch engaged", c.reconcile_hold && "buying paused (reconcile)", c.drawdown_brake && "drawdown brake engaged"].filter(Boolean);
+      return [`Broker ${space.broker_connected ? "connected" : "offline"} · live orders ${c.live_writes_enabled ? "on" : "off"}.`, flags.length ? `Safeguards: ${flags.join(", ")}.` : "Safeguards: all clear.", `US market ${space.market.regular_hours_open ? "open" : `closed${space.market.next_open ? `, opens ${etTime(space.market.next_open)}` : ""}`}.`];
+    }
+    case "lab": {
+      const running = ac?.validations_running ?? [];
+      const job = ac?.engine?.job?.name;
+      return running.length ? running.map((r) => `${ac?.agents?.find((a) => a.id === r.agent_id)?.name ?? r.agent_id}: ${r.status}`) : [job ? `Engine job: ${job}.` : "Idle. Racks light up while a validation or weekly review runs."];
+    }
+    case "research":
+      return ["Unoccupied."];
+    case "alumni":
+      return ["Empty. No agent has graduated or retired."];
+    case "hall": {
+      const agents = ac?.agents ?? [];
+      return ac?.available ? [`${agents.length} agents trading their own $10,000 virtual accounts.`, `Engine ${ac.engine?.online ? "online" : "offline"}${ac.engine?.market_open ? " · market open" : ""}.`] : ["The Forex engine is not running."];
+    }
+  }
+}
+
+function DeptPanel({ d, space, states, events, now, onPick, onFolder }: { d: Dept; space: Space; states: Record<AgentId, AgentState>; events: FirmEvent[]; now: number; onPick: (s: Selection) => void; onFolder: (p: string) => void }) {
+  const { overview } = useLive();
+  const f = floorById(d.floor);
+  const facts = deptFacts(d, space, states, events, now, overview);
+  const trainees = d.id === "hall" ? space.academy?.agents ?? [] : [];
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wider text-slate-500">{f.building} · {f.level} {f.name}</div>
+      <h2 className="font-display text-xl text-slate-50">{d.name}</h2>
+      <p className="mt-2 text-sm leading-relaxed text-slate-300">{d.purpose}</p>
+      <section className="mt-4 rounded-xl border border-ink-700 bg-ink-850 p-3">
+        <div className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Right now</div>
+        <ul className="mt-1.5 space-y-1">
+          {facts.map((t, i) => <li key={i} className={i ? "text-xs text-slate-400" : "text-sm text-slate-100"}>{t}</li>)}
+        </ul>
+      </section>
+      {(d.people?.length || trainees.length) ? (
+        <section className="mt-4">
+          <h3 className="label mb-2">People here</h3>
+          <ul className="space-y-1.5">
+            {(d.people ?? []).map((id) => (
+              <li key={id}>
+                <PersonRow color={AGENTS[id].color} name={NAMES[id as AgentId]} line={states[id as AgentId].headline} onClick={() => onPick({ kind: "person", id: id as AgentId })} />
+              </li>
+            ))}
+            {trainees.map((a) => (
+              <li key={a.id}>
+                <PersonRow color={a.persona.color} name={a.name} line={`${signedPctOf(a.return_pct)} · ${traineeDoing(a, !!space.academy?.engine?.data_ready)}`} onClick={() => onPick({ kind: "trainee", id: a.id })} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {d.later && <p className="mt-3 text-xs leading-relaxed text-slate-400">{d.later}</p>}
+      <FolderButtons folders={d.folders} onFolder={onFolder} />
+    </div>
+  );
+}
+
+function PersonRow({ color, name, line, onClick }: { color: string; name: string; line: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="flex w-full items-start gap-2.5 rounded-lg px-2 py-1.5 text-left hover:bg-ink-850">
+      <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: color }} />
+      <span className="min-w-0 flex-1">
+        <span className="block text-sm font-medium text-slate-100">{name}</span>
+        <span className="block truncate text-xs text-slate-400">{line}</span>
+      </span>
+      <span className="text-slate-600" aria-hidden="true">›</span>
+    </button>
+  );
+}
+
+function FloorPanel({ f, onPick }: { f: Floor; onPick: (s: Selection) => void }) {
+  const depts = DEPTS.filter((d) => d.floor === f.id);
+  return (
+    <div>
+      <div className="text-[11px] uppercase tracking-wider text-slate-500">{f.building} · {f.level}</div>
+      <h2 className="font-display text-xl text-slate-50">{f.name}</h2>
+      <p className="mt-1 text-sm text-slate-400">{f.division}</p>
+      <DeptList depts={depts} onPick={onPick} />
+    </div>
+  );
+}
+
+function DeptList({ depts, onPick }: { depts: Dept[]; onPick: (s: Selection) => void }) {
+  return (
+    <ul className="mt-3 space-y-1">
+      {depts.map((d) => (
+        <li key={d.id}>
+          <button onClick={() => onPick({ kind: "dept", id: d.id as DeptId })} className="flex w-full items-center gap-2 rounded-lg border border-ink-800 px-3 py-2 text-left hover:border-ink-600">
+            <span className="min-w-0 flex-1">
+              <span className="block text-sm font-medium text-slate-100">{d.name}</span>
+              <span className="block truncate text-[11px] text-slate-500">{d.people?.map((p) => NAMES[p as AgentId]).join(" · ") || d.folders.map((x) => x.label).join(" · ") || "—"}</span>
+            </span>
+            <span className="text-slate-600" aria-hidden="true">›</span>
+          </button>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// -- overview (nothing selected) -----------------------------------------------------------------------
+
+function OverviewPanel({ space, events, onPick, onFolder }: { space: Space; events: FirmEvent[]; onPick: (s: Selection) => void; onFolder: (p: string) => void }) {
+  const { overview: o } = useLive();
+  const now = useNow(15000);
+  const c = space.controls;
+  const flags = [c.kill_switch && "Kill switch engaged", c.reconcile_hold && "Buying paused (reconcile)", c.drawdown_brake && "Drawdown brake engaged"].filter(Boolean) as string[];
+  const open = !!space.market.regular_hours_open;
+  const [floor, setFloor] = useState<FloorId | null>(null);
+  return (
+    <div>
+      <header className="flex items-center justify-between gap-3">
+        <div className="text-[11px] leading-tight text-slate-400">
+          New York
+          <br />
+          <span className="text-slate-200">{new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric" }).format(now)}</span>
+          <span className="text-slate-200"> · {etTime(new Date(now).toISOString(), false)}</span>
+        </div>
+        <ClockFace now={now} />
+      </header>
+
+      {o ? (
+        <section className="mt-3 flex items-center gap-4">
+          <div className="min-w-0 flex-1 space-y-3">
+            <div>
+              <div className="text-xs text-slate-500">Total capital</div>
+              <div className="font-display text-2xl tabular-nums text-slate-50">{money(o.firm.nav)}</div>
+            </div>
+            <ul className="space-y-1 text-xs">
+              {o.allocation.map((a) => (
+                <li key={a.id} className="flex items-center gap-2">
+                  <span className="h-2 w-2 rounded-sm" style={{ background: ALLOC_COLORS[a.id] ?? "#64748b" }} />
+                  <span className="flex-1 text-slate-300">{a.name}</span>
+                  <span className="tabular-nums text-slate-200">{money(a.nav)}</span>
+                  <span className="w-9 text-right tabular-nums text-slate-500">{pct(a.pct, 0)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+          <Donut size={104} slices={o.allocation.map((a) => ({ label: a.name, value: a.nav, color: ALLOC_COLORS[a.id] ?? "#64748b" }))} />
+        </section>
+      ) : (
+        <p className="mt-4 text-sm text-slate-500">Loading capital…</p>
+      )}
+
+      <section className="mt-4 grid grid-cols-3 gap-3 border-y border-ink-800 py-3 text-xs">
+        <Status label="Market" value={open ? "Open" : "Closed"} ok={open ? true : null} sub={open ? "Regular hours" : space.market.next_open ? `Opens ${etTime(space.market.next_open)}` : undefined} />
+        <Status label="Broker" value={space.broker_connected ? "Connected" : "Offline"} ok={!!space.broker_connected} sub={c.live_writes_enabled ? "Live orders on" : "Live orders off"} />
+        <Status label="Safeguards" value={flags.length ? "Engaged" : "All clear"} ok={!flags.length} sub={flags.join(" · ") || "No holds or brakes"} />
+      </section>
+
+      <section className="mt-4">
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-gold-300">Departments</h2>
+        <ul className="space-y-1">
+          {FLOORS.map((f) => (
+            <li key={f.id}>
+              <button onClick={() => setFloor((cur) => (cur === f.id ? null : f.id))} aria-expanded={floor === f.id} className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left hover:bg-ink-850">
+                <span className="w-7 text-xs font-semibold text-gold-300">{f.level}</span>
+                <span className="flex-1 text-sm text-slate-200">{f.name}</span>
+                <span className="text-[10px] text-slate-500">{f.building === "HQ Tower" ? "HQ" : "Academy"}</span>
+                <span className="text-slate-600" aria-hidden="true">{floor === f.id ? "▾" : "▸"}</span>
+              </button>
+              {floor === f.id && <div className="pb-2 pl-9"><DeptList depts={DEPTS.filter((d) => d.floor === f.id)} onPick={onPick} /></div>}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="mt-4">
+        <header className="mb-2 flex items-center justify-between">
+          <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-gold-300">Recent activity</h2>
+          <button onClick={() => onFolder("/activity")} className="text-xs text-gold-400 hover:underline">All activity →</button>
+        </header>
+        {events.length ? (
+          <ul className="space-y-2.5">
+            {events.slice(0, 6).map((e) => {
+              const who = e.manager_id ?? (CIO_TYPES.has(e.type) ? "cio" : null);
+              return (
+                <li key={e.id} className="flex gap-2.5">
+                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: who ? AGENTS[who]?.color : e.severity === "critical" ? "#f43f5e" : "#64748b" }} />
+                  <div className="min-w-0">
+                    <p className={`text-xs ${e.severity === "critical" ? "text-rose-300" : "text-slate-200"}`}>{e.summary}</p>
+                    <p className="mt-0.5 text-[10px] text-slate-500" title={when(e.ts)}>Event #{e.id} · {ago(e.ts)}</p>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="text-xs text-slate-500">Nothing recorded yet.</p>
+        )}
+      </section>
+
+      <section className="mt-4 rounded-xl border border-ink-800 bg-ink-900/70 p-3">
+        <h2 className="mb-2 text-xs font-semibold uppercase tracking-[0.2em] text-gold-300">Market</h2>
+        {space.benchmarks.length ? (
+          <ul className="space-y-2.5">
+            {space.benchmarks.map((bm) => {
+              const last = bm.closes[bm.closes.length - 1], prev = bm.closes[bm.closes.length - 2];
+              const chg = prev ? last.close / prev.close - 1 : null;
+              return (
+                <li key={bm.symbol} className="flex items-center gap-3 text-xs">
+                  <div className="min-w-0 flex-1">
+                    <div className="text-slate-300">{bm.label}</div>
+                    <div className="text-[10px] text-slate-500">close of {last.date}</div>
+                  </div>
+                  <span className="tabular-nums text-slate-100">{last.close.toFixed(2)}</span>
+                  <span className={`w-14 text-right tabular-nums ${tone(chg)}`}>{signedPct(chg)}</span>
+                  {bm.closes.length > 1 && <Spark closes={bm.closes} />}
+                </li>
+              );
+            })}
+          </ul>
+        ) : (
+          <p className="text-xs text-slate-500">No stored daily closes yet; they are recorded after each session.</p>
+        )}
+      </section>
+      <p className="mt-3 text-[11px] text-slate-500">
+        Prefer the classic pages? <Link to="/" className="text-gold-400 hover:underline">Headquarters</Link>
+      </p>
     </div>
   );
 }
@@ -429,114 +688,6 @@ function Spark({ closes }: { closes: { close: number }[] }) {
   );
 }
 
-function OverviewPanel({ space, events, floor, onFloor }: { space: Space; events: FirmEvent[]; floor: FloorId; onFloor: (id: FloorId) => void }) {
-  const { overview: o } = useLive();
-  const now = useNow(15000);
-  const c = space.controls;
-  const flags = [c.kill_switch && "Kill switch engaged", c.reconcile_hold && "Buying paused (reconcile)", c.drawdown_brake && "Drawdown brake engaged"].filter(Boolean) as string[];
-  const open = !!space.market.regular_hours_open;
-  return (
-    <aside className="border-t border-ink-800 bg-ink-950/95 p-5 lg:h-[var(--fs-h)] lg:overflow-y-auto lg:border-l lg:border-t-0">
-      <header className="flex items-center justify-between gap-3">
-        <h1 className="text-sm font-semibold uppercase tracking-[0.22em] text-gold-300">Firm Overview</h1>
-        <div className="flex items-center gap-2">
-          <ClockFace now={now} />
-          <div className="text-right text-[11px] leading-tight text-slate-400">
-            New York
-            <br />
-            <span className="text-slate-200">{new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", weekday: "short", month: "short", day: "numeric" }).format(now)}</span>
-            <br />
-            <span className="text-slate-200">{etTime(new Date(now).toISOString(), false)}</span>
-          </div>
-        </div>
-      </header>
-      <div className="mt-3 h-px bg-gradient-to-r from-gold-500/50 to-transparent" />
-
-      {o ? (
-        <section className="mt-4 flex items-center gap-4">
-          <div className="min-w-0 flex-1 space-y-3">
-            <div>
-              <div className="text-xs text-slate-500">Total capital</div>
-              <div className="font-display text-2xl tabular-nums text-slate-50">{money(o.firm.nav)}</div>
-            </div>
-            <ul className="space-y-1 text-xs">
-              {o.allocation.map((a) => (
-                <li key={a.id} className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-sm" style={{ background: ALLOC_COLORS[a.id] ?? "#64748b" }} />
-                  <span className="flex-1 text-slate-300">{a.name}</span>
-                  <span className="tabular-nums text-slate-200">{money(a.nav)}</span>
-                  <span className="w-9 text-right tabular-nums text-slate-500">{pct(a.pct, 0)}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-          <Donut size={112} slices={o.allocation.map((a) => ({ label: a.name, value: a.nav, color: ALLOC_COLORS[a.id] ?? "#64748b" }))} />
-        </section>
-      ) : (
-        <p className="mt-4 text-sm text-slate-500">Loading capital…</p>
-      )}
-
-      <section className="mt-5 grid grid-cols-3 gap-3 border-y border-ink-800 py-4 text-xs">
-        <Status label="Market" value={open ? "Open" : "Closed"} ok={open ? true : null} sub={open ? "Regular hours" : space.market.next_open ? `Opens ${etTime(space.market.next_open)}` : undefined} />
-        <Status label="Broker" value={space.broker_connected ? "Connected" : "Offline"} ok={!!space.broker_connected} sub={c.live_writes_enabled ? "Live orders on" : "Live orders off"} />
-        <Status label="Safeguards" value={flags.length ? "Engaged" : "All clear"} ok={!flags.length} sub={flags.join(" · ") || "No holds or brakes"} />
-      </section>
-
-      <Directory floor={floor} onFloor={onFloor} />
-
-      <section className="mt-5">
-        <header className="mb-3 flex items-center justify-between">
-          <h2 className="text-xs font-semibold uppercase tracking-[0.2em] text-gold-300">Recent activity</h2>
-          <Link to="/activity" className="text-xs text-gold-400 hover:underline">All activity →</Link>
-        </header>
-        {events.length ? (
-          <ul className="space-y-3">
-            {events.slice(0, 6).map((e) => {
-              const who = e.manager_id ?? (CIO_TYPES.has(e.type) ? "cio" : null);
-              return (
-                <li key={e.id} className="flex gap-2.5">
-                  <span className="mt-1.5 h-2 w-2 shrink-0 rounded-full" style={{ background: who ? AGENTS[who]?.color : e.severity === "critical" ? "#f43f5e" : "#64748b" }} />
-                  <div className="min-w-0">
-                    <p className={`text-xs ${e.severity === "critical" ? "text-rose-300" : "text-slate-200"}`}>{e.summary}</p>
-                    <p className="mt-0.5 text-[10px] text-slate-500" title={when(e.ts)}>Event #{e.id} · {ago(e.ts)}</p>
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <p className="text-xs text-slate-500">Nothing recorded yet.</p>
-        )}
-      </section>
-
-      <section className="mt-5 rounded-xl border border-ink-800 bg-ink-900/70 p-4">
-        <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-gold-300">Market</h2>
-        {space.benchmarks.length ? (
-          <ul className="space-y-3">
-            {space.benchmarks.map((bm) => {
-              const last = bm.closes[bm.closes.length - 1], prev = bm.closes[bm.closes.length - 2];
-              const chg = last.close / prev.close - 1;
-              return (
-                <li key={bm.symbol} className="flex items-center gap-3 text-xs">
-                  <div className="min-w-0 flex-1">
-                    <div className="text-slate-300">{bm.label}</div>
-                    <div className="text-[10px] text-slate-500">close of {last.date}</div>
-                  </div>
-                  <span className="tabular-nums text-slate-100">{last.close.toFixed(2)}</span>
-                  <span className={`w-14 text-right tabular-nums ${tone(chg)}`}>{signedPct(chg)}</span>
-                  <Spark closes={bm.closes} />
-                </li>
-              );
-            })}
-          </ul>
-        ) : (
-          <p className="text-xs text-slate-500">No stored daily closes yet; they are recorded after each session.</p>
-        )}
-      </section>
-    </aside>
-  );
-}
-
 function Status({ label, value, ok, sub }: { label: string; value: string; ok: boolean | null; sub?: string }) {
   return (
     <div className="min-w-0">
@@ -546,114 +697,6 @@ function Status({ label, value, ok, sub }: { label: string; value: string; ok: b
         {value}
       </div>
       {sub && <div className="mt-0.5 text-[10px] leading-snug text-slate-500">{sub}</div>}
-    </div>
-  );
-}
-
-const DIRECTORY: Record<FloorId, { level: string; spaces: string }[]> = {
-  hq: [
-    { level: "Executive level", spaces: "Graham (CIO) · lounge" },
-    { level: "Core Investments", spaces: "Tim · Alex · Max" },
-  ],
-  forex: [
-    { level: "Market room", spaces: "rates board · session clocks · desk heads" },
-    { level: "Live chairs", spaces: "Day Chair 1 & 2 · Swing Chair 1 & 2 (all open)" },
-  ],
-  academy: [{ level: "Academy Annex", spaces: "Atlas · Kestrel · Mira · Orion (paper) · Strategy Lab · Alumni" }],
-};
-
-const BUILDINGS = [...new Set(FLOORS.map((f) => f.building))];
-
-function Directory({ floor, onFloor }: { floor: FloorId; onFloor: (id: FloorId) => void }) {
-  return (
-    <section className="mt-5">
-      <h2 className="mb-3 text-xs font-semibold uppercase tracking-[0.2em] text-gold-300">Building directory</h2>
-      {BUILDINGS.map((b) => (
-        <div key={b} className="mb-3">
-          <h3 className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-slate-500">{b}</h3>
-          <ul className="space-y-1.5">
-            {FLOORS.filter((f) => f.building === b).map((f) => (
-              <li key={f.id}>
-                <button
-                  onClick={() => onFloor(f.id)}
-                  aria-current={floor === f.id ? "page" : undefined}
-                  className={`w-full rounded-lg border px-3 py-2 text-left transition ${floor === f.id ? "border-gold-500/50 bg-ink-850" : "border-ink-800 hover:border-ink-600"}`}
-                >
-                  <span className="flex items-center gap-2">
-                    <span className="text-sm font-semibold text-slate-100">{f.name}</span>
-                    <span className={`ml-auto rounded px-1.5 py-0.5 text-[10px] ${f.open ? "bg-emerald-500/10 text-emerald-300" : "bg-slate-500/10 text-slate-400"}`}>{f.open ? "Open" : "Not open yet"}</span>
-                  </span>
-                  {DIRECTORY[f.id].map((d) => (
-                    <span key={d.level} className="mt-0.5 block text-[11px] text-slate-400">
-                      <span className="text-slate-300">{d.level}:</span> {d.spaces}
-                    </span>
-                  ))}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </div>
-      ))}
-    </section>
-  );
-}
-
-/** Floor tabs grouped by building, and the name-plate toggle, over the top-left of the scene. */
-function FloorSwitcher({ floor, onPick, labels, onLabels }: { floor: FloorId; onPick: (id: FloorId) => void; labels: boolean; onLabels: () => void }) {
-  const f = floorById(floor);
-  return (
-    <div className="absolute left-2 top-2 z-20 flex max-w-[calc(100%-16px)] flex-col gap-1.5 sm:left-3 sm:top-3">
-      <div className="flex flex-wrap items-center gap-1 rounded-xl border border-white/10 bg-ink-950/85 p-1 shadow-lg backdrop-blur" role="tablist" aria-label="Floors">
-        {BUILDINGS.map((b, bi) => (
-          <span key={b} className="flex items-center gap-1">
-            {bi > 0 && <span className="mx-0.5 h-4 w-px bg-white/10" aria-hidden="true" />}
-            <span className="hidden px-1.5 text-[10px] font-semibold uppercase tracking-wider text-slate-500 sm:inline">{b === "HQ Tower" ? "HQ Tower" : ""}</span>
-            {FLOORS.filter((x) => x.building === b).map((x) => (
-              <button
-                key={x.id}
-                role="tab"
-                aria-selected={floor === x.id}
-                onClick={() => onPick(x.id)}
-                className={`rounded-lg px-2.5 py-1 text-xs font-medium transition ${floor === x.id ? "bg-gold-500/20 text-gold-200" : "text-slate-400 hover:bg-ink-800 hover:text-slate-200"}`}
-              >
-                <span className="sm:hidden">{x.short}</span>
-                <span className="hidden sm:inline">{x.building === "HQ Tower" ? x.name : x.building}</span>
-              </button>
-            ))}
-          </span>
-        ))}
-        <span className="mx-0.5 h-4 w-px bg-white/10" aria-hidden="true" />
-        <button onClick={onLabels} aria-pressed={labels} className={`rounded-lg px-2.5 py-1 text-xs transition hover:bg-ink-800 ${labels ? "text-slate-200" : "text-slate-500"}`}>
-          Labels {labels ? "on" : "off"}
-        </button>
-      </div>
-      <p className="hidden max-w-sm rounded-lg bg-ink-950/70 px-2.5 py-1.5 text-[11px] leading-snug text-slate-300 backdrop-blur sm:block">
-        <span className="font-semibold text-slate-100">{f.division}.</span> {f.blurb}
-      </p>
-    </div>
-  );
-}
-
-function ZoneCard({ zone, floor, onClose }: { zone: Zone; floor: FloorId; onClose: () => void }) {
-  const now = useNow(60000);
-  const fx = floor === "forex" ? fxMarketOpen(now) : null;
-  return (
-    <div role="dialog" aria-label={zone.name} className="fixed inset-x-2 bottom-2 z-30 rounded-2xl border border-ink-600 bg-ink-900/95 p-4 shadow-2xl backdrop-blur lg:absolute lg:inset-x-auto lg:bottom-auto lg:right-3 lg:top-3 lg:w-[340px]">
-      <header className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-[11px] uppercase tracking-wider text-slate-500">{floorById(floor).building} · {floorById(floor).name}</div>
-          <div className="font-display text-lg text-slate-50">{zone.name}</div>
-        </div>
-        <span className="mt-1 rounded bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-slate-400">{floor === "academy" ? "Paper trading" : "No live chairs"}</span>
-        <button onClick={onClose} className="rounded-md px-2 py-1 text-slate-500 hover:bg-ink-800 hover:text-slate-200" aria-label="Close">✕</button>
-      </header>
-      <p className="mt-3 text-sm leading-relaxed text-slate-300">{zone.purpose}</p>
-      <section className="mt-3 rounded-xl border border-ink-700 bg-ink-850 p-3">
-        <div className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Right now</div>
-        <p className="mt-1 text-sm text-slate-100">{zone.today}</p>
-        {fx !== null && <p className="mt-1 text-xs text-slate-400">FX market by schedule: {fx ? "open" : "closed"} (Sunday 5 PM to Friday 5 PM New York).</p>}
-      </section>
-      {zone.later && <p className="mt-3 text-xs leading-relaxed text-slate-400">{zone.later}</p>}
     </div>
   );
 }

@@ -1,7 +1,8 @@
-import { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { type MouseEvent, createContext, useCallback, useContext, useEffect, useState } from "react";
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api, type FirmEvent, type Overview } from "./api";
-import { useEventStream, useResource } from "./hooks";
+import { useEventStream, useHeaderHeight, useResource } from "./hooks";
+import { folderTitle } from "./space/departments";
 import Academy from "./pages/Academy";
 import Activity from "./pages/Activity";
 import CapitalPage from "./pages/Capital";
@@ -23,7 +24,7 @@ function useDocumentTitle() {
   const { pathname } = useLocation();
   useEffect(() => {
     const desk = pathname.match(/^\/firm\/(\w+)/)?.[1];
-    const floors: Record<string, string> = { forex: "Forex Division · HQ Tower", academy: "The 537 Academy" };
+    const floors: Record<string, string> = { forex: "Forex Division · The Firm", academy: "The 537 Academy · The Firm" };
     if (desk && floors[desk]) {
       document.title = `${floors[desk]} · ${BRAND.name}`;
       return;
@@ -94,23 +95,83 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
         </header>
         <main className={fullBleed ? "" : "mx-auto max-w-7xl px-4 py-6"}>
           <Routes>
-            <Route path="/" element={<HQ />} />
-            <Route path="/managers/:id" element={<ManagerPage />} />
+            {pageRoutes()}
             <Route path="/firm" element={<FirmSpace />} />
             <Route path="/firm/:office" element={<FirmSpace />} />
-            <Route path="/academy" element={<Academy />} />
-            <Route path="/academy/:id" element={<Academy />} />
-            <Route path="/cio" element={<CioOffice />} />
-            <Route path="/capital" element={<CapitalPage />} />
-            <Route path="/activity" element={<Activity />} />
-            <Route path="/system" element={<SystemPage />} />
           </Routes>
         </main>
+        {fullBleed && <FolderDrawer />}
         {!fullBleed && <footer className="mx-auto max-w-7xl px-4 pb-8 pt-2 text-[11px] tracking-wide text-slate-600">
           {BRAND.name} · {BRAND.descriptor}
         </footer>}
       </div>
     </LiveContext.Provider>
+  );
+}
+
+/** Every page except The Firm itself; also rendered inside a folder opened over the map. */
+function pageRoutes() {
+  return [
+    <Route key="hq" path="/" element={<HQ />} />,
+    <Route key="mgr" path="/managers/:id" element={<ManagerPage />} />,
+    <Route key="ac" path="/academy" element={<Academy />} />,
+    <Route key="acid" path="/academy/:id" element={<Academy />} />,
+    <Route key="cio" path="/cio" element={<CioOffice />} />,
+    <Route key="cap" path="/capital" element={<CapitalPage />} />,
+    <Route key="act" path="/activity" element={<Activity />} />,
+    <Route key="sys" path="/system" element={<SystemPage />} />,
+  ];
+}
+
+/**
+ * A department's folder: any page, opened over The Firm map from `?open=/path`. Links inside
+ * stay in the folder, so the map is always one close away.
+ */
+function FolderDrawer() {
+  const { pathname, search } = useLocation();
+  const navigate = useNavigate();
+  const top = useHeaderHeight();
+  const params = new URLSearchParams(search);
+  const path = params.get("open");
+  const valid = !!path && path.startsWith("/") && !path.startsWith("/firm");
+  const close = useCallback(() => {
+    const rest = new URLSearchParams(search);
+    rest.delete("open");
+    const q = rest.toString();
+    navigate(`${pathname}${q ? `?${q}` : ""}`);
+  }, [navigate, pathname, search]);
+  useEffect(() => {
+    if (!valid) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [valid, close]);
+  if (!valid) return null;
+  const stay = (e: MouseEvent) => {
+    const a = (e.target as Element).closest("a");
+    const href = a?.getAttribute("href");
+    if (!a || !href || !href.startsWith("/") || href.startsWith("/firm") || a.target === "_blank" || e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+    e.preventDefault();
+    const next = new URLSearchParams(search);
+    next.set("open", href);
+    navigate(`${pathname}?${next.toString()}`);
+  };
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-40 flex justify-end" style={{ top }}>
+      <button className="hidden flex-1 bg-ink-950/50 backdrop-blur-[1px] md:block" onClick={close} aria-label="Close folder and return to the map" />
+      <section role="dialog" aria-label={folderTitle(path!)} className="flex w-full max-w-[1100px] flex-col border-l border-ink-700 bg-ink-950 shadow-2xl">
+        <header className="flex items-center gap-3 border-b border-ink-800 px-4 py-3">
+          <button onClick={close} className="rounded-lg border border-ink-700 px-2.5 py-1 text-xs text-slate-300 hover:border-ink-600 hover:text-white">← Map</button>
+          <span aria-hidden="true" className="text-gold-300">▤</span>
+          <h2 className="min-w-0 truncate font-display text-lg text-slate-50">{folderTitle(path!)}</h2>
+          <Link to={path!} className="ml-auto text-xs text-slate-500 hover:text-slate-300">Open as full page ↗</Link>
+          <button onClick={close} className="rounded-md px-2 py-1 text-slate-500 hover:bg-ink-800 hover:text-slate-200" aria-label="Close folder">✕</button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto px-4 py-5" onClickCapture={stay}>
+          <Routes location={{ pathname: path!.split("?")[0], search: "", hash: "", state: null, key: path! }}>{pageRoutes()}</Routes>
+        </div>
+      </section>
+    </div>
   );
 }
 

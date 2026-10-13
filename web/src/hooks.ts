@@ -70,3 +70,16 @@ export function usePageVisible() {
   }, []);
   return visible;
 }
+
+/** Height of the app header, which wraps on narrower screens. */
+export function useHeaderHeight() {
+  const [h, setH] = useState(57);
+  useEffect(() => {
+    const el = document.querySelector("header");
+    if (!el) return;
+    const ro = new ResizeObserver(() => setH(el.getBoundingClientRect().height));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return h;
+}
