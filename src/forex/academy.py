@@ -210,6 +210,11 @@ class AcademyDB:
             (report.get("status", "DONE"), now_iso(), 1 if report.get("passed") else 0, report.get("score"), json.dumps(report, default=str), vid),
         )
 
+    def close_unfinished_validations(self, status: str) -> int:
+        """Runs cut off by a restart or crash never finish on their own; close them so nothing shows them as running."""
+        with self.lock, self.conn:
+            return self.conn.execute("UPDATE validations SET status = ?, finished_at = ?, passed = 0 WHERE finished_at IS NULL", (status, now_iso())).rowcount
+
     def latest_validation(self, agent_id: str, version: int | None = None) -> dict[str, Any] | None:
         sql = "SELECT * FROM validations WHERE agent_id = ? AND finished_at IS NOT NULL" + (" AND version = ?" if version else "") + " ORDER BY id DESC LIMIT 1"
         row = self.one(sql, (agent_id, version) if version else (agent_id,))

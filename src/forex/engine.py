@@ -94,6 +94,9 @@ class Engine:
 
     # -- setup ---------------------------------------------------------------------------------
     def start(self) -> None:
+        orphans = self.db.close_unfinished_validations("INTERRUPTED (engine restarted)")
+        if orphans:
+            self.db.event(None, "VALIDATION_INTERRUPTED", f"Closed {orphans} validation run(s) left unfinished by a restart.")
         created = self.db.seed(FOUNDING_CLASS, default_params)
         if created:
             log.info("enrolled %s", created)
@@ -187,6 +190,9 @@ class Engine:
             store = MarketStore(self.store.path)  # the worker's own connection
             try:
                 report = validate(store, rt.cfg, self.specs, trials=trials, progress=lambda s: self.db.progress_validation(vid, f"RUNNING: {s}"))
+            except Exception as exc:
+                self.db.finish_validation(vid, {"status": "ERROR", "passed": False, "error": f"{type(exc).__name__}: {exc}", "checks": []})
+                raise
             finally:
                 store.close()
             self.db.finish_validation(vid, report)

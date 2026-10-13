@@ -82,7 +82,7 @@ def _drawdown(series: list[tuple[int, float]]) -> float:
 def _validation(conn: sqlite3.Connection, agent_id: str, version: int, *, full: bool = False) -> dict[str, Any] | None:
     running = conn.execute("SELECT id, status, started_at FROM validations WHERE agent_id = ? AND finished_at IS NULL ORDER BY id DESC LIMIT 1", (agent_id,)).fetchone()
     row = conn.execute(
-        "SELECT * FROM validations WHERE agent_id = ? AND version = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1", (agent_id, version)
+        "SELECT * FROM validations WHERE agent_id = ? AND version = ? AND finished_at IS NOT NULL AND report_json IS NOT NULL ORDER BY id DESC LIMIT 1", (agent_id, version)
     ).fetchone()
     out: dict[str, Any] = {"running": dict(running) if running else None}
     if row:

@@ -156,6 +156,29 @@ def test_history_reload_revalidates_everyone(world, monkeypatch):
     assert len(eng.db.q("SELECT * FROM validations")) == n + 4 and eng.db.get("data")["ready"] is True
 
 
+def test_restart_closes_interrupted_validations(world, monkeypatch):
+    eng, clock, client, _ = world
+    monkeypatch.setattr("forex.engine.validate", lambda *a, **k: {"status": "FAILED", "passed": False, "score": 0, "checks": []})
+    eng.db.seed(__import__("forex.agents", fromlist=["x"]).FOUNDING_CLASS, __import__("forex.agents", fromlist=["x"]).default_params)
+    eng.db.start_validation("atlas", 1, "initial")  # cut off by a restart: never finished
+    eng.start()
+    rows = eng.db.q("SELECT status, finished_at FROM validations WHERE agent_id = 'atlas' ORDER BY id")
+    assert rows[0]["finished_at"] and rows[0]["status"].startswith("INTERRUPTED")
+
+
+def test_crashed_validation_is_recorded_not_left_running(world, monkeypatch):
+    eng, clock, client, _ = world
+
+    def boom(*a, **k):
+        raise KeyError("no USD conversion for CHF")
+
+    monkeypatch.setattr("forex.engine.validate", boom)
+    eng.start()
+    with pytest.raises(KeyError):
+        run_jobs(eng)
+    assert not eng.db.q("SELECT * FROM validations WHERE finished_at IS NULL AND agent_id = 'atlas'")
+
+
 def test_engine_never_writes_to_the_broker():
     import inspect
 
