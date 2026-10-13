@@ -136,9 +136,9 @@ export default function FirmSpace() {
           {floor !== "hq" && (
             <svg viewBox={`0 0 ${VB.w} ${VB.h}`} className="fs-building fs-scene absolute inset-0 h-full w-full" role="group" aria-label={`${floorById(floor).building}, ${floorById(floor).name}`}>
               {floor === "forex" ? (
-                <ForexFloor floor={floorById("forex")} now={clock} active={zone?.id ?? null} onPick={pickZone} labels={labels} />
+                <ForexFloor floor={floorById("forex")} now={clock} active={zone?.id ?? null} onPick={pickZone} labels={labels} academy={space.academy} />
               ) : (
-                <AcademyAnnex floor={floorById("academy")} active={zone?.id ?? null} onPick={pickZone} labels={labels} />
+                <AcademyAnnex floor={floorById("academy")} active={zone?.id ?? null} onPick={pickZone} labels={labels} academy={space.academy} onAgent={(id) => navigate(`/academy/${id}`)} />
               )}
             </svg>
           )}
@@ -170,7 +170,9 @@ export default function FirmSpace() {
           <p className="pointer-events-none absolute bottom-2 left-3 hidden text-[10px] text-slate-400/70 sm:block">
             {floor === "hq"
               ? "Indicators come from live records. Breathing, plants, steam, and lighting are decorative."
-              : "Nothing on this floor is live yet. Clocks follow the market schedule; furniture and lighting are decorative."}
+              : floor === "academy"
+                ? "Agents, their states, and the Lab's activity come from the Forex engine's records. Furniture and lighting are decorative."
+                : "The chairs are open: no agent trades live capital. Rates come from OANDA; clocks follow the market schedule."}
           </p>
         </div>
         {office && <Office id={office} state={states[office]} mood={moods[office]} space={space} top={header} onClose={() => navigate("/firm")} />}
@@ -557,7 +559,7 @@ const DIRECTORY: Record<FloorId, { level: string; spaces: string }[]> = {
     { level: "Market room", spaces: "rates board · session clocks · desk heads" },
     { level: "Live chairs", spaces: "Day Chair 1 & 2 · Swing Chair 1 & 2 (all open)" },
   ],
-  academy: [{ level: "Academy Annex", spaces: "Strategy Lab · Trading Hall · Research Lead · Alumni" }],
+  academy: [{ level: "Academy Annex", spaces: "Atlas · Kestrel · Mira · Orion (paper) · Strategy Lab · Alumni" }],
 };
 
 const BUILDINGS = [...new Set(FLOORS.map((f) => f.building))];
@@ -642,7 +644,7 @@ function ZoneCard({ zone, floor, onClose }: { zone: Zone; floor: FloorId; onClos
           <div className="text-[11px] uppercase tracking-wider text-slate-500">{floorById(floor).building} · {floorById(floor).name}</div>
           <div className="font-display text-lg text-slate-50">{zone.name}</div>
         </div>
-        <span className="mt-1 rounded bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-slate-400">Not open yet</span>
+        <span className="mt-1 rounded bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-slate-400">{floor === "academy" ? "Paper trading" : "No live chairs"}</span>
         <button onClick={onClose} className="rounded-md px-2 py-1 text-slate-500 hover:bg-ink-800 hover:text-slate-200" aria-label="Close">✕</button>
       </header>
       <p className="mt-3 text-sm leading-relaxed text-slate-300">{zone.purpose}</p>

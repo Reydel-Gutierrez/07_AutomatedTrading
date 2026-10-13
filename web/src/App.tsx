@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import { api, type FirmEvent, type Overview } from "./api";
 import { useEventStream, useResource } from "./hooks";
+import Academy from "./pages/Academy";
 import Activity from "./pages/Activity";
 import CapitalPage from "./pages/Capital";
 import { BRAND, Wordmark } from "./brand";
@@ -16,7 +17,7 @@ type Live = { events: FirmEvent[]; bump: number; connected: boolean; overview: O
 const LiveContext = createContext<Live>({ events: [], bump: 0, connected: false, overview: null, reloadOverview: () => {} });
 export const useLive = () => useContext(LiveContext);
 
-const NAV: [string, string][] = [["/", "Headquarters"], ["/firm", "The Firm"], ["/cio", "CIO Office"], ["/capital", "Capital"], ["/activity", "Activity"], ["/system", "System"]];
+const NAV: [string, string][] = [["/", "Headquarters"], ["/firm", "The Firm"], ["/academy", "Academy"], ["/cio", "CIO Office"], ["/capital", "Capital"], ["/activity", "Activity"], ["/system", "System"]];
 
 function useDocumentTitle() {
   const { pathname } = useLocation();
@@ -29,6 +30,10 @@ function useDocumentTitle() {
     }
     if (desk) {
       document.title = `${desk === "cio" ? "Graham" : desk.replace(/^\w/, (c) => c.toUpperCase())}'s desk · ${BRAND.name}`;
+      return;
+    }
+    if (pathname.startsWith("/academy/")) {
+      document.title = `${pathname.split("/")[2]?.replace(/^\w/, (c) => c.toUpperCase())} · Academy · ${BRAND.name}`;
       return;
     }
     const page = pathname.startsWith("/managers/") ? `${pathname.split("/")[2]?.replace(/^\w/, (c) => c.toUpperCase())}'s workspace` : NAV.find(([to]) => to === pathname)?.[1];
@@ -93,6 +98,8 @@ function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
             <Route path="/managers/:id" element={<ManagerPage />} />
             <Route path="/firm" element={<FirmSpace />} />
             <Route path="/firm/:office" element={<FirmSpace />} />
+            <Route path="/academy" element={<Academy />} />
+            <Route path="/academy/:id" element={<Academy />} />
             <Route path="/cio" element={<CioOffice />} />
             <Route path="/capital" element={<CapitalPage />} />
             <Route path="/activity" element={<Activity />} />

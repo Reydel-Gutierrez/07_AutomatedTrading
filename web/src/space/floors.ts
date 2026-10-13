@@ -80,15 +80,14 @@ export const FLOORS: Floor[] = [
     name: "Academy Annex",
     short: "Academy",
     division: "Academy Annex · strategy development",
-    open: false,
+    open: true,
     blurb: "Where agents are created, tested, paper traded with $10,000 of virtual capital each, improved, and promoted on evidence.",
     zones: [
       {
         id: "lab",
         name: "Strategy Lab",
         purpose: "Backtests and validation: walk-forward tests, a locked hold-out year, cost modeling, Monte Carlo, and a random-entry baseline.",
-        today: "No validation runs. The Lab opens with the Academy core.",
-        later: "Each running validation lights a rig with its progress.",
+        today: "The racks light up and the whiteboard lists the work while a validation or weekly review is running. Full reports are on the Academy page.",
         rect: [0.5, 0.5, 12.5, 8.5],
       },
       {
@@ -109,8 +108,8 @@ export const FLOORS: Floor[] = [
         id: "hall",
         name: "Trading Hall",
         purpose: "Paper trading: every Academy agent trades its own isolated $10,000 virtual account at live prices.",
-        today: "No agents enrolled.",
-        later: "Desks fill as agents enroll, grouped by department and by day or swing style.",
+        today: "The founding class (Atlas, Kestrel, Mira, Orion) trades here on live OANDA prices. Click an agent for its full record.",
+        later: "Open seats fill as new agents enroll.",
         rect: [0.5, 10, 35.5, 21.5],
       },
     ],

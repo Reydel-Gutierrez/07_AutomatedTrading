@@ -6,6 +6,8 @@
 import { memo, type ReactNode } from "react";
 import { Box, Foreground, G_Y0, G_Y1, Glow, OnWallX, OnWallY, P, Plant, Poly, SceneDefs, Sign, Sky, StreetLamp, Tree, UP_Z, floorQ, wallXQ, wallYQ, K } from "./Building";
 import { type Floor, type Zone, SESSIONS, fxMarketOpen, localTime, sessionOpen } from "./floors";
+import { Body, Chair, Hands, type Look, type Pose } from "./Character";
+import { type AcademySpace, type AcademySpaceAgent } from "./state";
 
 const W = 36; // floor width (x)
 const D = 22; // floor depth (y)
@@ -115,14 +117,14 @@ function WallClock({ x, z, city, now, open }: { x: number; z: number; city: stri
       {Array.from({ length: 12 }, (_, i) => (
         <line key={i} x1={K} y1={K * 0.28} x2={K} y2={K * 0.4} stroke="#cbd5e1" strokeWidth="1.2" transform={`rotate(${i * 30} ${K} ${K})`} />
       ))}
-      <Hands now={now} city={city} />
+      <ClockHands now={now} city={city} />
       <text x={K} y={K * 2.35} textAnchor="middle" fontSize="9" fontWeight="700" letterSpacing="1.4" fill="#e5e7eb" fontFamily="Inter, sans-serif">{city.toUpperCase()}</text>
       <text x={K} y={K * 2.95} textAnchor="middle" fontSize="8" letterSpacing="1.2" fill={open ? "#34d399" : "#94a3b8"} fontFamily="Inter, sans-serif">{open ? "SESSION OPEN" : "CLOSED"}</text>
     </OnWallY>
   );
 }
 
-function Hands({ now, city }: { now: number; city: string }) {
+function ClockHands({ now, city }: { now: number; city: string }) {
   const tz = SESSIONS.find((s) => s.city === city)!.tz;
   const { hour, minute } = localTime(now, tz);
   return (
@@ -223,13 +225,6 @@ const ForexTower = memo(function ForexTower() {
       <OnWallY x={14.2} y={0} z={UP_Z + 6.4}>
         <rect width={12.6 * K} height={4.1 * K} rx={3} fill="#07090d" stroke="#2b3242" strokeWidth="4" />
         <text x={14} y={22} fontSize="11" fontWeight="700" letterSpacing="2.4" fill="#f59e0b" opacity=".85" fontFamily="Inter, sans-serif">LIVE RATES · OANDA</text>
-        <text x={14} y={46} fontSize="10" fill="#94a3b8" fontFamily="Inter, sans-serif">Not wired into the Firm yet</text>
-        {["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD"].map((s, i) => (
-          <g key={s} fontFamily="Inter, sans-serif">
-            <text x={14 + (i % 2) * 120} y={64 + Math.floor(i / 2) * 14} fontSize="9" fill="#475569" letterSpacing="1">{s}</text>
-            <text x={80 + (i % 2) * 120} y={64 + Math.floor(i / 2) * 14} fontSize="9" fill="#334155">— —</text>
-          </g>
-        ))}
       </OnWallY>
       <OnWallY x={28.4} y={0} z={UP_Z + 6}>
         <rect width={6.6 * K} height={3.2 * K} rx={2} fill="#efe9dc" opacity=".9" />
@@ -271,8 +266,12 @@ const ForexTower = memo(function ForexTower() {
   );
 });
 
-export function ForexFloor({ floor, now, active, onPick, labels }: { floor: Floor; now: number; active: string | null; onPick: (z: Zone) => void; labels: boolean }) {
+const BOARD = ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD", "EUR_GBP"];
+
+export function ForexFloor({ floor, now, active, onPick, labels, academy }: { floor: Floor; now: number; active: string | null; onPick: (z: Zone) => void; labels: boolean; academy?: AcademySpace }) {
   const fxOpen = fxMarketOpen(now);
+  const prices = (academy?.prices ?? []).filter((p) => BOARD.includes(p.instrument));
+  const fresh = prices.length > 0 && now / 1000 - Math.max(...prices.map((p) => p.time)) < 900;
   return (
     <Scene label="HQ Tower, Forex Division floor">
       <ForexTower />
@@ -284,6 +283,20 @@ export function ForexFloor({ floor, now, active, onPick, labels }: { floor: Floo
         <text x={12.6 * K - 14} y={46} textAnchor="end" fontSize="9.5" fontWeight="700" letterSpacing="1.4" fill={fxOpen ? "#34d399" : "#94a3b8"} fontFamily="Inter, sans-serif">
           {fxOpen ? "FX MARKET OPEN" : "FX MARKET CLOSED"}
         </text>
+        {prices.length ? (
+          prices.map((p, i) => {
+            const d = p.instrument.endsWith("JPY") ? 3 : 5;
+            return (
+              <g key={p.instrument} fontFamily="Inter, sans-serif">
+                <text x={14 + (i % 2) * 124} y={44 + Math.floor(i / 2) * 13} fontSize="8.5" fill={fresh ? "#cbd5e1" : "#64748b"} letterSpacing=".8">{p.instrument.replace("_", "/")}</text>
+                <text x={70 + (i % 2) * 124} y={44 + Math.floor(i / 2) * 13} fontSize="8.5" fill={fresh ? "#34d399" : "#64748b"}>{((p.bid + p.ask) / 2).toFixed(d)}</text>
+              </g>
+            );
+          })
+        ) : (
+          <text x={14} y={46} fontSize="10" fill="#94a3b8" fontFamily="Inter, sans-serif">{academy?.available ? "Waiting for prices" : "Forex engine not running"}</text>
+        )}
+        {prices.length > 0 && !fresh && <text x={14} y={80} fontSize="7.5" fill="#94a3b8" fontFamily="Inter, sans-serif">last prices before the market closed</text>}
       </OnWallY>
       <Foreground />
       <Zones floor={floor} active={active} onPick={onPick} />
@@ -302,8 +315,12 @@ export function ForexFloor({ floor, now, active, onPick, labels }: { floor: Floo
 
 // -- The 537 Academy ---------------------------------------------------------------------
 
+// Trading Hall seats: the founding class takes the first four; the rest wait for new agents.
+const SEATS = [12.4, 17.2].flatMap((y) => [1.8, 10.4, 19, 27.6].map((x) => ({ x, y })));
+const SEAT_W = 4.6;
+const SEAT_D = 1.5;
+
 const AcademyRoom = memo(function AcademyRoom() {
-  const hall = [12.2, 16.8].flatMap((y) => [1.6, 7.3, 13, 18.7, 24.4, 30.1].map((x) => ({ x, y })));
   return (
     <g>
       <Grounds />
@@ -322,18 +339,10 @@ const AcademyRoom = memo(function AcademyRoom() {
       <OnWallY x={4.4} y={0} z={6.3}>
         <rect width={7.6 * K} height={3.4 * K} rx={2} fill="#eef0ea" opacity=".92" />
         <text x={10} y={18} fontSize="9" fontWeight="700" letterSpacing="1.4" fill="#334155" fontFamily="Inter, sans-serif">VALIDATION QUEUE</text>
-        <text x={10} y={36} fontSize="9" fill="#64748b" fontFamily="Inter, sans-serif">Empty: no runs yet</text>
-        <path d="M10 52 h120" stroke="#cbd5e1" strokeWidth="1.5" />
+        <path d="M10 24 h120" stroke="#cbd5e1" strokeWidth="1.5" />
       </OnWallY>
       {[0.8, 2.5].map((x) => (
-        <g key={x}>
-          <Box x={x} y={0.5} w={1.4} d={1.3} z={0} h={4.2} top="#1f2430" left="#151922" right="#10131a" />
-          <OnWallY x={x} y={1.8} z={4}>
-            {Array.from({ length: 7 }, (_, i) => (
-              <rect key={i} x={4} y={6 + i * 10} width={20} height={4} rx={1} fill="#1e293b" />
-            ))}
-          </OnWallY>
-        </g>
+        <Box key={x} x={x} y={0.5} w={1.4} d={1.3} z={0} h={4.2} top="#1f2430" left="#151922" right="#10131a" />
       ))}
       <Box x={1.2} y={5} w={4.6} d={1.4} z={0} h={1.4} top="#5a6474" left="#3e4552" right="#333945" />
       <Box x={7} y={5} w={4.6} d={1.4} z={0} h={1.4} top="#5a6474" left="#3e4552" right="#333945" />
@@ -368,29 +377,107 @@ const AcademyRoom = memo(function AcademyRoom() {
       <Plant x={23} y={8.4} z={0} s={0.9} />
       {/* Trading Hall */}
       <Glow x={18} y={15} z={0} r={9} />
-      {hall.map((p) => (
-        <EmptyDesk key={`${p.x}-${p.y}`} x={p.x} y={p.y} w={3.4} d={1.4} tone="#5a4232" />
-      ))}
       <Plant x={35.2} y={21} z={0} s={1.1} />
     </g>
   );
 });
 
-export function AcademyAnnex({ floor, active, onPick, labels }: { floor: Floor; active: string | null; onPick: (z: Zone) => void; labels: boolean }) {
+/** Server racks in the Strategy Lab: lit and blinking only while a validation or review is running. */
+function Rigs({ busy }: { busy: boolean }) {
+  return (
+    <g>
+      {[0.8, 2.5].map((x) => (
+        <OnWallY key={x} x={x} y={1.8} z={4}>
+          {Array.from({ length: 7 }, (_, i) => (
+            <g key={i}>
+              <rect x={4} y={6 + i * 10} width={20} height={4} rx={1} fill="#1e293b" />
+              <circle cx={7} cy={8 + i * 10} r={1.4} fill={busy ? (i % 3 ? "#34d399" : "#38bdf8") : "#334155"} className={busy ? "fs-pulse" : undefined} style={busy ? { animationDelay: `${i * 0.17}s` } : undefined} />
+            </g>
+          ))}
+        </OnWallY>
+      ))}
+    </g>
+  );
+}
+
+const POSE: Record<string, Pose> = { trading: "typing", analyzing: "typing", watching: "reading", error: "alert" };
+
+/** One Academy agent at its desk. Its posture follows the engine's recorded activity. */
+function TraderDesk({ x, y, a, onPick }: { x: number; y: number; a: AcademySpaceAgent; onPick: (id: string) => void }) {
+  const look = { chair: "#1f2633", skin: "#d9a67c", hair: "#2b2523", hairStyle: "neat", top: "#334155", inner: "#e2e8f0", accent: a.persona.color, ...(a.persona.look ?? {}) } as Look;
+  const paused = !!a.paused || a.status === "PAUSED";
+  const pose: Pose = paused ? "idle" : POSE[a.activity ?? ""] ?? "idle";
+  const feeling = a.return_pct <= -0.05 ? "stressed" : a.return_pct >= 0.02 ? "pleased" : "calm";
+  const s = 0.62;
+  const [ax, ay] = P(x + SEAT_W / 2, y, 1.45);
+  const busy = pose === "typing";
+  return (
+    <g role="button" tabIndex={0} aria-label={`${a.name}: open Academy record`} className="fs-station cursor-pointer outline-none" onClick={() => onPick(a.id)} onKeyDown={(e) => (e.key === "Enter" || e.key === " ") && (e.preventDefault(), onPick(a.id))}>
+      <Poly p={floorQ(x - 1, y - 2.4, x + SEAT_W + 1, y + SEAT_D + 1.2, 0.03)} fill="transparent" />
+      {busy && <Glow x={x + SEAT_W / 2} y={y + SEAT_D / 2} z={0} r={2.4} color="url(#fs-warm)" className="fs-pulse" />}
+      <g className={paused ? "fs-off" : undefined}>
+        <g transform={`translate(${ax} ${ay}) scale(${s})`}>
+          <Chair look={look} />
+        </g>
+        <g transform={`translate(${ax} ${ay}) scale(${s})`}>
+          <Body look={look} pose={pose} working={busy} feeling={feeling} gaze={busy ? "monitor" : "wander"} chair={false} />
+        </g>
+        <Box x={x} y={y} w={SEAT_W} d={SEAT_D} z={0} h={1.45} top="#4a3b30" left="#33281f" right="#2a2019" />
+        <g transform={`translate(${ax} ${ay}) scale(${s})`}>
+          <Hands look={look} pose={pose} />
+        </g>
+        {[x + SEAT_W - 1.75, x + 0.25].map((mx, i) => (
+          <g key={i}>
+            <Poly p={wallYQ(y + 0.3, mx, mx + 1.5, 1.8, 2.85)} fill="#0b0e14" stroke="#2b3242" sw={1.2} />
+            <Poly p={wallYQ(y + 0.31, mx + 0.1, mx + 1.4, 1.9, 2.75)} fill={busy ? a.persona.color : "#13243c"} op={busy ? 0.45 : 0.85} className={busy ? "fs-pulse" : undefined} />
+          </g>
+        ))}
+        <OnWallY x={x + SEAT_W / 2 - 1.2} y={y + SEAT_D} z={1.05}>
+          <rect width={2.4 * K} height={11} rx={2} fill="#14110f" stroke={a.persona.color} strokeOpacity=".7" />
+          <text x={1.2 * K} y={8.2} textAnchor="middle" fontSize="6.5" fontWeight="700" letterSpacing="1.2" fill={a.persona.color} fontFamily="Inter, sans-serif">{a.name.toUpperCase()}</text>
+        </OnWallY>
+      </g>
+    </g>
+  );
+}
+
+export function AcademyAnnex({ floor, active, onPick, labels, academy, onAgent }: { floor: Floor; active: string | null; onPick: (z: Zone) => void; labels: boolean; academy?: AcademySpace; onAgent: (id: string) => void }) {
+  const agents = academy?.agents ?? [];
+  const running = academy?.validations_running ?? [];
+  const job = academy?.engine?.job?.name ?? null;
+  const busyLab = running.length > 0 || !!job?.startsWith("review") || !!job?.startsWith("validate");
+  const queueLines = [
+    ...running.map((r) => `${agents.find((a) => a.id === r.agent_id)?.name ?? r.agent_id}: ${r.status.replace("RUNNING: ", "").slice(0, 26)}`),
+    ...(job === "backfill" ? ["Loading OANDA market history"] : []),
+  ];
+  const seats = SEATS.map((p, i) => ({ ...p, a: agents[i] as AcademySpaceAgent | undefined }));
+  const pnl = (a: AcademySpaceAgent) => `${a.return_pct >= 0 ? "+" : ""}${(a.return_pct * 100).toFixed(2)}%`;
+  const doing = (a: AcademySpaceAgent) => (a.paused || a.status === "PAUSED" ? "paused" : a.positions ? `${a.positions} open position${a.positions > 1 ? "s" : ""}` : a.activity === "watching" ? "watching the market" : academy?.engine?.data_ready ? "waiting for a setup" : "waiting for market history");
   return (
     <Scene label="The 537 Academy">
       <AcademyRoom />
+      <Rigs busy={busyLab} />
+      <OnWallY x={4.4} y={0} z={6.3}>
+        {(queueLines.length ? queueLines : ["Queue empty"]).slice(0, 3).map((line, i) => (
+          <text key={i} x={10} y={38 + i * 12} fontSize="8" fill={queueLines.length ? "#0f766e" : "#64748b"} fontFamily="Inter, sans-serif">{line}</text>
+        ))}
+      </OnWallY>
+      {[...seats].sort((p, q) => p.x + p.y - (q.x + q.y)).map((p) =>
+        p.a ? <TraderDesk key={p.a.id} x={p.x} y={p.y} a={p.a} onPick={onAgent} /> : <EmptyDesk key={`${p.x}-${p.y}`} x={p.x} y={p.y} w={SEAT_W} d={SEAT_D} tone="#4a3b30" plate="OPEN SEAT" />,
+      )}
       <FrontGlass name="The 537 Academy" />
       <Zones floor={floor} active={active} onPick={onPick} />
       {labels && (
         <g>
-          <Sign at={[150, 300]} to={P(0, 8, 4)} title="The 537 Academy" sub="Academy Annex · not open yet" />
-          <Sign at={P(6.5, 0, H + 2.4)} title="Strategy Lab" sub="Backtests & validation · 0 runs" />
+          <Sign at={[150, 300]} to={P(0, 8, 4)} title="The 537 Academy" sub={academy?.available ? `Academy Annex · ${agents.length} agents in training` : "Academy Annex · engine not running"} />
+          <Sign at={P(6.5, 0, H + 2.4)} title="Strategy Lab" sub={running.length ? `Validating ${running.length} agent${running.length > 1 ? "s" : ""}` : "Backtests & validation · idle"} />
           <Sign at={P(17.5, 0, H + 2.4)} title="Research Lead's office" sub="AI research assistant · unoccupied" tone="muted" />
           <Sign at={P(29, 0, H + 2.4)} title="Alumni wall" sub="Graduated & retired agents · none yet" tone="muted" />
-          <Sign at={P(20, 14.4, 3.4)} title="Trading Hall" sub="Paper trading · $10,000 virtual each · 0 agents enrolled" />
         </g>
       )}
+      {seats.filter((p) => p.a).map((p) => (
+        <Sign key={`s-${p.a!.id}`} at={P(p.x + SEAT_W / 2, p.y, 5.2)} title={`${p.a!.name} · ${p.a!.style}`} sub={`${pnl(p.a!)} · ${doing(p.a!)}`} tone={p.a!.paused ? "muted" : "gold"} />
+      ))}
     </Scene>
   );
 }

@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from firm.api.academy import space_block as academy_space_block
 from firm.broker.errors import BrokerUnavailable
 from firm.clock import CALENDAR, EASTERN, et, iso, parse_hhmm
 from firm.core import Firm
@@ -285,6 +286,7 @@ def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None, re
             "recent": [e.as_dict() for e in firm.events.recent(types=list(CIO_EVENTS), limit=6)],
         },
         "agents": agents,
+        "academy": academy_space_block(),
     }
 
 

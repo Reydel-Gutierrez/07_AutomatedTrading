@@ -35,7 +35,32 @@ export type SpaceAgent = {
   mood?: { book: string; marks: number; twr: number | null; excess: number | null; drawdown: number; day_change: number | null };
 };
 
+export type AcademySpaceAgent = {
+  id: string;
+  name: string;
+  style: "day" | "swing";
+  persona: { tagline: string; color: string; look?: Record<string, unknown> };
+  status: string;
+  paused: string | null;
+  equity: number;
+  return_pct: number;
+  positions: number;
+  activity: string | null;
+  last_event: { ts: string; type: string; summary: string } | null;
+  validation: string | null;
+  version: number;
+};
+
+export type AcademySpace = {
+  available: boolean;
+  engine?: { online: boolean; heartbeat?: number; market_open?: boolean; data_ready?: boolean; job?: { name: string; since: number } | null; last_error?: string | null };
+  agents?: AcademySpaceAgent[];
+  validations_running?: { agent_id: string; status: string }[];
+  prices?: { instrument: string; bid: number; ask: number; time: number; tradeable: number }[];
+};
+
 export type Space = {
+  academy?: AcademySpace;
   as_of: string;
   market: { regular_hours_open?: boolean; trading_day?: boolean; next_open?: string | null };
   benchmarks: { symbol: string; label: string; closes: { date: string; close: number }[] }[];

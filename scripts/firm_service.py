@@ -62,6 +62,7 @@ def main(argv: list[str] | None = None) -> int:
     stop = threading.Event()
     worker = threading.Thread(target=service.run_scheduler, args=(stop,), name="firm-scheduler", daemon=True)
     worker.start()
+    forex = start_forex_engine(service)
     server = uvicorn.Server(uvicorn.Config(create_app(service), host=host, port=int(cfg["port"]), log_level="warning", proxy_headers=True))
 
     def shutdown(*_):
@@ -71,8 +72,23 @@ def main(argv: list[str] | None = None) -> int:
     signal.signal(signal.SIGTERM, shutdown)
     server.run()
     stop.set()
+    if forex:
+        forex.stop()
     worker.join(timeout=15)
     return 0
+
+
+def start_forex_engine(service):
+    """The Forex engine runs as its own low-priority process (FIRM_FOREX_ENGINE=off disables it)."""
+    if str(os.environ.get("FIRM_FOREX_ENGINE", "on")).lower() in ("off", "0", "false", "no"):
+        return None
+    from firm.sidecar import Sidecar
+
+    root = Path(__file__).resolve().parents[1]
+    sidecar = Sidecar("forex-engine", [sys.executable, str(root / "scripts" / "forex_engine.py")], cwd=str(root), environ=os.environ)
+    sidecar.start()
+    service.sidecars["forex-engine"] = sidecar
+    return sidecar
 
 
 if __name__ == "__main__":

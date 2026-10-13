@@ -113,6 +113,7 @@ class Service:
         self.cio = build_cio(self.firm, self.health, self.environ)
         self.research_desk = build_research(self.firm, self.environ, on_progress=self._research_progress)
         self.researching: dict[str, Any] | None = None  # in-memory presence for the Firm Space
+        self.sidecars: dict[str, Any] = {}  # separate processes supervised next to the firm (Forex engine)
         self._last_failure_event: dict[str, datetime] = {}
         self._install_jobs()
 
@@ -301,6 +302,7 @@ class Service:
             "open_live_orders": len(self.firm.desk.open_live_orders()),
             "managers": {m.id: m.mode for m in self.firm.registry.all()},
             "deployed": deployed_commit(),
+            "sidecars": {name: sc.status() for name, sc in self.sidecars.items()},
         }
 
     def jobs(self) -> dict[str, Any]:

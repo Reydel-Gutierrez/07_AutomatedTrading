@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
+import sqlite3
 from decimal import Decimal, InvalidOperation
 from typing import Any, Protocol
 
@@ -12,7 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
-from firm.api import views
+from firm.api import academy, views
 from firm.capital_pool import POOL, CapitalPool
 from firm.api.auth import CSRF_COOKIE, SESSION_COOKIE, SESSION_TTL, Sessions
 from firm.core import Firm
@@ -95,6 +96,10 @@ class TitleBody(BaseModel):
 class DecisionBody(BaseModel):
     confirm: bool = False
     note: str = ""
+
+
+class AcademyCommandBody(BaseModel):
+    note: str = Field(default="", max_length=200)
 
 
 class MemoryBody(BaseModel):
@@ -183,6 +188,34 @@ def create_app(host: Host) -> FastAPI:
     @app.get("/api/space")
     def space(_: str = Depends(user)) -> dict[str, Any]:
         return views.space(firm, host.health(), host.jobs(), getattr(host, "cio", None), getattr(host, "researching", None))
+
+    @app.get("/api/academy")
+    def academy_overview(_: str = Depends(user)) -> dict[str, Any]:
+        try:
+            return academy.overview()
+        except sqlite3.Error as exc:
+            return {"available": False, "reason": f"Academy data unavailable: {exc}", "agents": [], "prices": [], "events": []}
+
+    @app.get("/api/academy/agents/{agent_id}")
+    def academy_agent(agent_id: str, _: str = Depends(user)) -> dict[str, Any]:
+        try:
+            data = academy.agent(agent_id)
+        except sqlite3.Error as exc:
+            raise HTTPException(503, f"Academy data unavailable: {exc}") from None
+        if data is None:
+            raise HTTPException(404, "no such Academy agent")
+        return data
+
+    @app.post("/api/academy/agents/{agent_id}/{action}")
+    def academy_command(agent_id: str, action: str, body: AcademyCommandBody, who: str = Depends(user)) -> dict[str, Any]:
+        try:
+            academy.send_command(agent_id, action, by=who, note=body.note)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from None
+        firm.events.emit("ACADEMY_COMMAND", f"Academy: {action} {agent_id} by {who}" + (f" ({body.note})" if body.note else ""), actor=who)
+        return {"ok": True, "queued": True}
 
     @app.get("/api/managers/{manager_id}/research")
     def research_notes(manager_id: str, _: str = Depends(user)) -> dict[str, Any]:
