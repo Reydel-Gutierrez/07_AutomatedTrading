@@ -43,6 +43,9 @@ log = logging.getLogger("forex.engine")
 # history kept for validation and live decisions (seconds)
 HISTORY = {"M15": int(2.75 * 365 * 86400), "H1": int(3 * 365 * 86400), "H4": int(8.6 * 365 * 86400), "D": int(10 * 365 * 86400)}
 EQUITY_EVERY = 15 * 60
+# Bump to force a full history reload and re-validation of every agent on the next start
+# (2: the first deploy's backfill skipped older history; its validations used too little data).
+DATA_EPOCH = 2
 REVALIDATE_DAYS = 28
 
 
@@ -100,10 +103,13 @@ class Engine:
             last = self.store.last_time(*key)
             if last is not None:
                 self.last_bar[key] = last
+        stale = self.db.get("data_epoch") != DATA_EPOCH
+        if stale:
+            self.db.put("data", {"ready": False, "progress": "reloading market history"})
         self.enqueue("backfill", self.backfill)
         for rt in self.agents.values():
-            if self.db.latest_validation(rt.agent_id, rt.version) is None:
-                self.enqueue(f"validate:{rt.agent_id}", self._validate_job(rt.agent_id, "initial"))
+            if stale or self.db.latest_validation(rt.agent_id, rt.version) is None:
+                self.enqueue(f"validate:{rt.agent_id}", self._validate_job(rt.agent_id, "initial" if not stale else "history reloaded"))
         self.db.event(None, "ENGINE_STARTED", "Forex engine started (paper trading on OANDA data; no broker orders).")
 
     def load_specs(self) -> None:
@@ -169,6 +175,7 @@ class Engine:
             stored[f"{inst}:{gran}"] = n
         store.close()
         self.db.put("data", {"ready": True, "progress": "complete", "at": now, "rows": sum(stored.values())})
+        self.db.put("data_epoch", DATA_EPOCH)
         self.db.event(None, "DATA_READY", f"Market history loaded from OANDA ({sum(stored.values()):,} new candles).")
         return stored
 

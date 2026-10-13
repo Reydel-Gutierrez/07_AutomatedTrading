@@ -180,11 +180,15 @@ def run(cfg: AgentConfig, data: Mapping[tuple[str, str], Bars], specs: Mapping[s
             ex.roll(book, T, quotes, conv)
         except KeyError:
             continue
-        ctx = Context(now=T, params=cfg.params, data={k: data[k].view(data[k].end_at(T)) for k in feeds if k in data}, positions=book.views(), equity=book.equity(quotes, conv), specs=specs)
-        for e in ex.apply(book, strat.on_bar(ctx), quotes, T, conv):
-            if e["type"] == "ENTRY_REFUSED":
-                code = e["payload"]["reason"].split(":")[0]
-                refused[code] = refused.get(code, 0) + 1
+        try:
+            ctx = Context(now=T, params=cfg.params, data={k: data[k].view(data[k].end_at(T)) for k in feeds if k in data}, positions=book.views(), equity=book.equity(quotes, conv), specs=specs)
+            for e in ex.apply(book, strat.on_bar(ctx), quotes, T, conv):
+                if e["type"] == "ENTRY_REFUSED":
+                    code = e["payload"]["reason"].split(":")[0]
+                    refused[code] = refused.get(code, 0) + 1
+        except KeyError:
+            refused["NO_CONVERSION_PRICE"] = refused.get("NO_CONVERSION_PRICE", 0) + 1
+            continue  # a USD conversion price is missing at this moment; skip it
         day = trading_day(T)
         eq = book.equity(quotes, conv)
         if equity and last_day == day:

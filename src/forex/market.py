@@ -181,9 +181,18 @@ class MarketStore:
 
     # -- fetching from OANDA --------------------------------------------------------
     def backfill(self, client: OandaClient, instrument: str, gran: str, *, since: int, until: int | None = None, progress: Callable[[str], None] | None = None) -> int:
-        """Fill [since, until) forward in pages of up to 5,000 completed candles."""
-        cursor = max(since, (self.last_time(instrument, gran) or 0) + 1)
+        """Make the store complete over [since, until): fill any gap before the oldest stored
+        candle, then everything after the newest (pages of up to 5,000 completed candles)."""
         stop = until or int(datetime.now(timezone.utc).timestamp())
+        first, last = self.first_time(instrument, gran), self.last_time(instrument, gran)
+        if first is None or last is None:
+            return self._fill(client, instrument, gran, since, stop, progress)
+        total = 0
+        if since < first - SECONDS[gran]:
+            total += self._fill(client, instrument, gran, since, first, progress)
+        return total + self._fill(client, instrument, gran, last + 1, stop, progress)
+
+    def _fill(self, client: OandaClient, instrument: str, gran: str, cursor: int, stop: int, progress: Callable[[str], None] | None) -> int:
         total = 0
         while cursor < stop:
             batch = client.candles(instrument, gran, start=iso_z(cursor), count=MAX_CANDLES)

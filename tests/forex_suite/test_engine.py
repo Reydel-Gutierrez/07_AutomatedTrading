@@ -129,6 +129,31 @@ def test_owner_commands_and_isolation(world, monkeypatch):
     assert eng.db.load_book("atlas").cash == 10_000
 
 
+def test_backfill_fills_history_older_than_recent_candles(world):
+    """Regression: recent candles stored first (by the live loop) must not stop the history load."""
+    eng, clock, client, _ = world
+    eng.store.refresh(client, "EUR_USD", "H1", count=5)  # the live loop got there first
+    assert eng.store.count("EUR_USD", "H1") == 5
+    since = int(clock["t"]) - 120 * 86400
+    eng.store.backfill(client, "EUR_USD", "H1", since=since)
+    assert eng.store.first_time("EUR_USD", "H1") <= since + 3600
+    assert eng.store.count("EUR_USD", "H1") >= 120 * 24 - 2
+
+
+def test_history_reload_revalidates_everyone(world, monkeypatch):
+    eng, clock, client, _ = world
+    monkeypatch.setattr("forex.engine.validate", lambda *a, **k: {"status": "FAILED", "passed": False, "score": 0, "checks": []})
+    eng.start()
+    run_jobs(eng)
+    assert eng.db.get("data_epoch") == 2
+    n = len(eng.db.q("SELECT * FROM validations"))
+    eng.db.put("data_epoch", 1)  # an older, incomplete load
+    eng.start()
+    assert eng.db.get("data")["ready"] is False
+    run_jobs(eng)
+    assert len(eng.db.q("SELECT * FROM validations")) == n + 4 and eng.db.get("data")["ready"] is True
+
+
 def test_engine_never_writes_to_the_broker():
     import inspect
 
