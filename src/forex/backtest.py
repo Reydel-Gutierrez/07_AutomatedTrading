@@ -3,8 +3,8 @@
 Timing: the strategy decides at a bar's close using only completed bars; entries fill at
 the next bar's opening bid/ask (plus slippage). Stops and targets are checked on each later
 bar of the decision timeframe (stop assumed first when a bar touches both). Financing is
-charged at every 17:00 New York rollover. USD conversion uses the hourly closes of the
-USD pairs. Nothing here can see a bar before it has closed.
+charged at every 17:00 New York rollover. USD conversion uses the hourly (day) or 4-hourly
+(swing) closes of the USD pairs. Nothing here can see a bar before it has closed.
 """
 
 from __future__ import annotations
@@ -21,6 +21,12 @@ from forex.market import SECONDS, Bars, MarketStore
 from forex.sim import BarPrices, Book, Executor, Quote, RiskEnvelope, Trade
 from forex.strategies import get as get_strategy
 from forex.strategy import Context, Open, Strategy
+
+def conversion_gran(style: str) -> str:
+    """USD conversion series: hourly for day traders (2.75 years of history needed), 4-hourly
+    for swing traders, whose 8-year validation window is longer than the stored hourly history."""
+    return "H1" if style == "day" else "H4"
+
 
 USD_PAIR = {"EUR": "EUR_USD", "GBP": "GBP_USD", "AUD": "AUD_USD", "NZD": "NZD_USD", "JPY": "USD_JPY", "CAD": "USD_CAD", "CHF": "USD_CHF"}
 
@@ -123,7 +129,8 @@ def load_data(store: MarketStore, cfg: AgentConfig, start: int, end: int, strate
         data.setdefault((inst, trig), store.bars(inst, trig, start=start - 86400 * 30, end=end))
     ccys = {c for inst in cfg.params["instruments"] for c in inst.split("_")} - {"USD"}
     for c in ccys:
-        data.setdefault((USD_PAIR[c], "H1"), store.bars(USD_PAIR[c], "H1", start=start - 86400 * 10, end=end))
+        cg = conversion_gran(cfg.envelope.style)
+        data.setdefault((USD_PAIR[c], cg), store.bars(USD_PAIR[c], cg, start=start - 86400 * 10, end=end))
     return data
 
 
@@ -143,7 +150,8 @@ def run(cfg: AgentConfig, data: Mapping[tuple[str, str], Bars], specs: Mapping[s
     insts = list(cfg.params["instruments"])
     tb = {i: data[(i, trig)] for i in insts}
     times = sorted({tb[i].close_time(k) for i in insts for k in range(len(tb[i].t)) if start <= tb[i].close_time(k) < end})
-    conv_bars = {c: data[(p, "H1")] for c, p in USD_PAIR.items() if (p, "H1") in data}
+    cg = conversion_gran(cfg.envelope.style)
+    conv_bars = {c: data[(p, cg)] for c, p in USD_PAIR.items() if (p, cg) in data}
     feeds = list(strat.feeds(cfg.params))
     equity: list[tuple[int, float]] = []
     refused: dict[str, int] = {}

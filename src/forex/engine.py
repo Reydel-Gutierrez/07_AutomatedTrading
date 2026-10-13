@@ -45,7 +45,7 @@ HISTORY = {"M15": int(2.75 * 365 * 86400), "H1": int(3 * 365 * 86400), "H4": int
 EQUITY_EVERY = 15 * 60
 # Bump to force a full history reload and re-validation of every agent on the next start
 # (2: the first deploy's backfill skipped older history; its validations used too little data).
-DATA_EPOCH = 2
+DATA_EPOCH = 3  # 3: swing validations converted P&L with hourly prices that only cover 3 of 8 years
 REVALIDATE_DAYS = 28
 
 
@@ -142,7 +142,7 @@ class Engine:
             out |= set(rt.strategy.feeds(rt.cfg.params))
             trig = rt.strategy.trigger(rt.cfg.params)
             out |= {(i, trig) for i in rt.cfg.params["instruments"]}
-        out |= {(p, "H1") for p in USD_PAIR.values()}
+        out |= {(p, g) for p in USD_PAIR.values() for g in ("H1", "H4")}  # USD conversion (live and backtests)
         return out
 
     # -- background jobs -----------------------------------------------------------------------

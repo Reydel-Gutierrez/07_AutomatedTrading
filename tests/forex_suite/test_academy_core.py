@@ -196,3 +196,18 @@ def test_bootstrap_drawdown():
     assert bootstrap_drawdown([1.0, -1.0] * 3, 0.01) is None
     dd = bootstrap_drawdown([1.5, -1.0, -1.0, 2.0, -1.0] * 10, 0.01)
     assert 0 < dd < 0.2
+
+
+def test_swing_backtest_converts_prices_across_the_whole_window(tmp_path):
+    """Regression: swing validations must not depend on hourly history (stored for only ~3 years)."""
+    s = MarketStore(tmp_path / "m.db")
+    synth.fill(s, list(SPECS), {"H4": 2500, "D": 500})
+    for inst in SPECS:  # hourly history covers only the last stretch
+        s.upsert(inst, "H1", synth.series(inst, "H1", 500, start=synth.START + 2400 * 4 * 3600)[:200])
+    agent = FOUNDING_CLASS[3]  # Orion trades crosses that need USD conversion
+    params = default_params(agent["strategy"])
+    cfg = AgentConfig("orion", agent["strategy"], params, agent["envelope"])
+    last = s.last_time("EUR_USD", "H4")
+    start = last - 86400 * 300
+    res = run(cfg, load_data(s, cfg, start, last), SPECS, start, last)
+    assert res.refused.get("NO_CONVERSION_PRICE", 0) == 0

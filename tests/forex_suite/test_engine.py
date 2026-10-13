@@ -145,9 +145,11 @@ def test_history_reload_revalidates_everyone(world, monkeypatch):
     monkeypatch.setattr("forex.engine.validate", lambda *a, **k: {"status": "FAILED", "passed": False, "score": 0, "checks": []})
     eng.start()
     run_jobs(eng)
-    assert eng.db.get("data_epoch") == 2
+    from forex.engine import DATA_EPOCH
+
+    assert eng.db.get("data_epoch") == DATA_EPOCH
     n = len(eng.db.q("SELECT * FROM validations"))
-    eng.db.put("data_epoch", 1)  # an older, incomplete load
+    eng.db.put("data_epoch", DATA_EPOCH - 1)  # an older, incomplete load
     eng.start()
     assert eng.db.get("data")["ready"] is False
     run_jobs(eng)
