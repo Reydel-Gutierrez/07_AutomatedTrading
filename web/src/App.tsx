@@ -116,6 +116,7 @@ function pageRoutes() {
     <Route key="mgr" path="/managers/:id" element={<ManagerPage />} />,
     <Route key="ac" path="/academy" element={<Academy />} />,
     <Route key="acid" path="/academy/:id" element={<Academy />} />,
+    <Route key="acday" path="/academy/:id/:day" element={<Academy />} />,
     <Route key="cio" path="/cio" element={<CioOffice />} />,
     <Route key="cap" path="/capital" element={<CapitalPage />} />,
     <Route key="act" path="/activity" element={<Activity />} />,

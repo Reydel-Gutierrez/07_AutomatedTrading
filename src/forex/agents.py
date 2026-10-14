@@ -65,3 +65,50 @@ FOUNDING_CLASS: list[dict[str, Any]] = [
 
 def default_params(strategy_key: str) -> dict[str, Any]:
     return dict(STRATEGIES[strategy_key].defaults)
+
+
+# Second class (2026-10-13): built around the first class's lesson that trading costs sink
+# frequent strategies. All three decide on daily bars (Vega enters on 4-hour bars) and trade rarely.
+SECOND_CLASS: list[dict[str, Any]] = [
+    {
+        "id": "sable",
+        "name": "Sable",
+        "style": "swing",
+        "strategy": "sable_breakout_v1",
+        "klass": 2,
+        "persona": {
+            "tagline": "Long-horizon trend rider",
+            "about": "Only acts on daily closes beyond a 55-day channel and stays in until the trend breaks. Loses small and often; waits for the rare big trend that pays for everything.",
+            "color": "#f472b6", "look": {"skin": "#b07f5a", "hair": "#1c1917", "hairStyle": "neat", "top": "#4a1d3a", "inner": "#fce7f3", "accent": "#f472b6"},
+        },
+        "envelope": RiskEnvelope(style="swing", risk_pct=0.0075, max_positions=3, weekend_hold=True),
+    },
+    {
+        "id": "halcyon",
+        "name": "Halcyon",
+        "style": "swing",
+        "strategy": "halcyon_reversion_v1",
+        "klass": 2,
+        "persona": {
+            "tagline": "Patient mean-reversion specialist",
+            "about": "Watches the crosses that tend to stay in a range and steps in only when a daily move is stretched and calm, betting on the return to normal.",
+            "color": "#facc15", "look": {"skin": "#e8b896", "hair": "#6b4f3a", "hairStyle": "curly", "top": "#3f3a12", "inner": "#fef9c3", "accent": "#facc15", "glasses": "#fde68a"},
+        },
+        "envelope": RiskEnvelope(style="swing", risk_pct=0.0075, max_positions=3, weekend_hold=True),
+    },
+    {
+        "id": "vega",
+        "name": "Vega",
+        "style": "swing",
+        "strategy": "vega_compression_v1",
+        "klass": 2,
+        "persona": {
+            "tagline": "Calm-before-the-storm breakout trader",
+            "about": "Hunts for unusually quiet days and trades the first decisive break that follows, with the trend. In and out within a week; never holds over a weekend.",
+            "color": "#60a5fa", "look": {"skin": "#d9a67c", "hair": "#3f2a1d", "hairStyle": "buzz", "top": "#172554", "inner": "#dbeafe", "accent": "#60a5fa", "headset": True},
+        },
+        "envelope": RiskEnvelope(style="swing", risk_pct=0.0075, max_positions=3, weekend_hold=False),
+    },
+]
+
+ALL_AGENTS = FOUNDING_CLASS + SECOND_CLASS

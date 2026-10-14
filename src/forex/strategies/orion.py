@@ -30,14 +30,19 @@ class StrengthRotation:
     defaults: Mapping[str, Any] = {
         "instruments": PAIRS, "fast": 20, "slow": 60, "min_gap": 1.0, "focus": 2, "exit_rank": 4, "d_ema": 50,
         "rsi_pullback": 45, "stop_atr": 1.5, "target_r": 2.5, "trail_after_r": 1.5, "trail_atr": 1.0, "hold_days": 10, "carry_max_r": 0.15,
+        "entry_tf": "H4", "max_cost_r": 1.0,
     }
-    tunables = (Tunable("min_gap", 0.25, 0.25, 2.5), Tunable("stop_atr", 0.25, 1.0, 2.5), Tunable("target_r", 0.5, 1.5, 4.0))
+    tunables = (
+        Tunable("min_gap", 0.25, 0.25, 3.0), Tunable("stop_atr", 0.25, 1.0, 3.0), Tunable("target_r", 0.5, 1.5, 5.0), Tunable("focus", 1, 1, 4, True),
+        Tunable("exit_rank", 1, 2, 6, True), Tunable("rsi_pullback", 5, 30, 50, True), Tunable("entry_tf", choices=("H4", "D")),
+        Tunable("max_cost_r", choices=(1.0, 0.3, 0.2, 0.12)),
+    )
 
     def feeds(self, p: Mapping[str, Any]) -> dict[tuple[str, str], int]:
-        return {**{(i, "D"): 600 for i in p["instruments"]}, **{(i, "H4"): 300 for i in p["instruments"]}}
+        return {**{(i, "D"): 600 for i in p["instruments"]}, **{(i, p.get("entry_tf", "H4")): 300 for i in p["instruments"]}}
 
     def trigger(self, p: Mapping[str, Any]) -> str:
-        return "H4"
+        return p.get("entry_tf", "H4")
 
     def strengths(self, ctx: Context) -> dict[str, float]:
         p = ctx.params
@@ -75,7 +80,7 @@ class StrengthRotation:
         out: list[Action] = []
         for inst in p["instruments"]:
             pos = ctx.position(inst)
-            d, h = ctx.bars(inst, "D"), ctx.bars(inst, "H4")
+            d, h = ctx.bars(inst, "D"), ctx.bars(inst, p.get("entry_tf", "H4"))
             datr = last(d, atr(d, 14))
             if pos:
                 rank = order.get(inst)
@@ -110,5 +115,6 @@ class StrengthRotation:
             carry = close * rate / 365.0 * p["hold_days"]  # price terms, per unit
             if carry < -p["carry_max_r"] * dist:
                 continue
-            out.append(Open(inst, side, stop=close - side * dist, target=close + side * p["target_r"] * dist, reason=f"#{rank[0] + 1} strength gap {rank[2]:.2f}, 4h pullback turning"))
+            tf = str(p.get("entry_tf", "H4")).lower()
+            out.append(Open(inst, side, stop=close - side * dist, target=close + side * p["target_r"] * dist, reason=f"#{rank[0] + 1} strength gap {rank[2]:.2f}, {tf} pullback turning", max_cost_r=p.get("max_cost_r")))
         return out

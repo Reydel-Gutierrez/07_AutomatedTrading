@@ -246,6 +246,8 @@ class Executor:
             return "STOP_TOO_CLOSE", 0
         if a.target is not None and (a.target - entry) * a.side <= q.spread:
             return "TARGET_WRONG_SIDE", 0  # the strategy's price disagrees with the market
+        if a.max_cost_r is not None and q.spread > a.max_cost_r * dist:
+            return "COST_TOO_HIGH", 0  # the spread would eat too much of the trade's risk
         for ccy, sign in currency_signs(a.instrument, a.side).items():
             if sum(1 for p in book.positions.values() if currency_signs(p.instrument, p.side).get(ccy) == sign) >= env.max_same_currency:
                 return f"CURRENCY_CONCENTRATION: {ccy}", 0

@@ -86,13 +86,19 @@ def test_engine_end_to_end(world, monkeypatch):
     eng, clock, client, inbox = world
     # keep validation cheap in tests
     monkeypatch.setattr("forex.engine.validate", lambda store, cfg, specs, **kw: {"status": "FAILED", "passed": False, "score": 0.1, "checks": [{"name": "evidence", "passed": False}]})
+    monkeypatch.setattr("forex.engine.SPRINT_HOUR_NY", 99)  # trading test only; sprints have their own tests
     eng.start()
-    assert {a["id"] for a in eng.db.agents()} == {"atlas", "kestrel", "mira", "orion"}
+    assert {a["id"] for a in eng.db.agents()} == {"atlas", "kestrel", "mira", "orion", "sable", "halcyon", "vega"}
+    assert {a["stage"] for a in eng.db.agents()} == {"RESEARCH"}
     assert all(r["cash"] == 10_000 for r in eng.db.q("SELECT cash FROM accounts"))
     run_jobs(eng)  # backfill + four initial validations
     assert eng.db.get("data")["ready"] is True
     assert eng.store.count("EUR_USD", "M15") > 10_000 and eng.store.count("EUR_USD", "D") > 150
-    assert len(eng.db.q("SELECT * FROM validations WHERE finished_at IS NOT NULL")) == 4
+    assert len(eng.db.q("SELECT * FROM validations WHERE finished_at IS NOT NULL")) == 7
+    # Floor 1 agents never trade: put the founding class on Floor 2 for this test
+    for a in ("atlas", "kestrel", "mira", "orion"):
+        eng.db.set_stage(a, "PAPER", by="test", reason="test")
+        eng.reload_stage(a)
     # trade through 3 days of 15-minute ticks
     decided = set()
     for _ in range(3 * 96):
@@ -101,7 +107,8 @@ def test_engine_end_to_end(world, monkeypatch):
         decided |= {a for a in eng.agents if eng.db.get(f"decision:{a}")}
     assert decided == {"atlas", "kestrel", "mira", "orion"}
     hb = eng.db.get("engine")
-    assert hb["heartbeat"] == clock["t"] and hb["data_ready"] is True and set(hb["agents"]) == set(decided)
+    assert hb["heartbeat"] == clock["t"] and hb["data_ready"] is True and set(hb["agents"]) == set(eng.agents)
+    assert {a for a, v in hb["agents"].items() if v["stage"] == "PAPER"} == decided
     assert eng.db.q("SELECT count(*) AS n FROM equity")[0]["n"] >= 4 * 50
     assert eng.db.q("SELECT count(*) AS n FROM prices")[0]["n"] == len(UNIVERSE)
     activity = eng.db.q("SELECT count(*) AS n FROM events WHERE type IN ('POSITION_OPENED','POSITION_CLOSED')")[0]["n"]
@@ -153,7 +160,7 @@ def test_history_reload_revalidates_everyone(world, monkeypatch):
     eng.start()
     assert eng.db.get("data")["ready"] is False
     run_jobs(eng)
-    assert len(eng.db.q("SELECT * FROM validations")) == n + 4 and eng.db.get("data")["ready"] is True
+    assert len(eng.db.q("SELECT * FROM validations")) == n + 7 and eng.db.get("data")["ready"] is True
 
 
 def test_restart_closes_interrupted_validations(world, monkeypatch):
@@ -189,3 +196,79 @@ def test_engine_never_writes_to_the_broker():
     src = inspect.getsource(engine_mod)
     used = set(re.findall(r"self\.client\.(\w+)", src))
     assert used <= {"account_id", "instruments", "pricing", "candles"}, used  # read-only calls only
+
+
+
+def test_floor_one_agents_do_not_trade(world, monkeypatch):
+    eng, clock, client, _ = world
+    monkeypatch.setattr("forex.engine.validate", lambda *a, **k: {"status": "FAILED", "passed": False, "score": 0, "checks": []})
+    eng.start()
+    run_jobs(eng)
+    for _ in range(96):
+        clock["t"] += 900
+        eng.tick()
+    assert not any(eng.db.get(f"decision:{a}") for a in eng.agents)
+    assert eng.db.q("SELECT count(*) AS n FROM positions")[0]["n"] == 0 and eng.db.q("SELECT count(*) AS n FROM equity")[0]["n"] == 0
+
+
+def test_nightly_sprints_report_and_promotion(world, monkeypatch):
+    eng, clock, client, _ = world
+    monkeypatch.setattr("forex.engine.validate", lambda *a, **k: {"status": "FAILED", "passed": False, "score": 0, "checks": []})
+    calls = []
+
+    def fake_sprint(store, cfg, specs, *, tested, trials, day, evidence=None, progress=None):
+        calls.append(cfg.agent_id)
+        win = cfg.agent_id == "sable"
+        params = {**cfg.params, "entry_n": 50} if win else dict(cfg.params)
+        return {
+            "outcome": "PROMOTE" if win else "NO_IMPROVEMENT", "passed": win, "params": params, "change": "entry_n 55 -> 50" if win else None,
+            "verdict": "test", "tested": 3, "trials": 4, "current": {"score": 0.0}, "best": {"score": 1.0},
+            "evaluated": [{"label": "x", "hash": f"h-{cfg.agent_id}", "score": 0.1}],
+            "validation": {"status": "PASSED" if win else "FAILED", "passed": win, "score": 1.0, "checks": [], "metrics": {"unseen": {"avg_r": 0.2, "trades": 40}}},
+            "day1": {"passed": win, "profitable_share": 0.7, "starts": []},
+        }
+
+    monkeypatch.setattr("forex.engine.sprint", fake_sprint)
+    eng.start()
+    run_jobs(eng)
+    # 01:30 New York on the next day: sprints for every Floor 1 agent, then the report
+    from forex.fxclock import ny
+
+    t = ny(int(clock["t"]))
+    clock["t"] += ((24 - t.hour) + 1) * 3600 + 1800
+    eng.tick()
+    run_jobs(eng)
+    assert sorted(calls) == sorted(["atlas", "kestrel", "mira", "orion", "sable", "halcyon", "vega"])
+    rep = eng.db.get("sprint_report_latest")
+    assert rep["passed"] == ["Sable"] and len(rep["agents"]) == 7 and "Sable" in rep["floor2"]
+    sable = eng.db.agent("sable")
+    assert sable["stage"] == "PAPER" and sable["current_version"] == 2 and eng.agents["sable"].cfg.params["entry_n"] == 50
+    assert eng.db.tested_hashes("sable") == {"h-sable"} and eng.db.agent("atlas")["trials"] > 1
+    eng.tick()
+    run_jobs(eng)
+    assert len(calls) == 7  # once per night
+
+
+def test_owner_floor_commands(world, monkeypatch):
+    eng, clock, client, inbox = world
+    monkeypatch.setattr("forex.engine.validate", lambda *a, **k: {"status": "FAILED", "passed": False, "score": 0, "checks": []})
+    eng.start()
+    import json as _json
+
+    (inbox / "a.json").write_text(_json.dumps({"agent_id": "kestrel", "action": "to_demo"}))
+    eng.tick()
+    assert eng.db.agent("kestrel")["stage"] == "RESEARCH"  # refused: not on Floor 2
+    for a in ("kestrel", "mira", "orion"):
+        eng.db.set_stage(a, "PAPER", by="test", reason="test")
+        eng.reload_stage(a)
+    for i, a in enumerate(("kestrel", "mira", "orion")):
+        (inbox / f"b{i}.json").write_text(_json.dumps({"agent_id": a, "action": "to_demo"}))
+    eng.tick()
+    stages = {a: eng.db.agent(a)["stage"] for a in ("kestrel", "mira", "orion")}
+    assert sorted(stages.values()) == ["DEMO", "DEMO", "PAPER"]  # only two seats
+    (inbox / "c.json").write_text(_json.dumps({"agent_id": "atlas", "action": "retire", "note": "no edge"}))
+    (inbox / "d.json").write_text(_json.dumps({"agent_id": "mira", "action": "to_research"}))
+    eng.tick()
+    assert eng.db.agent("atlas")["stage"] == "RETIRED" and "atlas" not in eng.agents
+    assert eng.db.agent("mira")["stage"] == "RESEARCH"
+    assert eng.db.q("SELECT count(*) AS n FROM stage_transitions")[0]["n"] >= 5

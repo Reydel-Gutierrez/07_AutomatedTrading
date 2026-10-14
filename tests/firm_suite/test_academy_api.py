@@ -23,14 +23,14 @@ from tests.firm_suite.test_api import PASSWORD, Host, _login
 def academy_db(tmp_path, monkeypatch):
     """A real academy.db written by the Forex engine's own code, with one closed trade and a mark."""
     from forex.academy import AcademyDB
-    from forex.agents import FOUNDING_CLASS, default_params
+    from forex.agents import ALL_AGENTS, default_params
     from forex.sim import Trade
 
     root = tmp_path / "forex"
     root.mkdir()
     monkeypatch.setenv("FOREX_STATE_ROOT", str(root))
     db = AcademyDB(root / "academy.db")
-    db.seed(FOUNDING_CLASS, default_params)
+    db.seed(ALL_AGENTS, default_params)
     book = db.load_book("kestrel")
     book.closed.append(Trade("t1", 1, "EUR_USD", 1, 5000, 1.1, 1.101, 1_760_000_000, 1_760_003_600, 50.0, 0.0, 1.0, "target", "test"))
     book.cash += 50
@@ -44,16 +44,36 @@ def academy_db(tmp_path, monkeypatch):
 
 def test_views_read_the_engine_records(academy_db):
     ov = academy.overview()
-    assert ov["available"] and {a["id"] for a in ov["agents"]} == {"atlas", "kestrel", "mira", "orion"}
+    assert ov["available"] and {a["id"] for a in ov["agents"]} == {"atlas", "kestrel", "mira", "orion", "sable", "halcyon", "vega"}
     k = next(a for a in ov["agents"] if a["id"] == "kestrel")
     assert k["equity"] == 10_050 and k["return_pct"] == pytest.approx(0.005) and k["paper"]["trades"] == 1
-    assert k["readiness"]["eligible_for_review"] is False and k["readiness"]["checks"][-1]["passed"] is False  # owner authorization never auto-passes
+    assert k["stage"] == "RESEARCH" and k["readiness"]["eligible"] is False and k["readiness"]["automatic"] is True
+    # above Floor 1, the owner's decision is a gate that never passes by itself
+    academy_db.set_stage("mira", "PAPER", by="test", reason="test")
+    m = next(a for a in academy.overview()["agents"] if a["id"] == "mira")
+    assert m["floor"].startswith("Floor 2") and m["readiness"]["automatic"] is False and m["readiness"]["checks"][-1]["passed"] is False
     assert ov["engine"]["online"] is True
     detail = academy.agent("kestrel")
     assert detail["trades"][0]["id"] == "t1" and detail["versions"][0]["version"] == 1 and "by_instrument" in detail["diagnostics"]
     assert academy.agent("nobody") is None
     sb = academy.space_block()
-    assert sb["available"] and len(sb["agents"]) == 4 and sb["engine"]["online"]
+    assert sb["available"] and len(sb["agents"]) == 7 and sb["engine"]["online"]
+
+
+def test_morning_message_and_reports(academy_db):
+    day = "2026-10-14"
+    assert academy.morning_message(day).startswith("Academy: no research sprint report")
+    sid = academy_db.start_sprint("sable", day, 1)
+    academy_db.finish_sprint(sid, outcome="PROMOTE", to_version=2, passed=True, summary={"agent": "Sable", "verdict": "passed"})
+    sid = academy_db.start_sprint("mira", day, 1)
+    academy_db.finish_sprint(sid, outcome="IMPROVED", to_version=2, passed=False, summary={"agent": "Mira", "verdict": "better", "recommend_retire": False})
+    academy_db.put(f"sprint_report:{day}", {"day": day, "passed": ["Sable"], "agents": [
+        {"name": "Sable", "outcome": "PROMOTE", "to_version": 2}, {"name": "Mira", "outcome": "IMPROVED", "to_version": 2}]})
+    msg = academy.morning_message(day)
+    assert "ready for review" in msg and "Tested: Sable, Mira" in msg and "Floor 2: Sable" in msg and "Mira (v2)" in msg and len(msg) < 400
+    rep = academy.report(day)
+    assert len(rep["sprints"]) == 2 and rep["sprints"][0]["summary"]["agent"] == "Sable"
+    assert academy.reports()[0]["day"] == day and academy.report("1999-01-01") is None
 
 
 def test_views_without_academy(tmp_path, monkeypatch):
@@ -67,6 +87,8 @@ def test_commands_go_to_the_inbox_only(academy_db):
     assert len(files) == 1 and json.loads(files[0].read_text())["action"] == "pause"
     with pytest.raises(ValueError):
         academy.send_command("mira", "go_live", by="reydel")  # there is no live promotion command
+    for action in ("sprint", "to_demo", "to_research", "retire"):
+        academy.send_command("mira", action, by="reydel")
     with pytest.raises(LookupError):
         academy.send_command("nobody", "pause", by="reydel")
 
@@ -84,14 +106,14 @@ def test_api_endpoints(client, academy_db):
     assert client.get("/api/academy").status_code == 401
     h = _login(client)
     ov = client.get("/api/academy").json()
-    assert ov["available"] and len(ov["agents"]) == 4
+    assert ov["available"] and len(ov["agents"]) == 7
     assert client.get("/api/academy/agents/orion").json()["name"] == "Orion"
     assert client.get("/api/academy/agents/nobody").status_code == 404
     assert client.post("/api/academy/agents/orion/pause", json={"note": "x"}).status_code == 403  # CSRF
     assert client.post("/api/academy/agents/orion/pause", json={"note": "x"}, headers=h).json()["queued"]
     assert client.post("/api/academy/agents/orion/promote", json={}, headers=h).status_code == 422
     space = client.get("/api/space").json()
-    assert space["academy"]["available"] and len(space["academy"]["agents"]) == 4
+    assert space["academy"]["available"] and len(space["academy"]["agents"]) == 7
 
 
 def test_sidecar_restarts_and_passes_no_secrets(tmp_path):

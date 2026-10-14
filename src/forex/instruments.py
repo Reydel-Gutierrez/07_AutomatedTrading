@@ -1,7 +1,8 @@
 """The Academy's tradable universe, instrument facts, and currency conversion to USD.
 
 The universe is the liquid pairs the P0 probe showed with tight spreads (2026-10-12):
-majors plus EUR/GBP and EUR/JPY. Exotics (NOK, ZAR, CZK, HKD, TRY) are excluded.
+majors plus EUR/GBP and EUR/JPY, and three range-bound crosses for mean reversion
+(AUD/NZD, EUR/CHF, AUD/CAD; 33:1 tier, spreads ~2-3 pips). Exotics (NOK, ZAR, CZK, HKD, TRY) are excluded.
 Margin rates and financing come from OANDA's instrument list (stored in marketdata.db);
 the defaults below are the probe's values and are used only when nothing is stored.
 """
@@ -11,10 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Mapping
 
-UNIVERSE = ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD", "USD_CHF", "NZD_USD", "EUR_GBP", "EUR_JPY"]
+UNIVERSE = ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD", "USD_CHF", "NZD_USD", "EUR_GBP", "EUR_JPY", "AUD_NZD", "EUR_CHF", "AUD_CAD"]
 
 # Spread ceilings (pips) for new entries; far above normal liquid-hours spreads, below rollover blowouts.
-MAX_SPREAD_PIPS = {"EUR_USD": 2.5, "GBP_USD": 3.5, "USD_JPY": 3.0, "AUD_USD": 3.0, "USD_CAD": 3.5, "USD_CHF": 3.5, "NZD_USD": 4.0, "EUR_GBP": 3.0, "EUR_JPY": 4.5}
+MAX_SPREAD_PIPS = {"EUR_USD": 2.5, "GBP_USD": 3.5, "USD_JPY": 3.0, "AUD_USD": 3.0, "USD_CAD": 3.5, "USD_CHF": 3.5, "NZD_USD": 4.0, "EUR_GBP": 3.0, "EUR_JPY": 4.5, "AUD_NZD": 4.5, "EUR_CHF": 3.5, "AUD_CAD": 4.5}
 
 # Weekend gap assumption (fraction of price) used by the weekend-hold check; JPY crosses gap more.
 WEEKEND_GAP = {"EUR_JPY": 0.015}
@@ -31,6 +32,9 @@ _PROBE_DEFAULTS = {
     "NZD_USD": (-4, 0.03, -0.01, -0.01),
     "EUR_GBP": (-4, 0.05, -0.01, -0.01),
     "EUR_JPY": (-2, 0.05, 0.01, -0.03),
+    "AUD_NZD": (-4, 0.03, -0.01, -0.01),
+    "EUR_CHF": (-4, 0.03, -0.01, -0.01),
+    "AUD_CAD": (-4, 0.03, -0.01, -0.01),
 }
 
 

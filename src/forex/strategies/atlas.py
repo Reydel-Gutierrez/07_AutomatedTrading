@@ -26,15 +26,18 @@ class TrendBreakout:
     description = __doc__ or ""
     defaults: Mapping[str, Any] = {
         "instruments": PAIRS, "d_ema": 200, "d_fast": 50, "d_adx_min": 20, "donchian": 20, "h4_ema": 50,
-        "pullback_rsi": 40, "atr_n": 14, "stop_atr": 2.5, "trail_atr": 3.0, "trail_after_r": 1.0,
+        "pullback_rsi": 40, "atr_n": 14, "stop_atr": 2.5, "trail_atr": 3.0, "trail_after_r": 1.0, "entry_tf": "H4", "max_cost_r": 1.0,
     }
-    tunables = (Tunable("d_adx_min", 2, 14, 30, True), Tunable("donchian", 5, 10, 40, True), Tunable("stop_atr", 0.25, 1.5, 3.5), Tunable("trail_atr", 0.5, 2.0, 4.5))
+    tunables = (
+        Tunable("d_adx_min", 2, 14, 30, True), Tunable("donchian", 5, 10, 60, True), Tunable("stop_atr", 0.25, 1.5, 4.0), Tunable("trail_atr", 0.5, 2.0, 5.0),
+        Tunable("trail_after_r", 0.5, 0.5, 3.0), Tunable("entry_tf", choices=("H4", "D")), Tunable("max_cost_r", choices=(1.0, 0.3, 0.2, 0.12)),
+    )
 
     def feeds(self, p: Mapping[str, Any]) -> dict[tuple[str, str], int]:
-        return {**{(i, "D"): 600 for i in p["instruments"]}, **{(i, "H4"): 600 for i in p["instruments"]}}
+        return {**{(i, "D"): 600 for i in p["instruments"]}, **{(i, p.get("entry_tf", "H4")): 600 for i in p["instruments"]}}
 
     def trigger(self, p: Mapping[str, Any]) -> str:
-        return "H4"
+        return p.get("entry_tf", "H4")
 
     def regime(self, ctx: Context, inst: str) -> int:
         p, d = ctx.params, ctx.bars(inst, "D")
@@ -55,7 +58,7 @@ class TrendBreakout:
         p = ctx.params
         out: list[Action] = []
         for inst in p["instruments"]:
-            h = ctx.bars(inst, "H4")
+            h = ctx.bars(inst, p.get("entry_tf", "H4"))
             if len(h) < max(p["donchian"], p["h4_ema"]) + 2:
                 continue
             trend = self.regime(ctx, inst)
@@ -93,5 +96,6 @@ class TrendBreakout:
                 elif r2 > 100 - p["pullback_rsi"] >= r1:
                     why = "4h pullback (RSI turned down) in daily downtrend"
             if why:
-                out.append(Open(inst, trend, stop=close - trend * p["stop_atr"] * a, reason=why))
+                tf = str(p.get("entry_tf", "H4")).lower()
+                out.append(Open(inst, trend, stop=close - trend * p["stop_atr"] * a, reason=why.replace("4h", tf), max_cost_r=p.get("max_cost_r")))
         return out

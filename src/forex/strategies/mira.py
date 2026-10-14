@@ -27,9 +27,14 @@ class RangeReversion:
     description = __doc__ or ""
     defaults: Mapping[str, Any] = {
         "instruments": PAIRS, "sessions": [["19:30", "02:30"], ["11:30", "15:30"]], "adx_max": 22, "adx_exit": 30,
-        "flat_drift_atr": 0.35, "bb_n": 20, "bb_k": 2.2, "rsi_lo": 32, "rsi_hi": 68, "stop_atr": 0.5, "min_rr": 0.8, "max_hold_minutes": 360,
+        "flat_drift_atr": 0.35, "bb_n": 20, "bb_k": 2.2, "rsi_lo": 32, "stop_atr": 0.5, "min_rr": 0.8, "max_hold_minutes": 360,
+        "session_set": "both", "max_cost_r": 1.0,
     }
-    tunables = (Tunable("bb_k", 0.2, 1.6, 3.0), Tunable("adx_max", 2, 14, 30, True), Tunable("stop_atr", 0.25, 0.25, 1.5))
+    tunables = (
+        Tunable("bb_k", 0.2, 1.6, 3.2), Tunable("adx_max", 2, 14, 30, True), Tunable("stop_atr", 0.25, 0.25, 2.0), Tunable("min_rr", 0.2, 0.4, 2.0),
+        Tunable("rsi_lo", 3, 15, 40, True), Tunable("flat_drift_atr", 0.1, 0.1, 0.8), Tunable("session_set", choices=("both", "asia", "ny")),
+        Tunable("max_cost_r", choices=(1.0, 0.3, 0.2, 0.12)),
+    )
 
     def feeds(self, p: Mapping[str, Any]) -> dict[tuple[str, str], int]:
         return {**{(i, "M15"): 300 for i in p["instruments"]}, **{(i, "H1"): 300 for i in p["instruments"]}}
@@ -47,7 +52,8 @@ class RangeReversion:
     def on_bar(self, ctx: Context) -> list[Action]:
         p = ctx.params
         out: list[Action] = []
-        in_session = any(in_window(ctx.now, a, b) for a, b in p["sessions"])
+        sessions = {"both": p["sessions"], "asia": p["sessions"][:1], "ny": p["sessions"][1:]}[p.get("session_set", "both")]
+        in_session = any(in_window(ctx.now, a, b) for a, b in sessions)
         for inst in p["instruments"]:
             m = ctx.bars(inst, "M15")
             if len(m) < p["bb_n"] + 20:
@@ -70,12 +76,12 @@ class RangeReversion:
             side = 0
             if c2 < l2 and c1 > l1 and r_prev < p["rsi_lo"]:
                 side, stop = 1, min(m.l[m.end - 3 : m.end]) - p["stop_atr"] * a
-            elif c2 > u2 and c1 < u1 and r_prev > p["rsi_hi"]:
+            elif c2 > u2 and c1 < u1 and r_prev > 100 - p["rsi_lo"]:
                 side, stop = -1, max(m.h[m.end - 3 : m.end]) + p["stop_atr"] * a
             if side == 0:
                 continue
             risk, reward = abs(c1 - stop), (m1 - c1) * side
             if risk <= 0 or reward < p["min_rr"] * risk:
                 continue
-            out.append(Open(inst, side, stop=stop, target=m1, max_hold_minutes=p["max_hold_minutes"], reason=f"band rejection in a ranging market (1h ADX {strength:.0f})"))
+            out.append(Open(inst, side, stop=stop, target=m1, max_hold_minutes=p["max_hold_minutes"], reason=f"band rejection in a ranging market (1h ADX {strength:.0f})", max_cost_r=p.get("max_cost_r")))
         return out

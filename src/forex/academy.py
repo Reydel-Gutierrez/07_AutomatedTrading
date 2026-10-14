@@ -14,6 +14,7 @@ from typing import Any, Iterable, Mapping
 from forex.sim import Book, Position, RiskEnvelope, Trade
 
 START_CAPITAL = 10_000.0
+STAGES = ("RESEARCH", "PAPER", "DEMO", "RETIRED")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -53,6 +54,15 @@ CREATE TABLE IF NOT EXISTS revisions (
   outcome TEXT NOT NULL, chosen TEXT, reason TEXT, report_json TEXT
 );
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value_json TEXT NOT NULL, updated_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS stage_transitions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, from_stage TEXT, to_stage TEXT NOT NULL, by TEXT NOT NULL, reason TEXT, ts TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sprints (
+  id INTEGER PRIMARY KEY AUTOINCREMENT, agent_id TEXT NOT NULL, day TEXT NOT NULL, started_at TEXT NOT NULL, finished_at TEXT,
+  from_version INTEGER NOT NULL, to_version INTEGER, outcome TEXT, passed INTEGER, summary_json TEXT
+);
+CREATE INDEX IF NOT EXISTS sprints_day ON sprints (day, agent_id);
+CREATE TABLE IF NOT EXISTS tested (agent_id TEXT NOT NULL, params_hash TEXT NOT NULL, first_seen TEXT NOT NULL, score REAL, PRIMARY KEY (agent_id, params_hash));
 CREATE TABLE IF NOT EXISTS prices (instrument TEXT PRIMARY KEY, bid REAL, ask REAL, time INTEGER, tradeable INTEGER, updated_at TEXT);
 """
 
@@ -69,6 +79,17 @@ class AcademyDB:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        cols = {r[1] for r in self.conn.execute("PRAGMA table_info(agents)")}
+        with self.conn:
+            if "stage" not in cols:
+                # Floors: RESEARCH (1) -> PAPER (2) -> DEMO (3); RETIRED. Everyone starts in research.
+                self.conn.execute("ALTER TABLE agents ADD COLUMN stage TEXT NOT NULL DEFAULT 'RESEARCH'")
+                self.conn.execute("ALTER TABLE agents ADD COLUMN stage_since TEXT")
+                self.conn.execute("ALTER TABLE agents ADD COLUMN klass INTEGER NOT NULL DEFAULT 1")
+                self.conn.execute("UPDATE agents SET stage_since = ?", (now_iso(),))
 
     def close(self) -> None:
         self.conn.close()
@@ -95,8 +116,8 @@ class AcademyDB:
             ts = now_iso()
             with self.lock, self.conn:
                 self.conn.execute(
-                    "INSERT INTO agents (id, name, style, strategy, persona_json, created_at) VALUES (?,?,?,?,?,?)",
-                    (a["id"], a["name"], a["style"], a["strategy"], json.dumps(a["persona"]), ts),
+                    "INSERT INTO agents (id, name, style, strategy, persona_json, created_at, stage, stage_since, klass) VALUES (?,?,?,?,?,?,?,?,?)",
+                    (a["id"], a["name"], a["style"], a["strategy"], json.dumps(a["persona"]), ts, "RESEARCH", ts, a.get("klass", 1)),
                 )
                 self.conn.execute(
                     "INSERT INTO versions (agent_id, version, params_json, envelope_json, note, created_by, created_at) VALUES (?,?,?,?,?,?,?)",
@@ -106,7 +127,7 @@ class AcademyDB:
                     "INSERT INTO accounts (agent_id, cash, start_capital, peak_equity, day_start_equity, updated_at) VALUES (?,?,?,?,?,?)",
                     (a["id"], START_CAPITAL, START_CAPITAL, START_CAPITAL, START_CAPITAL, ts),
                 )
-            self.event(a["id"], "AGENT_ENROLLED", f"{a['name']} enrolled in the Academy with $10,000 of virtual capital.")
+            self.event(a["id"], "AGENT_ENROLLED", f"{a['name']} enrolled in the Academy (Floor 1, research).")
             created.append(a["id"])
         return created
 
@@ -149,6 +170,45 @@ class AcademyDB:
 
     def add_trials(self, agent_id: str, n: int) -> None:
         self.write("UPDATE agents SET trials = trials + ? WHERE id = ?", (n, agent_id))
+
+    # -- floors ------------------------------------------------------------------------------
+    def set_stage(self, agent_id: str, stage: str, *, by: str, reason: str) -> str:
+        """Move an agent between floors. Entering paper trading starts a fresh $10,000 account."""
+        if stage not in STAGES:
+            raise ValueError(f"stage must be one of {STAGES}")
+        old = self.agent(agent_id)["stage"]
+        ts = now_iso()
+        with self.lock, self.conn:
+            self.conn.execute("UPDATE agents SET stage = ?, stage_since = ? WHERE id = ?", (stage, ts, agent_id))
+            self.conn.execute("INSERT INTO stage_transitions (agent_id, from_stage, to_stage, by, reason, ts) VALUES (?,?,?,?,?,?)", (agent_id, old, stage, by, reason, ts))
+            if stage == "PAPER":
+                self.conn.execute("DELETE FROM positions WHERE agent_id = ?", (agent_id,))
+                self.conn.execute(
+                    "UPDATE accounts SET cash=?, start_capital=?, peak_equity=?, day_key=NULL, day_start_equity=?, paused=NULL, last_financing_day=NULL, updated_at=? WHERE agent_id=?",
+                    (START_CAPITAL, START_CAPITAL, START_CAPITAL, START_CAPITAL, ts, agent_id),
+                )
+        return old
+
+    def tested_hashes(self, agent_id: str) -> set[str]:
+        return {r["params_hash"] for r in self.q("SELECT params_hash FROM tested WHERE agent_id = ?", (agent_id,))}
+
+    def mark_tested(self, agent_id: str, items: Iterable[tuple[str, float]]) -> None:
+        ts = now_iso()
+        with self.lock, self.conn:
+            self.conn.executemany("INSERT OR IGNORE INTO tested VALUES (?,?,?,?)", [(agent_id, h, ts, sc) for h, sc in items])
+
+    def start_sprint(self, agent_id: str, day: str, version: int) -> int:
+        return self.write("INSERT INTO sprints (agent_id, day, started_at, from_version) VALUES (?,?,?,?)", (agent_id, day, now_iso(), version))
+
+    def finish_sprint(self, sid: int, *, outcome: str, to_version: int | None, passed: bool, summary: Mapping[str, Any]) -> None:
+        self.write(
+            "UPDATE sprints SET finished_at=?, outcome=?, to_version=?, passed=?, summary_json=? WHERE id=?",
+            (now_iso(), outcome, to_version, 1 if passed else 0, json.dumps(summary, default=str), sid),
+        )
+
+    def close_unfinished_sprints(self) -> int:
+        with self.lock, self.conn:
+            return self.conn.execute("UPDATE sprints SET finished_at = ?, outcome = 'INTERRUPTED' WHERE finished_at IS NULL", (now_iso(),)).rowcount
 
     # -- books ------------------------------------------------------------------------------
     def load_book(self, agent_id: str) -> Book:

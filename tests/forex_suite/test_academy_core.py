@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from forex import indicators as ind
-from forex.agents import FOUNDING_CLASS, default_params
+from forex.agents import ALL_AGENTS, FOUNDING_CLASS, default_params
 from forex.backtest import AgentConfig, RandomDirection, bootstrap_drawdown, load_data, run
 from forex.instruments import Converter, default_spec
 from forex.market import MarketStore
@@ -17,7 +17,7 @@ from forex.strategy import Close, Context, Modify, Open
 from tests.forex_suite import synth
 
 TUE_10_NY = int(datetime(2026, 10, 13, 14, 0, tzinfo=timezone.utc).timestamp())  # Tuesday 10:00 New York
-SPECS = {n: default_spec(n) for n in ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD", "USD_CHF", "NZD_USD", "EUR_GBP", "EUR_JPY"]}
+SPECS = {n: default_spec(n) for n in ["EUR_USD", "GBP_USD", "USD_JPY", "AUD_USD", "USD_CAD", "USD_CHF", "NZD_USD", "EUR_GBP", "EUR_JPY", "AUD_NZD", "EUR_CHF", "AUD_CAD"]}
 CONV = Converter({"EUR_USD": 1.10, "GBP_USD": 1.27, "USD_JPY": 150.0, "AUD_USD": 0.66, "USD_CAD": 1.36, "USD_CHF": 0.88, "NZD_USD": 0.61})
 
 
@@ -151,18 +151,18 @@ def test_drawdown_pause():
 @pytest.fixture(scope="module")
 def store(tmp_path_factory):
     s = MarketStore(tmp_path_factory.mktemp("md") / "marketdata.db")
-    synth.fill(s, list(SPECS), {"M15": 9000, "H1": 2400, "H4": 1500, "D": 700})
+    synth.fill(s, list(SPECS) + ["AUD_NZD", "EUR_CHF", "AUD_CAD"], {"M15": 9000, "H1": 2400, "H4": 1500, "D": 700})
     return s
 
 
-@pytest.mark.parametrize("agent", FOUNDING_CLASS, ids=[a["id"] for a in FOUNDING_CLASS])
+@pytest.mark.parametrize("agent", ALL_AGENTS, ids=[a["id"] for a in ALL_AGENTS])
 def test_every_founding_agent_backtests(store, agent):
     params = default_params(agent["strategy"])
     cfg = AgentConfig(agent["id"], agent["strategy"], params, agent["envelope"])
     trig = STRATEGIES[agent["strategy"]].trigger(params)
     first = store.first_time(params["instruments"][0], trig)
     last = store.last_time(params["instruments"][0], trig)
-    span = {"M15": 86400 * 60, "H4": 86400 * 200}[trig]
+    span = {"M15": 86400 * 60, "H4": 86400 * 200, "D": 86400 * 300}[trig]
     start, end = last - span, last
     assert start > first
     data = load_data(store, cfg, start, end)

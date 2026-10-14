@@ -20,6 +20,7 @@ class Open:
     reason: str = ""
     max_hold_minutes: int | None = None
     risk_scale: float = 1.0  # fraction of the envelope's per-trade risk (0 < x <= 1)
+    max_cost_r: float | None = None  # refuse if the spread exceeds this fraction of the stop distance
 
 
 @dataclass(frozen=True)
@@ -72,13 +73,25 @@ class Context:
 
 @dataclass(frozen=True)
 class Tunable:
-    """A parameter the revision process may adjust, one step at a time, within bounds."""
+    """A parameter research may adjust: numeric steps within bounds, or one of fixed choices."""
 
     name: str
-    step: float
-    lo: float
-    hi: float
+    step: float = 0.0
+    lo: float = 0.0
+    hi: float = 0.0
     integer: bool = False
+    choices: tuple | None = None
+
+    def neighbors(self, cur, *, steps: tuple[int, ...] = (-1, 1)) -> list:
+        if self.choices is not None:
+            return [c for c in self.choices if c != cur]
+        out = []
+        for k in steps:
+            v = cur + k * self.step
+            v = int(round(v)) if self.integer else round(v, 6)
+            if self.lo <= v <= self.hi and v != cur:
+                out.append(v)
+        return out
 
 
 class Strategy(Protocol):

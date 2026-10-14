@@ -13,7 +13,7 @@ import { useHeaderHeight, usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
 import { Office } from "../space/Office";
 import { type Camera, PanZoom } from "../space/PanZoom";
-import { ALLOC_COLORS, type AgentId, FirmMap, NAMES, type Selection, signedPctOf, traineeDoing } from "../space/FirmMap";
+import { ALLOC_COLORS, type AgentId, FirmMap, NAMES, type Selection, signedPctOf, traineeDoing, traineeLine } from "../space/FirmMap";
 import { ACADEMY, DEPTS, GROUND, type Dept, type DeptId, FLOORS, type Floor, type FloorId, type Folder, type Rect, TOWER, WORLD, deptById, deptOf, floorById, fxMarketOpen } from "../space/departments";
 import { type AcademySpaceAgent, type AgentState, CIO_TYPES, MOOD_LABEL, type Mood, type Space, STATE_META, cioState, etTime, managerState, moodOf } from "../space/state";
 
@@ -91,7 +91,7 @@ export default function FirmSpace() {
       if (s.kind === "dept") focus(deptById(s.id).rect);
       else if (s.kind === "floor") focus(floorById(s.id).rect);
       else if (s.kind === "person") focus(deptOf(s.id)!.rect);
-      else focus(deptById("hall").rect);
+      else focus(deptById("studio").rect);
     },
     [select, focus],
   );
@@ -101,7 +101,7 @@ export default function FirmSpace() {
   const start = useRef(params.office === "forex" ? floorById("forex").rect : params.office === "academy" ? ACADEMY_RECT : undefined).current;
   useEffect(() => {
     if (params.office === "forex") select({ kind: "floor", id: "forex" });
-    if (params.office === "academy") select({ kind: "floor", id: "academy-hall" });
+    if (params.office === "academy") select({ kind: "floor", id: "academy-research" });
   }, [params.office, select]);
 
   useEffect(() => {
@@ -362,7 +362,7 @@ function TraineePanel({ a, space, onFolder }: { a: AcademySpaceAgent | undefined
             <span className="rounded-full bg-slate-500/10 px-2 py-0.5 text-[11px] text-slate-300">{a.style === "day" ? "Day trader" : "Swing trader"}</span>
           </div>
           <div className="text-xs text-slate-400">{a.persona.tagline}</div>
-          <div className="text-[11px] text-slate-500">A1 · Trading Hall · paper trading · v{a.version}</div>
+          <div className="text-[11px] text-slate-500">{{ RESEARCH: "A1 · Research floor · no trading", PAPER: "A2 · Paper Trading Hall", DEMO: "A3 · Demo Desk · OANDA practice", RETIRED: "A3 · Alumni wall" }[a.stage] ?? ""} · v{a.version}</div>
         </div>
       </header>
       <section className="mt-4 rounded-xl border border-ink-700 bg-ink-850 p-3">
@@ -375,8 +375,15 @@ function TraineePanel({ a, space, onFolder }: { a: AcademySpaceAgent | undefined
         )}
         <p className="mt-2 text-[10px] text-slate-500">source: Forex engine records</p>
       </section>
+      {a.stage === "RESEARCH" ? (
+      <section className="mt-4 text-sm text-slate-300">
+        <h3 className="label mb-2">Research</h3>
+        <p>{a.last_sprint ? `Last sprint ${a.last_sprint.day}: ${a.last_sprint.outcome.replace(/_/g, " ").toLowerCase()}.` : "First research sprint tonight at 1:00 AM New York."}</p>
+        {a.validation && <p className="mt-1 text-xs text-slate-400">Latest validation: {a.validation.toLowerCase()}</p>}
+      </section>
+      ) : (
       <section className="mt-4">
-        <h3 className="label mb-2">Virtual account</h3>
+        <h3 className="label mb-2">{a.stage === "DEMO" ? "Practice account" : "Virtual account"}</h3>
         <div className="grid grid-cols-3 gap-2 text-sm">
           <Mini label="Equity" value={money(a.equity)} />
           <Mini label="Return" value={<span className={tone(a.return_pct)}>{signedPctOf(a.return_pct)}</span>} />
@@ -384,7 +391,8 @@ function TraineePanel({ a, space, onFolder }: { a: AcademySpaceAgent | undefined
         </div>
         {a.validation && <p className="mt-2 text-xs text-slate-400">Validation: {a.validation}</p>}
       </section>
-      <FolderButtons folders={[{ label: `${a.name}'s record`, path: `/academy/${a.id}`, note: "Trades, validation evidence, revisions" }, { label: "The 537 Academy", path: "/academy", note: "Leaderboard, journal, and rates" }]} onFolder={onFolder} />
+      )}
+      <FolderButtons folders={[{ label: `${a.name}'s record`, path: `/academy/${a.id}`, note: "Trades, validation evidence, revisions" }, { label: "The 537 Academy", path: "/academy", note: "Floors, journal, and rates" }, { label: "Sprint reports", path: "/academy/reports", note: "Every night's research results" }]} onFolder={onFolder} />
     </div>
   );
 }
@@ -421,15 +429,21 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
     case "lab": {
       const running = ac?.validations_running ?? [];
       const job = ac?.engine?.job?.name;
-      return running.length ? running.map((r) => `${ac?.agents?.find((a) => a.id === r.agent_id)?.name ?? r.agent_id}: ${r.status}`) : [job ? `Engine job: ${job}.` : "Idle. Racks light up while a validation or weekly review runs."];
+      return running.length ? running.map((r) => `${ac?.agents?.find((a) => a.id === r.agent_id)?.name ?? r.agent_id}: ${r.status.replace("RUNNING: ", "")}`) : [job ? `Engine job: ${job}.` : "Idle. Sprints run every night at 1:00 AM New York; the report is ready by 8:00 AM."];
     }
     case "research":
       return ["Unoccupied."];
-    case "alumni":
-      return ["Empty. No agent has graduated or retired."];
-    case "hall": {
-      const agents = ac?.agents ?? [];
-      return ac?.available ? [`${agents.length} agents trading their own $10,000 virtual accounts.`, `Engine ${ac.engine?.online ? "online" : "offline"}${ac.engine?.market_open ? " · market open" : ""}.`] : ["The Forex engine is not running."];
+    case "alumni": {
+      const retired = (ac?.agents ?? []).filter((a) => a.stage === "RETIRED");
+      return retired.length ? [`${retired.map((a) => a.name).join(", ")} (records kept).`] : ["Empty. No agent has graduated or retired."];
+    }
+    case "studio": case "hall": case "demo-desk": {
+      const stage = d.id === "studio" ? "RESEARCH" : d.id === "hall" ? "PAPER" : "DEMO";
+      const agents = (ac?.agents ?? []).filter((a) => a.stage === stage);
+      if (!ac?.available) return ["The Forex engine is not running."];
+      const head = d.id === "studio" ? `${agents.length} agents in research (no trading).` : d.id === "hall" ? (agents.length ? `${agents.length} agents paper trading $10,000 virtual accounts.` : "Empty: no agent has passed research yet.") : (agents.length ? `${agents.length} of 2 seats taken.` : "Both seats open.");
+      const extra = d.id === "demo-desk" ? (ac.engine?.demo?.configured ? "Practice account connected." : "The OANDA practice account is not set up yet.") : `Engine ${ac.engine?.online ? "online" : "offline"}${ac.engine?.market_open ? " · market open" : ""}.`;
+      return [head, extra];
     }
   }
 }
@@ -438,7 +452,8 @@ function DeptPanel({ d, space, states, events, now, onPick, onFolder }: { d: Dep
   const { overview } = useLive();
   const f = floorById(d.floor);
   const facts = deptFacts(d, space, states, events, now, overview);
-  const trainees = d.id === "hall" ? space.academy?.agents ?? [] : [];
+  const stage = d.id === "studio" ? "RESEARCH" : d.id === "hall" ? "PAPER" : d.id === "demo-desk" ? "DEMO" : d.id === "alumni" ? "RETIRED" : null;
+  const trainees = stage ? (space.academy?.agents ?? []).filter((a) => a.stage === stage) : [];
   return (
     <div>
       <div className="text-[11px] uppercase tracking-wider text-slate-500">{f.building} · {f.level} {f.name}</div>
@@ -461,7 +476,7 @@ function DeptPanel({ d, space, states, events, now, onPick, onFolder }: { d: Dep
             ))}
             {trainees.map((a) => (
               <li key={a.id}>
-                <PersonRow color={a.persona.color} name={a.name} line={`${signedPctOf(a.return_pct)} · ${traineeDoing(a, !!space.academy?.engine?.data_ready)}`} onClick={() => onPick({ kind: "trainee", id: a.id })} />
+                <PersonRow color={a.persona.color} name={a.name} line={traineeLine(a, !!space.academy?.engine?.data_ready)} onClick={() => onPick({ kind: "trainee", id: a.id })} />
               </li>
             ))}
           </ul>

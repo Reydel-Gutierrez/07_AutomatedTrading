@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 # Event types that also go to the owner's phone (when Telegram is configured).
 ALERT_TYPES = frozenset(
     {
+        "ACADEMY_REPORT",
         "ORDER_FILLED",
         "ORDER_REJECTED",
         "ORDER_UNKNOWN",

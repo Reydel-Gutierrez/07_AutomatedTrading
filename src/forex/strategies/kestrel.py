@@ -30,10 +30,14 @@ class LondonBreakout:
     title = "London-open Asian range breakout"
     description = __doc__ or ""
     defaults: Mapping[str, Any] = {
-        "instruments": PAIRS, "range_start": "19:00", "range_end": "02:00", "entry_end": "05:30", "exit_at": "11:00",
-        "min_range_atr": 0.2, "max_range_atr": 0.9, "buffer_pips": 2.0, "h1_ema": 50, "target_r": 1.6, "breakeven_r": 1.0,
+        "instruments": PAIRS, "range_start": "19:00", "range_end": "02:00", "exit_at": "11:00",
+        "min_range_atr": 0.2, "max_range_atr": 0.9, "buffer_pips": 2.0, "h1_ema": 50, "target_r": 1.6, "breakeven_r": 1.0, "entry_end": "05:30", "max_cost_r": 1.0,
     }
-    tunables = (Tunable("target_r", 0.2, 1.0, 3.0), Tunable("max_range_atr", 0.1, 0.5, 1.4), Tunable("buffer_pips", 1.0, 0.0, 6.0))
+    tunables = (
+        Tunable("target_r", 0.2, 1.0, 3.0), Tunable("max_range_atr", 0.1, 0.4, 1.4), Tunable("min_range_atr", 0.05, 0.1, 0.5), Tunable("buffer_pips", 1.0, 0.0, 8.0),
+        Tunable("breakeven_r", 0.25, 0.5, 2.0), Tunable("h1_ema", 25, 25, 150, True), Tunable("entry_end", choices=("04:00", "05:30", "07:00")),
+        Tunable("max_cost_r", choices=(1.0, 0.3, 0.2, 0.12)),
+    )
 
     def feeds(self, p: Mapping[str, Any]) -> dict[tuple[str, str], int]:
         out: dict[tuple[str, str], int] = {}
@@ -92,5 +96,5 @@ class LondonBreakout:
                 continue
             mid = (hi + lo) / 2
             dist = abs(close - mid)
-            out.append(Open(inst, side, stop=mid, target=close + side * p["target_r"] * dist, reason=f"London breakout of Asian range ({width / ctx.specs[inst].pip:.0f} pips) with 1h trend"))
+            out.append(Open(inst, side, stop=mid, target=close + side * p["target_r"] * dist, reason=f"London breakout of Asian range ({width / ctx.specs[inst].pip:.0f} pips) with 1h trend", max_cost_r=p.get("max_cost_r")))
         return out

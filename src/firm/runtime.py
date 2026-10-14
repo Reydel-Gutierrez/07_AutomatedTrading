@@ -26,7 +26,7 @@ from firm.clock import CALENDAR, Clock, et, et_date, iso, is_regular_hours, pars
 from firm.config import account_number, deployed_commit
 from firm.core import Firm
 from firm.db import Database
-from firm.notify import telegram_sink
+from firm.notify import sinks as notification_sinks
 from firm.paths import db_path
 from firm.performance import BENCHMARK
 from firm.scheduler import Job, JobState, Scheduler
@@ -98,7 +98,7 @@ class Service:
         self.clock = clock
         self.started_at = clock()
         self.db = db or Database(db_path())
-        sink = telegram_sink(self.environ)
+        alert_sinks = notification_sinks(self.environ)
         self._writer_client = None
         self.reader = reader or BrokerProxy(lambda: connect_reader(account_number(), self.environ), self._broker_changed)
         self.firm = Firm(
@@ -107,7 +107,7 @@ class Service:
             writer=writer or self._writer,
             clock=clock,
             environ=self.environ,
-            sinks=[sink] if sink else [],
+            sinks=alert_sinks,
         )
         self.scheduler = Scheduler(clock=clock, on_failure=self._job_failed)
         self.cio = build_cio(self.firm, self.health, self.environ)
@@ -147,6 +147,7 @@ class Service:
         add(Job("marks", lambda now, st: self._daily_after(now, "marks", time(16, 20), trading_only=True), self.marks, 300))
         add(Job("market_bars", lambda now, st: self._daily_after(now, "market_bars", time(17, 0)), self.market_bars, 300))
         add(Job("backup", lambda now, st: self._daily_after(now, "backup", time(2, 30)), self.backup, 900))
+        add(Job("academy_report", lambda now, st: self._daily_after(now, "academy_report", time(8, 0)), self.academy_report, 60))
 
     def _sync_due(self, now: datetime, st: JobState) -> bool:
         if not self.firm.reconciler.bootstrapped():
@@ -270,6 +271,16 @@ class Service:
         n = self.firm.market.refresh_bars(sorted(symbols))
         self._mark_daily("market_bars")
         return n
+
+    def academy_report(self) -> dict[str, Any]:
+        """08:00 New York: tell the owner the night's Academy research report is ready (a short line, not the report)."""
+        from firm.api.academy import morning_message
+
+        msg = morning_message(et_date(self.clock()).isoformat())
+        if msg:
+            self.firm.events.emit("ACADEMY_REPORT", msg, actor="academy")
+        self._mark_daily("academy_report")
+        return {"sent": bool(msg)}
 
     def backup(self) -> dict[str, Any]:
         result = run_backup(self.firm, environ=self.environ)

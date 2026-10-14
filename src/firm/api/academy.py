@@ -19,9 +19,11 @@ from typing import Any
 
 from firm.paths import state_root
 
-ACTIONS = {"pause", "resume", "validate", "review", "auto_on", "auto_off"}
+ACTIONS = {"pause", "resume", "validate", "sprint", "auto_on", "auto_off", "to_demo", "to_research", "retire"}
 START_CAPITAL = 10_000.0
-QUALIFY = {"day": {"days": 30, "trades": 100}, "swing": {"days": 60, "trades": 30}}
+# Floor 2 (paper) and Floor 3 (OANDA demo): at least four weeks and enough trades for the result to mean something
+QUALIFY = {"PAPER": {"days": 28, "trades": {"day": 40, "swing": 15}}, "DEMO": {"days": 28, "trades": {"day": 30, "swing": 10}}}
+FLOORS = {"RESEARCH": "Floor 1 · Research", "PAPER": "Floor 2 · Paper trading", "DEMO": "Floor 3 · OANDA Demo Desk", "RETIRED": "Alumni"}
 STALE_SECONDS = 120
 
 
@@ -97,49 +99,86 @@ def _validation(conn: sqlite3.Connection, agent_id: str, version: int, *, full: 
     return out
 
 
-def _readiness(agent: sqlite3.Row, version_created: str, paper: dict[str, Any], validation: dict[str, Any] | None, dd: float, paused: str | None) -> dict[str, Any]:
+def _readiness(agent: sqlite3.Row, paper: dict[str, Any], validation: dict[str, Any] | None, dd: float, paused: str | None, sprint: dict[str, Any] | None) -> dict[str, Any]:
+    """The gates for the agent's next floor. Floor 1 -> 2 is automatic; every move after that is the owner's."""
     from datetime import datetime, timezone
 
-    rule = QUALIFY[agent["style"]]
-    days = (datetime.now(timezone.utc) - datetime.fromisoformat(version_created)).days
-    unseen = (validation or {}).get("unseen") or {}
-    expected, sd, n = unseen.get("avg_r"), paper.get("r_stdev"), paper.get("trades") or 0
-    band_ok = None
-    if expected is not None and paper.get("avg_r") is not None and sd and n > 1:
-        band_ok = paper["avg_r"] >= expected - 2 * sd / math.sqrt(n)
-    checks = [
-        {"name": "Validated by the Examiner", "passed": bool(validation and validation.get("passed")), "detail": (validation or {}).get("status") or "pending"},
-        {"name": f"{rule['days']}+ days of paper trading on this version", "passed": days >= rule["days"], "detail": f"{days} days"},
-        {"name": f"{rule['trades']}+ paper trades on this version", "passed": n >= rule["trades"], "detail": f"{n} trades"},
-        {"name": "Paper results within the validated expectation", "passed": bool(band_ok), "detail": "not enough trades yet" if band_ok is None else ("within band" if band_ok else "below band")},
-        {"name": "Drawdown under 10% and not paused", "passed": dd < 0.10 and not paused, "detail": f"max {dd:.1%}" + (f", paused: {paused}" if paused else "")},
-        {"name": "CIO memo and owner authorization", "passed": False, "detail": "required for any live capital"},
-    ]
-    ready = all(c["passed"] for c in checks[:-1])
-    return {"eligible_for_review": ready, "checks": checks, "label": "Eligible for CIO review" if ready else f"In training ({sum(c['passed'] for c in checks[:-1])}/5 gates)"}
+    stage = agent["stage"]
+    if stage == "RESEARCH":
+        s = (sprint or {}).get("summary") or {}
+        d1 = s.get("day1") or {}
+        v = s.get("validation") or validation or {}
+        checks = [
+            {"name": "Passes the Examiner's validation", "passed": bool(v.get("passed")), "detail": ", ".join(c["name"] for c in v.get("checks", []) if not c["passed"]) or (v.get("status") or "pending").lower()},
+            {"name": "Passes the day-1 test (random start dates)", "passed": bool(d1.get("passed")),
+             "detail": f"{d1['profitable_share']:.0%} of {d1.get('runs')} starts profitable, median {d1['median_return']:+.1%}" if d1.get("runs") else "runs with the nightly sprint"},
+        ]
+        ready = all(c["passed"] for c in checks)
+        return {"next": "Floor 2 · Paper trading", "automatic": True, "eligible": ready, "checks": checks,
+                "label": "Passing: moves to Floor 2 tonight" if ready else f"In research ({sum(c['passed'] for c in checks)}/2 gates)"}
+    if stage in ("PAPER", "DEMO"):
+        rule = QUALIFY[stage]
+        since = agent["stage_since"] or agent["created_at"]
+        days = (datetime.now(timezone.utc) - datetime.fromisoformat(since)).days
+        need = rule["trades"][agent["style"]]
+        unseen = (validation or {}).get("unseen") or {}
+        expected, sd, n = unseen.get("avg_r"), paper.get("r_stdev"), paper.get("trades") or 0
+        band_ok = None
+        if expected is not None and paper.get("avg_r") is not None and sd and n > 1:
+            band_ok = paper["avg_r"] >= expected - 2 * sd / math.sqrt(n)
+        where = "paper" if stage == "PAPER" else "demo"
+        checks = [
+            {"name": f"4+ weeks on this floor", "passed": days >= rule["days"], "detail": f"{days} days"},
+            {"name": f"{need}+ {where} trades", "passed": n >= need, "detail": f"{n} trades"},
+            {"name": f"{where.title()} results in line with the backtest", "passed": bool(band_ok), "detail": "not enough trades yet" if band_ok is None else ("within band" if band_ok else "below band")},
+            {"name": "Drawdown under 10% and not paused", "passed": dd < 0.10 and not paused, "detail": f"max {dd:.1%}" + (f", paused: {paused}" if paused else "")},
+        ]
+        nxt = "Floor 3 · Demo Desk (your approval)" if stage == "PAPER" else "Forex Division live chair (Graham's memo + your authorization)"
+        checks.append({"name": "Owner decision", "passed": False, "detail": "you decide; nothing moves automatically"})
+        ready = all(c["passed"] for c in checks[:-1])
+        return {"next": nxt, "automatic": False, "eligible": ready, "checks": checks,
+                "label": f"Eligible: {nxt}" if ready else f"Proving itself ({sum(c['passed'] for c in checks[:-1])}/4 gates)"}
+    return {"next": None, "automatic": False, "eligible": False, "checks": [], "label": "Retired"}
+
+
+def _latest_sprint(conn: sqlite3.Connection, agent_id: str) -> dict[str, Any] | None:
+    r = conn.execute("SELECT * FROM sprints WHERE agent_id = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1", (agent_id,)).fetchone()
+    if r is None:
+        return None
+    return {"id": r["id"], "day": r["day"], "outcome": r["outcome"], "passed": bool(r["passed"]), "from_version": r["from_version"], "to_version": r["to_version"],
+            "finished_at": r["finished_at"], "summary": json.loads(r["summary_json"] or "{}")}
 
 
 def _card(conn: sqlite3.Connection, a: sqlite3.Row, engine: dict[str, Any]) -> dict[str, Any]:
     acct = conn.execute("SELECT * FROM accounts WHERE agent_id = ?", (a["id"],)).fetchone()
     ver = conn.execute("SELECT * FROM versions WHERE agent_id = ? AND version = ?", (a["id"], a["current_version"])).fetchone()
     all_trades = conn.execute("SELECT * FROM trades WHERE agent_id = ? ORDER BY closed_at", (a["id"],)).fetchall()
-    cur_trades = [t for t in all_trades if t["version"] == a["current_version"]]
+    from datetime import datetime
+
+    floor_since = int(datetime.fromisoformat(a["stage_since"]).timestamp()) if a["stage_since"] else 0
+    cur_trades = [t for t in all_trades if t["version"] == a["current_version"] and t["closed_at"] >= floor_since]
     series = _equity(conn, a["id"])
     equity = series[-1][1] if series else (acct["cash"] if acct else START_CAPITAL)
     positions = conn.execute("SELECT * FROM positions WHERE agent_id = ?", (a["id"],)).fetchall()
     last = conn.execute("SELECT * FROM events WHERE agent_id = ? ORDER BY id DESC LIMIT 1", (a["id"],)).fetchone()
     val = _validation(conn, a["id"], a["current_version"])
+    series = [(t, e) for t, e in series if t >= floor_since] if a["stage"] in ("PAPER", "DEMO") else series
     dd = _drawdown(series)
+    sprint = _latest_sprint(conn, a["id"])
+    sprinting = _kv(conn, f"sprint:{a['id']}", {}) or {}
     live = (engine.get("agents") or {}).get(a["id"], {})
     paper_all, paper_cur = _stats(all_trades), _stats(cur_trades)
     return {
         "id": a["id"], "name": a["name"], "style": a["style"], "strategy": a["strategy"], "persona": json.loads(a["persona_json"]),
         "status": a["status"], "status_reason": a["status_reason"], "paused": acct["paused"] if acct else None,
+        "stage": a["stage"], "floor": FLOORS.get(a["stage"], a["stage"]), "stage_since": a["stage_since"], "klass": a["klass"],
+        "sprint": {k: v for k, v in (sprint or {}).items() if k != "summary"} | {"verdict": ((sprint or {}).get("summary") or {}).get("verdict")} if sprint else None,
+        "sprinting": sprinting if sprinting.get("running") else None,
         "version": a["current_version"], "version_note": ver["note"] if ver else None, "auto_revise": bool(a["auto_revise"]), "trials": a["trials"],
         "equity": round(equity, 2), "cash": round(acct["cash"], 2) if acct else None, "return_pct": equity / START_CAPITAL - 1, "max_drawdown": dd,
         "open_positions": len(positions), "paper": paper_all, "paper_current_version": paper_cur,
         "validation": val, "activity": live.get("activity"), "last_event": dict(last) if last else None,
-        "readiness": _readiness(a, ver["created_at"] if ver else a["created_at"], paper_cur, val, dd, acct["paused"] if acct else None),
+        "readiness": _readiness(a, paper_cur, val, dd, acct["paused"] if acct else None, sprint),
     }
 
 
@@ -152,8 +191,11 @@ def overview() -> dict[str, Any]:
         agents = [_card(conn, a, eng) for a in conn.execute("SELECT * FROM agents WHERE status != 'RETIRED' ORDER BY created_at, id")]
         prices = [dict(r) for r in conn.execute("SELECT * FROM prices ORDER BY instrument")]
         events = [dict(r) for r in conn.execute("SELECT id, ts, agent_id, type, summary FROM events ORDER BY id DESC LIMIT 40")]
+        report = _kv(conn, "sprint_report_latest")
+        sprint_day = _kv(conn, "sprint_day")
     ranked = sorted(agents, key=lambda c: (c["validation"] or {}).get("score") or -1e9, reverse=True)
-    return {"available": True, "engine": eng, "agents": agents, "leaderboard": [c["id"] for c in ranked], "prices": prices, "events": events, "start_capital": START_CAPITAL}
+    return {"available": True, "engine": eng, "agents": agents, "leaderboard": [c["id"] for c in ranked], "prices": prices, "events": events, "start_capital": START_CAPITAL,
+            "latest_report": report, "sprint_day": sprint_day, "floors": FLOORS}
 
 
 def agent(agent_id: str) -> dict[str, Any] | None:
@@ -180,6 +222,10 @@ def agent(agent_id: str) -> dict[str, Any] | None:
         events = [dict(e) for e in conn.execute("SELECT id, ts, type, summary FROM events WHERE agent_id = ? ORDER BY id DESC LIMIT 60", (agent_id,))]
         all_trades = conn.execute("SELECT * FROM trades WHERE agent_id = ?", (agent_id,)).fetchall()
         decision = _kv(conn, f"decision:{agent_id}")
+        sprints = [{**dict(r), "summary": json.loads(r["summary_json"] or "{}")} for r in conn.execute("SELECT * FROM sprints WHERE agent_id = ? ORDER BY id DESC LIMIT 30", (agent_id,))]
+        for sp in sprints:
+            sp.pop("summary_json", None)
+        transitions = [dict(r) for r in conn.execute("SELECT * FROM stage_transitions WHERE agent_id = ? ORDER BY id DESC", (agent_id,))]
         validation = _validation(conn, agent_id, a["current_version"], full=True)
         prices = {r["instrument"]: dict(r) for r in conn.execute("SELECT * FROM prices")}
     for p in positions:
@@ -188,7 +234,7 @@ def agent(agent_id: str) -> dict[str, Any] | None:
     return {
         **card, "equity_series": series[::step] + (series[-1:] if series and (len(series) - 1) % step else []),
         "positions": positions, "trades": trades, "versions": versions, "revisions": revisions, "events": events,
-        "validation": validation, "decision": decision, "diagnostics": diagnostics(all_trades),
+        "validation": validation, "decision": decision, "diagnostics": diagnostics(all_trades), "sprints": sprints, "transitions": transitions,
     }
 
 
@@ -222,7 +268,7 @@ def space_block() -> dict[str, Any]:
         with closing(conn):
             eng = _engine(conn)
             agents = []
-            for a in conn.execute("SELECT * FROM agents WHERE status != 'RETIRED' ORDER BY created_at, id"):
+            for a in conn.execute("SELECT * FROM agents ORDER BY created_at, id"):
                 acct = conn.execute("SELECT cash, paused FROM accounts WHERE agent_id = ?", (a["id"],)).fetchone()
                 last = conn.execute("SELECT equity FROM equity WHERE agent_id = ? ORDER BY ts DESC LIMIT 1", (a["id"],)).fetchone()
                 n_pos = conn.execute("SELECT count(*) AS n FROM positions WHERE agent_id = ?", (a["id"],)).fetchone()["n"]
@@ -233,11 +279,18 @@ def space_block() -> dict[str, Any]:
                     "id": a["id"], "name": a["name"], "style": a["style"], "persona": json.loads(a["persona_json"]), "status": a["status"],
                     "paused": acct["paused"] if acct else None, "equity": round(eq, 2), "return_pct": eq / START_CAPITAL - 1, "positions": n_pos,
                     "activity": ((eng.get("agents") or {}).get(a["id"]) or {}).get("activity"), "last_event": dict(ev) if ev else None,
-                    "validation": val["status"] if val else None, "version": a["current_version"],
+                    "validation": val["status"] if val else None, "version": a["current_version"], "stage": a["stage"],
+                    "sprinting": ((_kv(conn, f"sprint:{a['id']}", {}) or {}).get("step") if (_kv(conn, f"sprint:{a['id']}", {}) or {}).get("running") else None),
+                    "last_sprint": (lambda r: {"day": r["day"], "outcome": r["outcome"]} if r else None)(
+                        conn.execute("SELECT day, outcome FROM sprints WHERE agent_id = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1", (a["id"],)).fetchone()),
                 })
             running = conn.execute("SELECT agent_id, status FROM validations WHERE finished_at IS NULL").fetchall()
+            running = [dict(r) for r in running] + [
+                {"agent_id": a["id"], "status": f"RUNNING: sprint · {(_kv(conn, 'sprint:' + a['id'], {}) or {}).get('step', '')}"}
+                for a in conn.execute("SELECT id FROM agents") if (_kv(conn, f"sprint:{a['id']}", {}) or {}).get("running")
+            ]
             prices = [dict(r) for r in conn.execute("SELECT instrument, bid, ask, time, tradeable FROM prices ORDER BY instrument")]
-        return {"available": True, "engine": {k: eng.get(k) for k in ("online", "heartbeat", "market_open", "data_ready", "job", "last_error")}, "agents": agents, "validations_running": [dict(r) for r in running], "prices": prices}
+        return {"available": True, "engine": {k: eng.get(k) for k in ("online", "heartbeat", "market_open", "data_ready", "job", "last_error", "demo")}, "agents": agents, "validations_running": running, "prices": prices}
     except sqlite3.Error as exc:
         return {"available": False, "error": str(exc)}
 
@@ -257,3 +310,52 @@ def send_command(agent_id: str, action: str, *, by: str, note: str = "") -> None
     tmp = inbox / f".{name}.tmp"
     tmp.write_text(json.dumps({"agent_id": agent_id, "action": action, "by": by, "note": note[:200]}), encoding="utf-8")
     tmp.replace(inbox / f"{name}.json")
+
+
+def reports(limit: int = 30) -> list[dict[str, Any]]:
+    conn = _connect()
+    if conn is None:
+        return []
+    with closing(conn):
+        rows = conn.execute("SELECT key, value_json FROM kv WHERE key LIKE 'sprint_report:%' ORDER BY key DESC LIMIT ?", (limit,)).fetchall()
+    return [json.loads(r["value_json"]) for r in rows]
+
+
+def report(day: str) -> dict[str, Any] | None:
+    conn = _connect()
+    if conn is None:
+        return None
+    with closing(conn):
+        head = _kv(conn, f"sprint_report:{day}")
+        rows = conn.execute("SELECT * FROM sprints WHERE day = ? ORDER BY id", (day,)).fetchall()
+    if head is None and not rows:
+        return None
+    sprints = [{**{k: r[k] for k in r.keys() if k != "summary_json"}, "summary": json.loads(r["summary_json"] or "{}")} for r in rows]
+    return {**(head or {"day": day, "agents": []}), "sprints": sprints}
+
+
+def morning_message(day: str) -> str | None:
+    """One short line for Telegram/Discord: the report is ready, who was tested, who passed."""
+    conn = _connect()
+    if conn is None:
+        return None
+    with closing(conn):
+        rep_ = _kv(conn, f"sprint_report:{day}")
+        research = [r["name"] for r in conn.execute("SELECT name FROM agents WHERE stage = 'RESEARCH' ORDER BY created_at, id")]
+    if rep_ is None:
+        return f"Academy: no research sprint report for {day} yet (the Forex engine may be offline)." if research else None
+    agents = rep_.get("agents") or []
+    if not agents:
+        return None
+    improved = [f"{a['name']} (v{a['to_version']})" for a in agents if a.get("outcome") == "IMPROVED" and a.get("to_version")]
+    retire = [a["name"] for a in agents if a.get("recommend_retire")]
+    parts = [
+        f"📚 Academy sprint report ready for review ({day}).",
+        f"Tested: {', '.join(a['name'] for a in agents)}.",
+        f"Passed and moved to Floor 2: {', '.join(rep_.get('passed') or []) or 'none'}.",
+    ]
+    if improved:
+        parts.append(f"Improved but not passing yet: {', '.join(improved)}.")
+    if retire:
+        parts.append(f"Retirement suggested: {', '.join(retire)}.")
+    return " ".join(parts)

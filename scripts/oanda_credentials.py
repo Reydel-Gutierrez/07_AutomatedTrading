@@ -4,6 +4,7 @@ On the Pi, run as the service account so the file belongs to it:
 
     sudo -u agentic /opt/agentic-portfolio/.venv/bin/python /opt/agentic-portfolio/scripts/oanda_credentials.py set
     sudo -u agentic /opt/agentic-portfolio/.venv/bin/python /opt/agentic-portfolio/scripts/oanda_credentials.py status
+    sudo -u agentic /opt/agentic-portfolio/.venv/bin/python /opt/agentic-portfolio/scripts/oanda_credentials.py set-practice
 
 `set` prompts for the token without echo (it is not on the command line, in shell
 history, or in the process list), writes ~/.agentic-portfolio/forex/oanda.env
@@ -74,6 +75,34 @@ def cmd_set(args: argparse.Namespace) -> int:
     return verify(path)
 
 
+def cmd_set_practice(args: argparse.Namespace) -> int:
+    """The Demo Desk's practice credentials and its two seat sub-accounts, in their own file."""
+    from forex.demo import DEFAULT_PRACTICE_FILE
+
+    path = Path(args.file if args.file != str(DEFAULT_ENV_FILE) else DEFAULT_PRACTICE_FILE)
+    seats = []
+    for i in (1, 2):
+        acct = input(f"Practice sub-account ID for Demo seat {i} (e.g. 101-001-1234567-00{i}): ").strip()
+        if not ACCOUNT_RE.match(acct):
+            print("That does not look like a v20 account ID (###-###-#######-###).", file=sys.stderr)
+            return 2
+        seats.append(acct)
+    if seats[0] == seats[1]:
+        print("Each seat needs its own sub-account (US FIFO and no-hedging rules apply per account).", file=sys.stderr)
+        return 2
+    token = _ask_token()
+    write_env(path, env="practice", token=token, account_id=seats[0])
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(f"DEMO_ACCOUNT_1={seats[0]}\nDEMO_ACCOUNT_2={seats[1]}\n")
+    del token
+    print(f"Stored practice credentials and 2 Demo Desk seats in {path} (mode 600). The token was not displayed.")
+    creds = load_credentials({"OANDA_ENV_FILE": str(path)})
+    if creds.env != "practice":
+        print("Refusing: this file must be a practice account.", file=sys.stderr)
+        return 1
+    return verify(path)
+
+
 def verify(path: Path) -> int:
     try:
         creds = load_credentials({"OANDA_ENV_FILE": str(path)})
@@ -111,6 +140,8 @@ def main() -> int:
     s = sub.add_parser("set", help="prompt for and store credentials, then verify read-only")
     s.add_argument("--env", choices=["live", "practice"], default="live")
     s.set_defaults(func=cmd_set)
+    sp = sub.add_parser("set-practice", help="store the Demo Desk's OANDA practice token and two seat sub-accounts")
+    sp.set_defaults(func=cmd_set_practice)
     st = sub.add_parser("status", help="show where the credentials are and whether they are well-formed")
     st.add_argument("--verify", action="store_true", help="also make one read-only call to OANDA")
     st.set_defaults(func=cmd_status)

@@ -341,12 +341,19 @@ function Seat({ id, x, floorY, c, phase, pending = 0 }: { id: AgentId; x: number
 const TRAINEE_POSE: Record<string, Pose> = { trading: "typing", analyzing: "typing", watching: "reading", error: "alert" };
 
 export function traineeDoing(a: AcademySpaceAgent, dataReady: boolean): string {
+  if (a.stage === "RETIRED") return "retired";
+  if (a.stage === "RESEARCH") {
+    if (a.sprinting) return `sprinting: ${a.sprinting}`;
+    return a.last_sprint ? `in research · last sprint ${(a.last_sprint.outcome || "").replace(/_/g, " ").toLowerCase()}` : "in research · first sprint at 1:00 AM";
+  }
   if (a.paused || a.status === "PAUSED") return "paused";
   if (a.positions) return `${a.positions} open position${a.positions > 1 ? "s" : ""}`;
   if (a.activity === "watching") return "watching the market";
   return dataReady ? "waiting for a setup" : "waiting for market history";
 }
 export const signedPctOf = (x: number) => `${x >= 0 ? "+" : ""}${(x * 100).toFixed(2)}%`;
+/** The one-line status under an Academy agent's name: research agents have no returns to show. */
+export const traineeLine = (a: AcademySpaceAgent, dataReady: boolean) => (a.stage === "RESEARCH" ? `v${a.version} · ${traineeDoing(a, dataReady)}` : `${signedPctOf(a.return_pct)} · ${traineeDoing(a, dataReady)}`);
 
 /** An Academy agent at its desk in the Trading Hall. */
 function Trainee({ a, x, floorY, c }: { a: AcademySpaceAgent; x: number; floorY: number; c: Ctx }) {
@@ -354,7 +361,7 @@ function Trainee({ a, x, floorY, c }: { a: AcademySpaceAgent; x: number; floorY:
   const paused = !!a.paused || a.status === "PAUSED";
   const pose: Pose = paused ? "idle" : TRAINEE_POSE[a.activity ?? ""] ?? "idle";
   const feeling = a.return_pct <= -0.05 ? "stressed" : a.return_pct >= 0.02 ? "pleased" : "calm";
-  const busy = pose === "typing";
+  const busy = pose === "typing" || (a.stage === "RESEARCH" && !!a.sprinting);
   const s = 0.72;
   const top = floorY - 54;
   const selected = c.sel?.kind === "trainee" && c.sel.id === a.id;
@@ -380,7 +387,7 @@ function Trainee({ a, x, floorY, c }: { a: AcademySpaceAgent; x: number; floorY:
           <text x={x} y={top + 26} textAnchor="middle" fontSize="8" fontWeight="700" letterSpacing="1.2" fill={a.persona.color}>{a.name.toUpperCase()}</text>
         </g>
       </g>
-      <Chip x={x} y={floorY - 140} name={a.name} line={`${signedPctOf(a.return_pct)} · ${traineeDoing(a, !!c.space.academy?.engine?.data_ready)}`} dot={a.persona.color} pulse={busy} alert={feeling === "stressed"} selected={selected} />
+      <Chip x={x} y={floorY - 140} name={a.name} line={traineeLine(a, !!c.space.academy?.engine?.data_ready)} dot={a.persona.color} pulse={busy} alert={a.stage !== "RESEARCH" && feeling === "stressed"} selected={selected} />
     </g>
   );
 }
@@ -727,13 +734,13 @@ function Lab({ d, c }: { d: Dept; c: Ctx }) {
   const agents = ac?.agents ?? [];
   const running = ac?.validations_running ?? [];
   const job = ac?.engine?.job?.name ?? null;
-  const busy = running.length > 0 || !!job?.startsWith("review") || !!job?.startsWith("validate");
+  const busy = running.length > 0 || !!job?.startsWith("sprint") || !!job?.startsWith("validate");
   const lines = [
     ...running.map((r) => `${agents.find((a) => a.id === r.agent_id)?.name ?? r.agent_id}: ${r.status.replace("RUNNING: ", "")}`),
     ...(job === "backfill" ? ["Loading OANDA history"] : []),
   ];
   return (
-    <Room d={d} c={c} sub={busy ? "Validation running" : "Idle"}>
+    <Room d={d} c={c} sub={busy ? "Research sprint running" : "Idle until 1:00 AM"}>
       <g pointerEvents="none">
         {[0, 1].map((i) => (
           <g key={i}>
@@ -748,7 +755,7 @@ function Lab({ d, c }: { d: Dept; c: Ctx }) {
         ))}
       </g>
       <Board x={x + 102} y={y + 58} w={90} h={84} light>
-        <text x={x + 108} y={y + 72} fontSize="7" fontWeight="700" letterSpacing="1" fill="#334155">VALIDATION</text>
+        <text x={x + 108} y={y + 72} fontSize="7" fontWeight="700" letterSpacing="1" fill="#334155">SPRINTS</text>
         {(lines.length ? lines : ["Queue empty"]).slice(0, 4).map((l, i) => (
           <text key={i} x={x + 108} y={y + 88 + i * 12} fontSize="7" fill={lines.length ? "#0f766e" : "#64748b"}>{cut(l, 18)}</text>
         ))}
@@ -771,15 +778,20 @@ function Research({ d, c }: { d: Dept; c: Ctx }) {
 function Alumni({ d, c }: { d: Dept; c: Ctx }) {
   const [x, y] = d.rect;
   const f = fy(d.rect);
+  const retired = (c.space.academy?.agents ?? []).filter((a) => a.stage === "RETIRED");
   return (
-    <Room d={d} c={c} sub="None yet" muted>
+    <Room d={d} c={c} sub={retired.length ? `${retired.length} retired` : "None yet"} muted={!retired.length}>
       <g pointerEvents="none">
-        {Array.from({ length: 8 }, (_, i) => (
-          <g key={i} transform={`translate(${x + 18 + (i % 4) * 44} ${y + 60 + Math.floor(i / 4) * 56})`}>
-            <rect width={34} height={44} fill="#1a1512" stroke="#b8975a" strokeWidth="2.5" />
-            <rect x={5} y={5} width={24} height={34} fill="#0f0d0c" />
-          </g>
-        ))}
+        {Array.from({ length: 8 }, (_, i) => {
+          const a = retired[i];
+          return (
+            <g key={i} transform={`translate(${x + 18 + (i % 4) * 44} ${y + 60 + Math.floor(i / 4) * 56})`}>
+              <rect width={34} height={44} fill="#1a1512" stroke="#b8975a" strokeWidth="2.5" />
+              <rect x={5} y={5} width={24} height={34} fill={a ? a.persona.color : "#0f0d0c"} opacity={a ? 0.55 : 1} />
+              {a && <text x={17} y={28} textAnchor="middle" fontFamily="Fraunces, Georgia, serif" fontSize="14" fill="#14110f">{a.name[0]}</text>}
+            </g>
+          );
+        })}
         <rect x={x + 30} y={f - 28} width={140} height={28} fill="#4a2f22" />
         <rect x={x + 26} y={f - 32} width={148} height={7} rx={2} fill="#6b4430" />
       </g>
@@ -787,17 +799,40 @@ function Alumni({ d, c }: { d: Dept; c: Ctx }) {
   );
 }
 
-function Hall({ d, c }: { d: Dept; c: Ctx }) {
+/** A floor of Academy desks for the agents at one stage (open seats fill the rest). */
+function Desks({ d, c, stage, seats, sub, plate }: { d: Dept; c: Ctx; stage: AcademySpaceAgent["stage"]; seats: number; sub: string; plate: string }) {
   const [x, , w] = d.rect;
   const f = fy(d.rect);
-  const agents = c.space.academy?.agents ?? [];
-  const n = Math.max(agents.length, 4);
+  const agents = (c.space.academy?.agents ?? []).filter((a) => a.stage === stage);
+  const n = Math.max(agents.length, seats);
   const step = (w - 20) / n;
   return (
-    <Room d={d} c={c} sub={c.space.academy?.available ? `${agents.length} agents paper trading` : "Forex engine not running"}>
+    <Room d={d} c={c} sub={c.space.academy?.available ? sub.replace("{n}", String(agents.length)) : "Forex engine not running"}>
       {agents.map((a, i) => <Trainee key={a.id} a={a} x={x + 10 + step * (i + 0.5)} floorY={f} c={c} />)}
-      {Array.from({ length: n - agents.length }, (_, i) => <EmptyDesk key={i} x={x + 10 + step * (agents.length + i + 0.5)} y={f} w={100} plate="OPEN SEAT" tone="#4a3b30" />)}
+      {Array.from({ length: n - agents.length }, (_, i) => <EmptyDesk key={i} x={x + 10 + step * (agents.length + i + 0.5)} y={f} w={100} plate={plate} tone="#4a3b30" />)}
     </Room>
+  );
+}
+
+function Hall({ d, c }: { d: Dept; c: Ctx }) {
+  return <Desks d={d} c={c} stage="PAPER" seats={6} sub="{n} paper trading on live prices" plate="OPEN SEAT" />;
+}
+
+function Studio({ d, c }: { d: Dept; c: Ctx }) {
+  return <Desks d={d} c={c} stage="RESEARCH" seats={7} sub="{n} agents in research" plate="OPEN DESK" />;
+}
+
+function DemoDesk({ d, c }: { d: Dept; c: Ctx }) {
+  const [x, y] = d.rect;
+  const demo = c.space.academy?.engine?.demo;
+  return (
+    <g>
+      <Desks d={d} c={c} stage="DEMO" seats={2} sub="{n} of 2 seats taken" plate="DEMO SEAT" />
+      <Board x={x + 150} y={y + 40} w={200} h={46}>
+        <text x={x + 160} y={y + 58} fontSize="8.5" fontWeight="700" letterSpacing="1.6" fill="#f59e0b" opacity=".85">OANDA PRACTICE</text>
+        <text x={x + 160} y={y + 74} fontSize="8" fill={demo?.configured ? "#34d399" : "#94a3b8"}>{demo?.configured ? `${demo.seats} seat account${demo.seats === 1 ? "" : "s"} connected` : "Practice account not set up yet"}</text>
+      </Board>
+    </g>
   );
 }
 
@@ -813,6 +848,8 @@ function DeptRoom({ d, c }: { d: Dept; c: Ctx }) {
     case "records": return <Records d={d} c={c} />;
     case "operations": return <Operations d={d} c={c} />;
     case "lab": return <Lab d={d} c={c} />;
+    case "studio": return <Studio d={d} c={c} />;
+    case "demo-desk": return <DemoDesk d={d} c={c} />;
     case "research": return <Research d={d} c={c} />;
     case "alumni": return <Alumni d={d} c={c} />;
     case "hall": return <Hall d={d} c={c} />;
@@ -875,8 +912,8 @@ const City = memo(function City({ onBackground }: { onBackground: () => void }) 
       <Tree x={1268} s={0.95} />
       <Lamp x={1300} />
       <Lamp x={-10} />
-      <Tree x={2000} s={1.15} />
-      <Lamp x={1970} />
+      <Tree x={2540} s={1.15} />
+      <Lamp x={2500} />
     </g>
   );
 });
@@ -905,10 +942,10 @@ const Buildings = memo(function Buildings() {
       {/* The 537 Academy */}
       <rect x={ACADEMY.x0 - 12} y={ACADEMY.top - 12} width={ACADEMY.x1 - ACADEMY.x0 + 24} height={GROUND - ACADEMY.top + 12} fill="#241d18" />
       <rect x={ACADEMY.x0 - 20} y={ACADEMY.top - 18} width={ACADEMY.x1 - ACADEMY.x0 + 40} height={14} fill="#3a2e26" />
-      <rect x={1460} y={ACADEMY.top - 46} width={6} height={28} fill="#3a2e26" />
-      <rect x={1774} y={ACADEMY.top - 46} width={6} height={28} fill="#3a2e26" />
-      <rect x={1430} y={ACADEMY.top - 96} width={380} height={52} rx={4} fill="#14110f" stroke="#cdb27a" strokeOpacity=".7" strokeWidth="2" />
-      <text x={1620} y={ACADEMY.top - 61} textAnchor="middle" fontFamily="Fraunces, Georgia, serif" fontSize="24" letterSpacing="4" fill="#e4cf9f">THE 537 ACADEMY</text>
+      <rect x={(ACADEMY.x0 + ACADEMY.x1) / 2 - 160} y={ACADEMY.top - 46} width={6} height={28} fill="#3a2e26" />
+      <rect x={(ACADEMY.x0 + ACADEMY.x1) / 2 + 154} y={ACADEMY.top - 46} width={6} height={28} fill="#3a2e26" />
+      <rect x={(ACADEMY.x0 + ACADEMY.x1) / 2 - 190} y={ACADEMY.top - 96} width={380} height={52} rx={4} fill="#14110f" stroke="#cdb27a" strokeOpacity=".7" strokeWidth="2" />
+      <text x={(ACADEMY.x0 + ACADEMY.x1) / 2} y={ACADEMY.top - 61} textAnchor="middle" fontFamily="Fraunces, Georgia, serif" fontSize="24" letterSpacing="4" fill="#e4cf9f">THE 537 ACADEMY</text>
       {acSlabs.map((f) => <Slab key={f.id} f={f} x0={ACADEMY.x0 - 12} x1={ACADEMY.x1 + 12} />)}
       {walls("The 537 Academy").filter((d) => d.rect[0] > ACADEMY.x0).map((d) => <rect key={d.id} x={d.rect[0] - 3} y={d.rect[1]} width={6} height={d.rect[3] - SLAB} fill="#2a221d" />)}
     </g>

@@ -1,11 +1,11 @@
-// The 537 Academy: four independent forex agents paper trading $10,000 each on live OANDA
-// data, with their validation evidence, revisions, and promotion readiness. Every number
-// is read from the Forex engine's records; nothing here can place a broker order.
+// The 537 Academy, floor by floor: Floor 1 research (nightly sprints on OANDA history),
+// Floor 2 paper trading on live prices, Floor 3 the OANDA Demo Desk. Every number is read
+// from the Forex engine's records; nothing here can place a live broker order.
 
 import { type ReactNode, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { type AcademyOverview, type AgentCard, type AgentDetail, type Check, type FxPrice, type Stats, type ValidationReport, epochIso, fmtPx, fmtR, pair, pips } from "../academy";
+import { type AcademyOverview, type AgentCard, type AgentDetail, type Check, FLOOR_ORDER, type FxPrice, type SprintReport, type Stats, type ValidationReport, epochIso, fmtPx, fmtR, pair, pips } from "../academy";
 import { Card, Empty, ErrorLine, Modal, useAction } from "../components/ui";
 import { usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
@@ -13,7 +13,8 @@ import { ago, money, pct, signedPct, tone, when } from "../format";
 const STYLE_LABEL = { day: "Day trader", swing: "Swing trader" } as const;
 
 export default function Academy() {
-  const { id } = useParams();
+  const { id, day } = useParams();
+  if (id === "reports") return <ReportsPage day={day} />;
   return id ? <AgentPage id={id} /> : <AcademyHome />;
 }
 
@@ -42,16 +43,38 @@ function AcademyHome() {
         <div>
           <h1 className="font-display text-2xl text-slate-50">The 537 Academy</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-400">
-            Four independent forex agents, each trading its own $10,000 virtual account on live OANDA prices. They are validated against history,
-            revise their strategies under strict controls, and compete for promotion. Paper only: no broker orders are placed.
+            Forex agents climb three floors on evidence: research on OANDA history (polished by a sprint every night), paper trading on live
+            prices, then real orders on an OANDA practice account. Live capital needs Graham's memo and your authorization.
           </p>
         </div>
         <EngineBadge engine={data.engine} />
       </header>
       <EngineBar engine={data.engine} />
-      <div className="grid gap-4 md:grid-cols-2">
-        {agents.map((a, i) => <AgentTile key={a.id} a={a} rank={i + 1} />)}
-      </div>
+      <ReportCard report={data.latest_report ?? null} />
+      {FLOOR_ORDER.map((f) => {
+        const here = agents.filter((a) => a.stage === f.stage);
+        return (
+          <section key={f.stage}>
+            <header className="mb-2">
+              <h2 className="text-sm font-semibold uppercase tracking-[0.18em] text-gold-300">{f.title} <span className="text-slate-500">· {here.length}</span></h2>
+              <p className="text-xs text-slate-500">{f.blurb}</p>
+            </header>
+            {here.length ? (
+              <div className="grid gap-4 md:grid-cols-2">{here.map((a) => <AgentTile key={a.id} a={a} rank={agents.indexOf(a) + 1} />)}</div>
+            ) : (
+              <p className="rounded-xl border border-dashed border-ink-700 p-4 text-sm text-slate-500">
+                {f.stage === "DEMO" ? (data.engine?.demo?.configured ? "Both seats are open." : "Both seats are open. The Demo Desk also needs the OANDA practice account set up on the Pi.") : f.stage === "PAPER" ? "No agent has passed research yet." : "No agents in research."}
+              </p>
+            )}
+          </section>
+        );
+      })}
+      {agents.some((a) => a.stage === "RETIRED") && (
+        <section>
+          <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.18em] text-slate-400">Alumni (retired)</h2>
+          <div className="grid gap-4 md:grid-cols-2">{agents.filter((a) => a.stage === "RETIRED").map((a) => <AgentTile key={a.id} a={a} rank={0} />)}</div>
+        </section>
+      )}
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Card title="Academy journal">
           {data.events.length ? (
@@ -74,6 +97,94 @@ function AcademyHome() {
   );
 }
 
+function ReportCard({ report }: { report: SprintReport | null }) {
+  if (!report) {
+    return (
+      <Card title="Research sprint report">
+        <p className="text-sm text-slate-400">The first nightly sprint runs at 1:00 AM New York. Its report appears here, with a short message to you at 8:00 AM.</p>
+      </Card>
+    );
+  }
+  return (
+    <Card title={`Research sprint report · ${report.day}`} action={<Link to={`/academy/reports/${report.day}`} className="text-xs text-gold-400 hover:underline">Full report →</Link>}>
+      <div className="grid gap-3 text-sm sm:grid-cols-3">
+        <div><div className="label">Passed → Floor 2</div><div className="mt-1 text-slate-100">{report.passed.join(", ") || "None yet"}</div></div>
+        <div><div className="label">Improved (new version)</div><div className="mt-1 text-slate-100">{report.improved.join(", ") || "None"}</div></div>
+        <div><div className="label">Tested</div><div className="mt-1 text-slate-100">{report.agents.map((a) => a.name).join(", ")}</div></div>
+      </div>
+    </Card>
+  );
+}
+
+function ReportsPage({ day }: { day?: string }) {
+  const list = useResource<{ reports: SprintReport[] }>("/api/academy/reports", { every: 0 });
+  const chosen = day ?? list.data?.reports[0]?.day;
+  const rep = useResource<SprintReport>(chosen ? `/api/academy/reports/${chosen}` : null, { every: 0 });
+  const r = rep.data;
+  return (
+    <div className="mx-auto max-w-6xl space-y-5 p-4 sm:p-6">
+      <Link to="/academy" className="text-xs text-slate-500 hover:text-slate-300">← The 537 Academy</Link>
+      <header className="flex flex-wrap items-end justify-between gap-3">
+        <h1 className="font-display text-2xl text-slate-50">Research sprint reports</h1>
+        <div className="flex flex-wrap gap-1 text-xs">
+          {(list.data?.reports ?? []).map((x) => (
+            <Link key={x.day} to={`/academy/reports/${x.day}`} className={`rounded-md px-2.5 py-1 ${x.day === chosen ? "bg-ink-700 text-slate-50" : "text-slate-400 hover:text-slate-200"}`}>{x.day}</Link>
+          ))}
+        </div>
+      </header>
+      {!chosen && <Empty>No sprint has run yet. The first runs tonight at 1:00 AM New York.</Empty>}
+      {r && (
+        <>
+          <p className="text-sm text-slate-400">
+            Each Floor 1 agent was polished on OANDA history (candidates scored on everything before the locked final year), then its best
+            version went through the gates: the Examiner's validation and the day-1 test (fresh $10,000 accounts started on random dates).
+          </p>
+          {(r.sprints ?? []).map((sp) => {
+            const sm = sp.summary;
+            const v = sm.validation;
+            const d1 = sm.day1;
+            return (
+              <Card key={sp.id} title={`${sm.agent ?? sp.agent_id} · v${sp.from_version}${sp.to_version ? ` → v${sp.to_version}` : ""} · ${(sp.outcome ?? "").replace(/_/g, " ").toLowerCase()}`}
+                action={<Link to={`/academy/${sp.agent_id}`} className="text-xs text-gold-400 hover:underline">Agent →</Link>}>
+                <p className={`text-sm ${sp.passed ? "text-emerald-300" : "text-slate-200"}`}>{sm.verdict}</p>
+                <div className="mt-3 grid gap-3 text-xs sm:grid-cols-3">
+                  <div className="rounded-lg bg-ink-850 p-2.5">
+                    <div className="label">Research window</div>
+                    <p className="mt-1 text-slate-300">Current: {fmtR(sm.current?.avg_r)} over {sm.current?.trades ?? 0} trades, {sm.current?.positive_folds ?? 0}/4 periods positive</p>
+                    {sm.best && <p className="mt-1 text-slate-300">Best candidate ({sm.best.label}): {fmtR(sm.best.avg_r)} over {sm.best.trades}, {sm.best.positive_folds}/4 positive</p>}
+                    <p className="mt-1 text-slate-500">{sm.tested ?? 0} new variants tried tonight · {sm.sprints_so_far ?? 1} sprint(s) so far</p>
+                  </div>
+                  <div className="rounded-lg bg-ink-850 p-2.5">
+                    <div className="label">Validation ({sm.gated === "candidate" ? "candidate" : "current version"})</div>
+                    {v ? (
+                      <>
+                        <p className="mt-1 text-slate-300">Unseen data: {fmtR(v.unseen?.avg_r)} over {v.unseen?.trades ?? 0} trades, {signedPct(v.unseen?.return_pct)}</p>
+                        <p className="mt-1 text-slate-300">Locked final year: {fmtR(v.holdout?.avg_r)}, {signedPct(v.holdout?.return_pct)}</p>
+                        <p className="mt-1 text-slate-500">Failing: {v.checks.filter((c) => !c.passed).map((c) => c.name).join(", ") || "nothing"}</p>
+                      </>
+                    ) : <p className="mt-1 text-slate-500">Not run</p>}
+                  </div>
+                  <div className="rounded-lg bg-ink-850 p-2.5">
+                    <div className="label">Day-1 test (random start dates)</div>
+                    {d1?.runs ? (
+                      <>
+                        <p className="mt-1 text-slate-300">{pct(d1.profitable_share, 0)} of {d1.runs} starts profitable after {d1.horizon_days} days</p>
+                        <p className="mt-1 text-slate-300">Median {signedPct(d1.median_return)} · worst {signedPct(d1.worst_return)} · best {signedPct(d1.best_return)}</p>
+                        <p className="mt-1 text-slate-500">{d1.passed ? "Passed" : "Not passed"}: {d1.rule}</p>
+                      </>
+                    ) : <p className="mt-1 text-slate-500">Not run</p>}
+                  </div>
+                </div>
+                {sm.recommend_retire && <p className="mt-3 text-xs text-amber-300">Retirement suggested: {sm.sprints_so_far} sprints without passing. You decide from the agent's page.</p>}
+              </Card>
+            );
+          })}
+        </>
+      )}
+    </div>
+  );
+}
+
 function EngineBadge({ engine }: { engine?: AcademyOverview["engine"] }) {
   const on = !!engine?.online;
   return (
@@ -91,10 +202,11 @@ function EngineBar({ engine }: { engine?: AcademyOverview["engine"] }) {
     ["FX market", engine.market_open ? "Open" : "Closed"],
     ["Market history", data.ready ? "Loaded" : data.progress ? `Loading ${data.progress}` : "Not loaded"],
     ["Background work", engine.job ? `${engine.job.name.replace(":", " · ")} (${ago(epochIso(engine.job.since))})` : engine.queue?.length ? `${engine.queue.length} queued` : "Idle"],
+    ["Demo Desk", engine.demo?.configured ? `${engine.demo.seats} practice seat${engine.demo.seats === 1 ? "" : "s"} ready` : "Practice account not set up"],
     ["Heartbeat", engine.heartbeat ? ago(epochIso(engine.heartbeat)) : "—"],
   ];
   return (
-    <section className="grid grid-cols-2 gap-3 rounded-xl border border-ink-800 bg-ink-900/60 p-3 text-xs sm:grid-cols-4">
+    <section className="grid grid-cols-2 gap-3 rounded-xl border border-ink-800 bg-ink-900/60 p-3 text-xs sm:grid-cols-5">
       {items.map(([k, v]) => (
         <div key={k} className="min-w-0">
           <div className="text-slate-500">{k}</div>
@@ -109,7 +221,7 @@ function EngineBar({ engine }: { engine?: AcademyOverview["engine"] }) {
 function ValidationBadge({ v }: { v: AgentCard["validation"] }) {
   if (v?.running) return <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-300">Validating…</span>;
   if (!v?.status) return <span className="rounded bg-slate-500/10 px-1.5 py-0.5 text-[10px] text-slate-400">Not validated yet</span>;
-  return <span className={`rounded px-1.5 py-0.5 text-[10px] ${v.passed ? "bg-emerald-500/10 text-emerald-300" : "bg-rose-500/10 text-rose-300"}`}>{v.passed ? "Validated" : "Failed validation"}</span>;
+  return <span className={`rounded px-1.5 py-0.5 text-[10px] ${v.passed ? "bg-emerald-500/10 text-emerald-300" : "bg-amber-500/10 text-amber-300"}`}>{v.passed ? "Validated" : "Not passing yet"}</span>;
 }
 
 function AgentTile({ a, rank }: { a: AgentCard; rank: number }) {
@@ -125,24 +237,32 @@ function AgentTile({ a, rank }: { a: AgentCard; rank: number }) {
             <ValidationBadge v={v} />
             {a.paused && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">Paused</span>}
           </div>
-          <div className="text-xs text-slate-400">{a.persona.tagline} · {STYLE_LABEL[a.style]} · v{a.version}</div>
+          <div className="text-xs text-slate-400">{a.persona.tagline} · {STYLE_LABEL[a.style]} · v{a.version}{a.klass > 1 ? ` · class ${a.klass}` : ""}</div>
         </div>
-        <div className="text-right">
-          <div className="font-semibold tabular-nums text-slate-50">{money(a.equity)}</div>
-          <div className={`text-xs tabular-nums ${tone(a.return_pct)}`}>{signedPct(a.return_pct)}</div>
-        </div>
+        {a.stage === "PAPER" || a.stage === "DEMO" ? (
+          <div className="text-right">
+            <div className="font-semibold tabular-nums text-slate-50">{money(a.equity)}</div>
+            <div className={`text-xs tabular-nums ${tone(a.return_pct)}`}>{signedPct(a.return_pct)}</div>
+          </div>
+        ) : (
+          <div className="text-right text-xs text-slate-400">{a.sprinting ? <span className="text-sky-300">Sprinting: {a.sprinting.step}</span> : a.sprint ? `Last sprint ${a.sprint.day}` : "First sprint tonight"}</div>
+        )}
       </div>
-      <dl className="mt-4 grid grid-cols-4 gap-2 text-xs">
-        <Mini label="Paper trades" value={a.paper.trades} />
-        <Mini label="Win rate" value={pct(a.paper.win_rate, 0)} />
-        <Mini label="Avg R" value={fmtR(a.paper.avg_r)} />
-        <Mini label="Max DD" value={pct(a.max_drawdown, 1)} />
-      </dl>
+      {a.stage === "PAPER" || a.stage === "DEMO" ? (
+        <dl className="mt-4 grid grid-cols-4 gap-2 text-xs">
+          <Mini label={a.stage === "DEMO" ? "Demo trades" : "Paper trades"} value={a.paper_current_version.trades} />
+          <Mini label="Win rate" value={pct(a.paper_current_version.win_rate, 0)} />
+          <Mini label="Avg R" value={fmtR(a.paper_current_version.avg_r)} />
+          <Mini label="Max DD" value={pct(a.max_drawdown, 1)} />
+        </dl>
+      ) : (
+        <p className="mt-3 line-clamp-3 text-xs text-slate-300">{a.sprint?.verdict ?? "Waiting for its first research sprint (01:00 NY)."}</p>
+      )}
       <div className="mt-3 flex items-center justify-between gap-2 text-xs">
         <span className="text-slate-400">
           {v?.unseen ? <>Backtest (unseen data): {fmtR(v.unseen.avg_r)} avg over {v.unseen.trades} trades</> : "Backtest evidence pending"}
         </span>
-        <span className={a.readiness.eligible_for_review ? "text-emerald-300" : "text-slate-500"}>{a.readiness.label}</span>
+        <span className={a.readiness.eligible ? "text-emerald-300" : "text-slate-500"}>{a.readiness.label}</span>
       </div>
       {a.last_event && <p className="mt-2 truncate text-[11px] text-slate-500">{a.last_event.summary} · {ago(a.last_event.ts)}</p>}
     </Link>
@@ -201,6 +321,7 @@ function AgentPage({ id }: { id: string }) {
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <h1 className="font-display text-2xl text-slate-50">{a.name}</h1>
+            <span className="rounded bg-gold-500/10 px-1.5 py-0.5 text-[10px] text-gold-200">{a.floor}</span>
             <ValidationBadge v={v} />
             {a.paused && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">Paused: {a.paused}</span>}
           </div>
@@ -228,9 +349,13 @@ function AgentPage({ id }: { id: string }) {
 
       <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_380px]">
         <ValidationCard report={report} summary={v} />
-        <Card title="Promotion readiness">
+        <Card title={a.readiness.next ? `Next: ${a.readiness.next}` : "Retired"}>
           <CheckList checks={a.readiness.checks} />
-          <p className="mt-3 text-xs text-slate-500">Promotion to live capital always needs Graham's evaluation and your explicit authorization. Nothing promotes automatically.</p>
+          <p className="mt-3 text-xs text-slate-500">
+            {a.readiness.automatic
+              ? "Floor 1 → 2 is automatic when every gate passes. After that, every move is your decision; live capital also needs Graham's memo."
+              : "You decide every move above Floor 2. Live capital always needs Graham's memo and your explicit authorization."}
+          </p>
         </Card>
       </div>
 
@@ -286,6 +411,21 @@ function AgentPage({ id }: { id: string }) {
       </div>
 
       <div className="grid gap-5 lg:grid-cols-2">
+        <Card title="Research sprints">
+          {a.sprints.length ? (
+            <ul className="space-y-3 text-sm">
+              {a.sprints.map((sp) => (
+                <li key={sp.id}>
+                  <p className="text-slate-200">
+                    <Link to={`/academy/reports/${sp.day}`} className="text-gold-300 hover:underline">{sp.day}</Link> · {(sp.outcome ?? "running").replace(/_/g, " ").toLowerCase()}
+                    {sp.to_version ? ` → v${sp.to_version}` : ""}
+                  </p>
+                  <p className="text-xs text-slate-500">{sp.summary.verdict ?? sp.summary.change ?? ""}</p>
+                </li>
+              ))}
+            </ul>
+          ) : <p className="text-sm text-slate-500">{a.stage === "RESEARCH" ? "The first sprint runs tonight at 1:00 AM New York." : "Agents above Floor 1 are not modified; a strategy that needs changes goes back to research."}</p>}
+        </Card>
         <Card title="Versions and revisions">
           <ul className="space-y-3 text-sm">
             {a.revisions.map((r) => (
@@ -327,11 +467,20 @@ function Controls({ a, onDone }: { a: AgentDetail; onDone: () => void }) {
     pause: ["Pause", "Stop new paper entries. Open paper positions keep their stops and targets."],
     resume: ["Resume", "Allow new paper entries again (the drawdown peak resets to today's equity)."],
     validate: ["Re-validate", "Run the full validation on the latest OANDA history. Takes a few minutes on the Pi."],
-    review: ["Review now", "Run a revision review now instead of waiting for Saturday. A change is adopted only if it passes validation."],
-    auto_on: ["Auto-revise on", "Let weekly reviews adopt validated improvements."],
-    auto_off: ["Auto-revise off", "Keep the current version until you change this back."],
+    sprint: ["Sprint now", "Run tonight's research sprint now (a few minutes on the Pi). It adopts a better version, and promotes to Floor 2 only if every gate passes."],
+    auto_on: ["Nightly sprints on", "Include this agent in the 1:00 AM research sprints."],
+    auto_off: ["Nightly sprints off", "Skip this agent in the nightly sprints; it keeps its current version."],
+    to_demo: ["Give a Demo Desk seat", "Move to Floor 3: real orders on its own OANDA practice sub-account (fake money). Its paper positions close first."],
+    to_research: ["Send back to research", "Return to Floor 1. Any open paper positions close at the market; nightly sprints resume."],
+    retire: ["Retire", "Retire this agent to the Alumni wall. Its records are kept; it stops trading and researching."],
   };
-  const buttons = [a.paused ? "resume" : "pause", "validate", "review", a.auto_revise ? "auto_off" : "auto_on"];
+  const buttons = a.stage === "RESEARCH"
+    ? ["sprint", a.auto_revise ? "auto_off" : "auto_on", "validate", "retire"]
+    : a.stage === "PAPER"
+      ? [a.paused ? "resume" : "pause", "to_demo", "to_research", "retire"]
+      : a.stage === "DEMO"
+        ? [a.paused ? "resume" : "pause", "to_research", "retire"]
+        : [];
   return (
     <div className="flex flex-wrap gap-2">
       {buttons.map((b) => (
@@ -341,7 +490,7 @@ function Controls({ a, onDone }: { a: AgentDetail; onDone: () => void }) {
         {confirm && (
           <div className="space-y-3 text-sm">
             <p className="text-slate-300">{LABELS[confirm][1]}</p>
-            <p className="text-xs text-slate-500">Paper trading only. This never touches the OANDA account.</p>
+            <p className="text-xs text-slate-500">{confirm === "to_demo" ? "Practice account only: fake money, real OANDA orders. Your live account is never touched." : "This never touches your live OANDA account."}</p>
             <ErrorLine error={act.error} />
             <div className="flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setConfirm(null)}>Cancel</button>

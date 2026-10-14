@@ -9,7 +9,7 @@ from forex.agents import FOUNDING_CLASS, default_params
 from forex.backtest import AgentConfig
 from forex.instruments import UNIVERSE, default_spec
 from forex.market import MarketStore
-from forex.revision import candidates, review
+from forex.research import day1_test, generate, params_hash, sprint
 
 from tests.forex_suite import synth
 
@@ -55,33 +55,53 @@ def test_validation_without_data():
     assert validation.validate(empty, cfg("atlas"), SPECS)["status"] == "NO_DATA"
 
 
-def test_revision_candidates_stay_in_bounds_and_learn_from_instruments():
-    c = cfg("mira")
-    paper = {"EUR_GBP": {"trades": 12, "avg_r": -0.6}, "AUD_USD": {"trades": 10, "avg_r": 0.2}}
-    cands = candidates(c, paper, {"EUR_GBP": {"trades": 30, "avg_r": -0.1}})
-    labels = [label for label, _ in cands]
-    assert any(label.startswith("drop EUR_GBP") for label in labels)
+def test_generate_explores_new_candidates_within_bounds():
+    import random
+
     from forex.strategies import STRATEGIES
 
-    for _, p in cands:
+    c = cfg("mira")
+    first = generate(c, tested=set(), budget=12, rng=random.Random(1), evidence={"AUD_USD": -20.0})
+    assert len(first) == 12 and first[0][0] == "drop AUD_USD"  # the worst evidence is tried first
+    hashes = {params_hash(p) for _, p in first}
+    assert params_hash(c.params) not in hashes
+    second = generate(c, tested=hashes, budget=12, rng=random.Random(2))
+    assert not hashes & {params_hash(p) for _, p in second}  # later nights keep exploring
+    for _, p in first + second:
         for t in STRATEGIES[c.strategy].tunables:
-            assert t.lo <= p[t.name] <= t.hi
+            if t.choices:
+                assert p[t.name] in t.choices
+            else:
+                assert t.lo <= p[t.name] <= t.hi
 
 
-def test_review_never_uses_the_holdout(store, short_windows, monkeypatch):
-    seen = []
-    import forex.revision as rev
+def test_day1_test_runs_fresh_accounts_on_random_dates(store, short_windows, monkeypatch):
+    import forex.research as research
 
-    real_load = rev.load_data
+    monkeypatch.setitem(research.DAY1, "horizon_days", {"day": 10, "swing": 20})
+    out = day1_test(store, cfg("kestrel"), SPECS, runs=6)
+    assert out["runs"] == 6 and 0 <= out["profitable_share"] <= 1 and out["worst_return"] <= out["median_return"] <= out["best_return"]
+    assert out == day1_test(store, cfg("kestrel"), SPECS, runs=6)  # same dates every time (fair comparisons)
 
-    def spy(store_, cfg_, start, end, *a, **k):
-        seen.append(end)
-        return real_load(store_, cfg_, start, end, *a, **k)
 
-    monkeypatch.setattr(rev, "load_data", spy)
-    monkeypatch.setattr(rev, "validate", lambda *a, **k: {"status": "FAILED", "passed": False, "score": -1, "checks": [{"passed": False}]})
+def test_sprint_never_chooses_on_the_holdout(store, short_windows, monkeypatch):
+    import forex.research as research
+
+    monkeypatch.setitem(research.DAY1, "horizon_days", {"day": 10, "swing": 20})
+    monkeypatch.setitem(research.BUDGET, "day", 4)
+    windows_seen = []
+    real_run = research.run
+
+    def spy(cfg_, data, specs, start, end, **k):
+        windows_seen.append((start, end))
+        return real_run(cfg_, data, specs, start, end, **k)
+
+    monkeypatch.setattr(research, "run", spy)
+    monkeypatch.setattr(research, "validate", lambda *a, **k: {"status": "FAILED", "passed": False, "score": 0, "checks": [{"name": "x", "passed": False}], "metrics": {}})
     c = cfg("kestrel")
-    out = review(store, c, SPECS, current_validation=None, trials=1)
-    end = validation.data_end(store, c)
-    assert seen and all(e <= end - 20 * 86400 for e in seen)
-    assert out["outcome"] in ("KEPT", "REJECTED", "ADOPTED") and out["trials"] >= 2
+    out = sprint(store, c, SPECS, tested=set(), trials=1, day="2026-10-13")
+    hold_start = out["windows"]["holdout"][0]
+    scoring = windows_seen[:5]  # current + 4 candidates
+    assert all(end <= hold_start for _, end in scoring)
+    assert out["outcome"] in ("IMPROVED", "NO_IMPROVEMENT") and out["tested"] == 4 and out["trials"] == 5
+    assert out["verdict"]

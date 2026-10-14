@@ -206,6 +206,23 @@ def create_app(host: Host) -> FastAPI:
             raise HTTPException(404, "no such Academy agent")
         return data
 
+    @app.get("/api/academy/reports")
+    def academy_reports(_: str = Depends(user)) -> dict[str, Any]:
+        try:
+            return {"reports": academy.reports()}
+        except sqlite3.Error as exc:
+            raise HTTPException(503, f"Academy data unavailable: {exc}") from None
+
+    @app.get("/api/academy/reports/{day}")
+    def academy_report(day: str, _: str = Depends(user)) -> dict[str, Any]:
+        try:
+            data = academy.report(day)
+        except sqlite3.Error as exc:
+            raise HTTPException(503, f"Academy data unavailable: {exc}") from None
+        if data is None:
+            raise HTTPException(404, "no report for that day")
+        return data
+
     @app.post("/api/academy/agents/{agent_id}/{action}")
     def academy_command(agent_id: str, action: str, body: AcademyCommandBody, who: str = Depends(user)) -> dict[str, Any]:
         try:

@@ -49,11 +49,14 @@ export type AcademySpaceAgent = {
   last_event: { ts: string; type: string; summary: string } | null;
   validation: string | null;
   version: number;
+  stage: "RESEARCH" | "PAPER" | "DEMO" | "RETIRED";
+  sprinting?: string | null;
+  last_sprint?: { day: string; outcome: string } | null;
 };
 
 export type AcademySpace = {
   available: boolean;
-  engine?: { online: boolean; heartbeat?: number; market_open?: boolean; data_ready?: boolean; job?: { name: string; since: number } | null; last_error?: string | null };
+  engine?: { online: boolean; heartbeat?: number; market_open?: boolean; data_ready?: boolean; job?: { name: string; since: number } | null; last_error?: string | null; demo?: { configured: boolean; problem: string | null; seats: number } };
   agents?: AcademySpaceAgent[];
   validations_running?: { agent_id: string; status: string }[];
   prices?: { instrument: string; bid: number; ask: number; time: number; tradeable: number }[];
