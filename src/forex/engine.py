@@ -35,7 +35,7 @@ from forex.academy import AcademyDB
 from forex import demo as demo_desk
 from forex.agents import ALL_AGENTS, default_params
 from forex.backtest import USD_PAIR, AgentConfig
-from forex.fxclock import market_open, ny
+from forex.fxclock import market_open, ny, rollover_window
 from forex.instruments import UNIVERSE, Converter, Spec
 from forex.market import SECONDS, MarketStore
 from forex.oanda import OandaClient, OandaError
@@ -52,7 +52,7 @@ HISTORY = {"M15": int(2.75 * 365 * 86400), "H1": int(3 * 365 * 86400), "H4": int
 EQUITY_EVERY = 15 * 60
 # Bump to force a full history reload and re-validation of every agent on the next start
 # (2: the first deploy's backfill skipped older history; its validations used too little data).
-DATA_EPOCH = 3  # 3: swing validations converted P&L with hourly prices that only cover 3 of 8 years
+DATA_EPOCH = 4  # 4: decisions at the 17:00 rollover (every daily bar) were refused; re-validate and re-try variants
 REVALIDATE_DAYS = 28
 SPRINT_HOUR_NY = 1  # nightly research sprints start at 01:00 New York; the report is ready well before 08:00
 DEMO_SEATS = 2
@@ -70,6 +70,7 @@ class Runtime:
     status: str
     stage: str = "RESEARCH"
     last_decision: int = 0
+    pending: tuple[int, list] | None = None  # (decision time, actions) waiting for the rollover window to pass
     activity: str = "idle"
     errors: int = 0
 
@@ -123,6 +124,7 @@ class Engine:
         stale = self.db.get("data_epoch") != DATA_EPOCH
         if stale:
             self.db.put("data", {"ready": False, "progress": "reloading market history"})
+            self.db.write("DELETE FROM tested")  # variants scored before a fix get tried again
         self.enqueue("backfill", self.backfill)
         for rt in self.agents.values():
             if stale or self.db.latest_validation(rt.agent_id, rt.version) is None:
@@ -188,6 +190,12 @@ class Engine:
                     data = {(i, g): self.store.bars(i, g, last=n) for (i, g), n in rt.strategy.feeds(rt.cfg.params).items()}
                     ctx = Context(now=T, params=rt.cfg.params, data=data, positions=before.views(), equity=before.equity(self.quotes, conv), specs=self.specs)
                     actions = rt.strategy.on_bar(ctx)
+            if rollover_window(now):
+                if actions:
+                    rt.pending = (now, actions)
+                actions = []
+            elif rt.pending and now - rt.pending[0] <= 7200:
+                actions, rt.pending = list(rt.pending[1]) + actions, None
             rt.executor.roll(before, now, self.quotes, conv)
             after, decided = demo_desk.decide_on_mirror(rt.executor, before, actions, self.quotes, now, conv)
             sent = demo_desk.execute(trader, acct, before, after, agent_id=rt.agent_id, version=rt.version, now=now)
@@ -535,9 +543,24 @@ class Engine:
             self.db.event(rt.agent_id, "AGENT_ERROR", f"{rt.name}'s strategy raised {type(exc).__name__}: {exc}")
             log.exception("strategy %s failed", rt.agent_id)
             return
-        self._record(rt, rt.executor.apply(rt.book, actions, self.quotes, now, conv))
-        rt.activity = "trading" if rt.book.positions else "watching"
+        if rollover_window(now):
+            rt.pending = (T, actions)  # bars that close at 17:00 decide now and execute after the rollover
+            rt.activity = "waiting for the rollover to pass"
+        else:
+            self._record(rt, rt.executor.apply(rt.book, actions, self.quotes, now, conv))
+            rt.activity = "trading" if rt.book.positions else "watching"
         self.db.put(f"decision:{rt.agent_id}", {"at": now, "bar": T, "trigger": trig, "actions": len(actions), "note": ctx.note})
+
+    def release_pending(self, rt: Runtime, now: int) -> None:
+        """Execute decisions held through the 17:00 rollover window (dropped if more than 2 hours old)."""
+        if rt.pending is None or rollover_window(now):
+            return
+        T, actions = rt.pending
+        rt.pending = None
+        if now - T > 7200:
+            return
+        self._record(rt, rt.executor.apply(rt.book, actions, self.quotes, now, self._conv()))
+        rt.activity = "trading" if rt.book.positions else "watching"
 
     def _record(self, rt: Runtime, events: list[dict[str, Any]]) -> None:
         if not events:
@@ -620,6 +643,7 @@ class Engine:
                 if data_ready:
                     for rt in self.agents.values():
                         if rt.stage == "PAPER" and rt.status != "RETIRED":
+                            self.release_pending(rt, now)
                             self.decide(rt, now, fresh)
                 self.housekeeping(now)
                 for rt in list(self.agents.values()):

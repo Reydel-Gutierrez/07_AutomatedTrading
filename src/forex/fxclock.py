@@ -75,6 +75,15 @@ def rollover_window(ts: int) -> bool:
     return in_window(ts, "16:55", "17:10")
 
 
+ROLLOVER_END = 15 * 60  # 17:10 NY plus a margin, counted from 17:00
+
+
+def execution_time(decision: int) -> int:
+    """When a decision can be executed. Daily and 4-hour bars close at 17:00 New York, inside the
+    rollover window when no entries are allowed, so those decisions execute 15 minutes later."""
+    return decision + ROLLOVER_END if rollover_window(decision) else decision
+
+
 def is_friday_after(ts: int, hhmm: str) -> bool:
     t = ny(ts)
     return t.weekday() == 4 and minutes_ny(ts) >= int(hhmm[:2]) * 60 + int(hhmm[3:])

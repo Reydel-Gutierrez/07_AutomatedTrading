@@ -211,3 +211,21 @@ def test_swing_backtest_converts_prices_across_the_whole_window(tmp_path):
     start = last - 86400 * 300
     res = run(cfg, load_data(s, cfg, start, last), SPECS, start, last)
     assert res.refused.get("NO_CONVERSION_PRICE", 0) == 0
+
+
+def test_rollover_decisions_execute_after_the_window(tmp_path):
+    """Regression: daily bars close at 17:00 NY, inside the no-entry rollover window; their
+    decisions must execute 15 minutes later instead of being refused every time."""
+    from forex.fxclock import execution_time, rollover_window
+
+    five_pm = int(datetime(2026, 1, 13, 22, 0, tzinfo=timezone.utc).timestamp())  # 17:00 EST
+    assert rollover_window(five_pm) and not rollover_window(execution_time(five_pm))
+    assert execution_time(TUE_10_NY) == TUE_10_NY
+    winter = MarketStore(tmp_path / "w.db")  # Jan-Mar 2024: every synthetic daily bar closes at 17:00 EST
+    synth.fill(winter, ["EUR_USD", "GBP_USD"], {"D": 120, "H4": 720}, seed=3)
+    agent = next(a for a in ALL_AGENTS if a["id"] == "sable")
+    params = {**default_params(agent["strategy"]), "instruments": ["EUR_USD", "GBP_USD"], "entry_n": 5, "exit_n": 5, "trend_filter": False, "trend_ema": 10, "max_cost_r": 1.0}
+    cfg = AgentConfig("sable", agent["strategy"], params, agent["envelope"])
+    start, end = synth.START + 15 * 86400, synth.START + 68 * 86400  # Jan 16 - Mar 9, 2024: before daylight saving time
+    res = run(cfg, load_data(winter, cfg, start, end), SPECS, start, end)
+    assert res.trades, res.refused  # before the fix: zero trades, every entry refused as MARKET_WINDOW
