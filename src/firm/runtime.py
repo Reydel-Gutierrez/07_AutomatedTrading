@@ -276,7 +276,8 @@ class Service:
         """08:00 New York: tell the owner the night's Academy research report is ready (a short line, not the report)."""
         from firm.api.academy import morning_message
 
-        msg = morning_message(et_date(self.clock()).isoformat())
+        # only a morning message: after a restart later in the day, skip it rather than send a stale note
+        msg = morning_message(et_date(self.clock()).isoformat()) if et(self.clock()).time() < time(12, 0) else None
         if msg:
             self.firm.events.emit("ACADEMY_REPORT", msg, actor="academy")
         self._mark_daily("academy_report")

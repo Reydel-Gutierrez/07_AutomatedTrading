@@ -47,3 +47,25 @@ def test_discord_posts_alerts_without_mentions(monkeypatch):
 def test_sinks_combines_configured_channels():
     env = {"TELEGRAM_NOTIFICATIONS": "true", "TELEGRAM_BOT_TOKEN": "t", "TELEGRAM_CHAT_ID": "c", "DISCORD_WEBHOOK_URL": "https://discord.com/api/webhooks/1/abc"}
     assert len(notify.sinks(env)) == 2 and notify.sinks({}) == []
+
+
+def test_morning_report_job_is_morning_only(monkeypatch, tmp_path):
+    from datetime import datetime, timezone
+
+    from firm.runtime import Service
+
+    sent = []
+    monkeypatch.setattr("firm.api.academy.morning_message", lambda day: f"report {day}")
+
+    class FakeEvents:
+        def emit(self, kind, summary, **kw):
+            sent.append((kind, summary))
+
+    for hour_utc, expected in ((13, 1), (20, 0)):  # 09:00 and 16:00 New York (EDT)
+        sent.clear()
+        svc = Service.__new__(Service)
+        svc.clock = lambda h=hour_utc: datetime(2026, 10, 14, h, 0, tzinfo=timezone.utc)
+        svc.firm = type("F", (), {"events": FakeEvents()})()
+        svc._mark_daily = lambda key: None
+        svc.academy_report()
+        assert len(sent) == expected
