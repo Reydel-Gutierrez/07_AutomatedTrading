@@ -7,10 +7,13 @@ export type FloorId = "exec" | "core" | "forex" | "lobby" | "academy-demo" | "ac
 
 export type DeptId =
   | "cio" | "treasury"
-  | "tim" | "alex" | "max"
-  | "market-room" | "day-1" | "day-2" | "swing-1" | "swing-2"
-  | "lobby" | "records" | "operations"
-  | "lab" | "studio" | "research" | "alumni" | "hall" | "demo-desk";
+  | "tim" | "alex" | "max" | "core-board"
+  | "market-room" | "day-1" | "day-2" | "swing-1" | "swing-2" | "forex-board"
+  | "lobby" | "records" | "operations" | "ops-board"
+  | "lab" | "studio" | "research-board" | "research" | "alumni" | "demo-desk" | "demo-board" | "hall" | "hall-board";
+
+/** Each floor's boardroom opens that floor's analytics. */
+export type AnalyticsScope = "core" | "forex" | "operations" | "academy-demo" | "academy-hall" | "academy-research";
 
 /** A page that holds a department's records, opened as a folder over the map. */
 export type Folder = { label: string; path: string; note: string };
@@ -27,26 +30,31 @@ export type Dept = {
   people?: string[]; // HQ people who work here (agent ids)
   later?: string;
   decorative?: boolean;
+  open?: string; // clicking the room also opens this page over the map
 };
 
 export type Floor = { id: FloorId; building: "HQ Tower" | "The 537 Academy"; level: string; name: string; division: string; rect: Rect };
 
 // -- geometry --------------------------------------------------------------------------------
-export const WORLD = { w: 2600, h: 1460 };
+export const WORLD = { w: 3720, h: 1460 };
 export const GROUND = 1360;
 export const SLAB = 12;
-export const TOWER = { x0: 120, x1: 1200, top: 200 };
-export const ACADEMY = { x0: 1340, x1: 2440, top: 490 };
+export const TOWER = { x0: 120, x1: 1620, top: 200 };
+export const ACADEMY = { x0: 1760, x1: 3500, top: 490 };
+const TW = TOWER.x1 - TOWER.x0;
+const AW = ACADEMY.x1 - ACADEMY.x0;
+const BOARD_X = { hq: 1200, academy: 3080 }; // every floor's boardroom sits at the east end
+const BOARD_W = 420;
 const FH = 290; // floor height (including its slab)
 
 export const FLOORS: Floor[] = [
-  { id: "exec", building: "HQ Tower", level: "L4", name: "Executive", division: "Executive level", rect: [TOWER.x0, 200, 1080, FH] },
-  { id: "core", building: "HQ Tower", level: "L3", name: "Core Investments", division: "Core Investments Division · Robinhood · US stocks & ETFs", rect: [TOWER.x0, 490, 1080, FH] },
-  { id: "forex", building: "HQ Tower", level: "L2", name: "Forex Division", division: "Forex Division · OANDA · four live chairs", rect: [TOWER.x0, 780, 1080, FH] },
-  { id: "lobby", building: "HQ Tower", level: "L1", name: "Lobby & Operations", division: "Ground floor · headquarters, records, operations", rect: [TOWER.x0, 1070, 1080, FH] },
-  { id: "academy-demo", building: "The 537 Academy", level: "A3", name: "Demo Desk", division: "Academy Floor 3 · real orders on an OANDA practice account", rect: [ACADEMY.x0, 490, 1100, FH] },
-  { id: "academy-hall", building: "The 537 Academy", level: "A2", name: "Paper Trading", division: "Academy Floor 2 · paper trading on live OANDA prices", rect: [ACADEMY.x0, 780, 1100, FH] },
-  { id: "academy-research", building: "The 537 Academy", level: "A1", name: "Research", division: "Academy Floor 1 · nightly research sprints on OANDA history", rect: [ACADEMY.x0, 1070, 1100, FH] },
+  { id: "exec", building: "HQ Tower", level: "L4", name: "Executive", division: "Executive level", rect: [TOWER.x0, 200, TW, FH] },
+  { id: "core", building: "HQ Tower", level: "L3", name: "Core Investments", division: "Core Investments Division · Robinhood · US stocks & ETFs", rect: [TOWER.x0, 490, TW, FH] },
+  { id: "forex", building: "HQ Tower", level: "L2", name: "Forex Division", division: "Forex Division · OANDA · four live chairs", rect: [TOWER.x0, 780, TW, FH] },
+  { id: "lobby", building: "HQ Tower", level: "L1", name: "Lobby & Operations", division: "Ground floor · headquarters, records, operations", rect: [TOWER.x0, 1070, TW, FH] },
+  { id: "academy-demo", building: "The 537 Academy", level: "A3", name: "Demo Desk", division: "Academy Floor 3 · real orders on an OANDA practice account", rect: [ACADEMY.x0, 490, AW, FH] },
+  { id: "academy-hall", building: "The 537 Academy", level: "A2", name: "Paper Trading", division: "Academy Floor 2 · paper trading on live OANDA prices", rect: [ACADEMY.x0, 780, AW, FH] },
+  { id: "academy-research", building: "The 537 Academy", level: "A1", name: "Research", division: "Academy Floor 1 · nightly research sprints on OANDA history", rect: [ACADEMY.x0, 1070, AW, FH] },
 ];
 
 export const floorById = (id: FloorId) => FLOORS.find((f) => f.id === id)!;
@@ -79,34 +87,49 @@ const chair = (id: DeptId, name: string, style: "day" | "swing", x: number): Dep
   folders: [{ label: "The 537 Academy", path: "/academy", note: "Where candidates for this chair are trained" }],
 });
 
+const boardroom = (id: DeptId, name: string, floor: FloorId, x: number, scope: AnalyticsScope, purpose: string): Dept => ({
+  id,
+  name,
+  floor,
+  rect: row(floor, x, BOARD_W),
+  purpose: `${purpose} Click the room for the full analytics.`,
+  open: `/analytics/${scope}`,
+  folders: [{ label: `${name} analytics`, path: `/analytics/${scope}`, note: "This floor's numbers in depth" }],
+});
+
 export const DEPTS: Dept[] = [
   // L4 Executive
-  { id: "cio", name: "Office of the CIO", floor: "exec", rect: row("exec", 120, 400), purpose: "Graham, the Chief Investment Officer: oversees the firm, allocates his capital pool, and answers your questions with the records behind every answer.", people: ["cio"], folders: [{ label: "CIO Office", path: "/cio", note: "Conversations, proposals, memory" }] },
-  { id: "treasury", name: "Boardroom & Treasury", floor: "exec", rect: row("exec", 520, 680), purpose: "The firm's numbers in one room: capital, what you have contributed against what it is worth, overall and daily returns against the S&P 500, drawdowns, Graham's proposals waiting for you, and the Academy's floors and latest sprint. Click the room for the full analytics.", folders: [{ label: "Firm analytics", path: "/analytics", note: "Returns, contributions, daily marks, managers, and the Academy" }, { label: "CIO Office", path: "/cio", note: "Review and decide on proposals" }, { label: "Capital", path: "/capital", note: "Allocate, recall, fund the pool, caps" }] },
+  { id: "cio", name: "Office of the CIO", floor: "exec", rect: row("exec", 120, 400), purpose: "Graham, the Chief Investment Officer: oversees the firm, allocates his capital pool, proposes changes for your approval, and answers your questions with the records behind every answer. Sit down with him to talk.", people: ["cio"], folders: [{ label: "Talk to Graham", path: "/firm/cio", note: "Conversations, proposals, memory, his pool" }] },
+  { id: "treasury", name: "Boardroom & Treasury", floor: "exec", rect: row("exec", 520, 1100), open: "/analytics", purpose: "The firm's numbers in one room: capital, what you have contributed against what it is worth, overall and daily returns against the S&P 500, drawdowns, Graham's proposals waiting for you, and the Academy's floors and latest sprint. Click the room for the full analytics.", folders: [{ label: "Firm analytics", path: "/analytics", note: "Returns, contributions, daily marks, managers, and the Academy" }, { label: "Graham's proposals", path: "/firm/cio", note: "Review and decide in his office" }, { label: "Capital", path: "/capital", note: "Allocate, recall, fund the pool, caps" }] },
   // L3 Core Investments
   manager("tim", "Tim", "Core Investment Manager: a diversified long-term ETF portfolio, new cash invested toward targets, rebalanced on drift.", 120),
   manager("alex", "Alex", "Strategic Growth Manager: systematic momentum stock selection, each candidate checked by an AI research desk.", 480),
   manager("max", "Max", "Short-Term Trading Manager: trend-pullback swing trades with defined entries, exits, and stops.", 840),
+  boardroom("core-board", "Core Boardroom", "core", BOARD_X.hq, "core", "Core Investments at a glance: each manager's value, return against the S&P 500 over the same days, and mode."),
   // L2 Forex
   { id: "market-room", name: "Market room", floor: "forex", rect: row("forex", 120, 360), purpose: "Live OANDA rates, the Tokyo, London, and New York sessions, and the desk heads' workstations for the day and swing desks.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Rates, agents, and validation evidence" }] },
   chair("day-1", "Day Chair 1", "day", 480),
   chair("day-2", "Day Chair 2", "day", 660),
   chair("swing-1", "Swing Chair 1", "swing", 840),
   chair("swing-2", "Swing Chair 2", "swing", 1020),
+  boardroom("forex-board", "Forex Boardroom", "forex", BOARD_X.hq, "forex", "The Forex Division: live chairs filled, the FX market, and the Academy pipeline of candidates for a chair."),
   // L1 Lobby & Operations
   { id: "lobby", name: "Lobby", floor: "lobby", rect: row("lobby", 120, 440), purpose: "The front door: the firm at a glance, its capital, its managers, and today's activity.", folders: [{ label: "Headquarters", path: "/", note: "The firm dashboard" }] },
   { id: "records", name: "Records room", floor: "lobby", rect: row("lobby", 560, 300), purpose: "Every event the firm records: decisions, orders, fills, capital moves, safeguards, and sign-ins.", folders: [{ label: "Activity", path: "/activity", note: "The full event log" }] },
   { id: "operations", name: "Operations", floor: "lobby", rect: row("lobby", 860, 340), purpose: "The machinery: broker connection, scheduled jobs, safeguards, reconciliations, backups, and the AI budget.", folders: [{ label: "System", path: "/system", note: "Health, jobs, limits, backups" }] },
-  // Academy
-  // Academy A3: Floor 3 (OANDA Demo Desk), plus the Research Lead and the Alumni wall
-  { id: "demo-desk", name: "Demo Desk", floor: "academy-demo", rect: row("academy-demo", 1340, 500), purpose: "Floor 3: two seats trading real orders on an OANDA practice account (fake money), each in its own sub-account. After 4+ good weeks here, Graham writes a memo and you decide on a live chair.", later: "You give a Floor 2 agent a seat from its Academy page.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Floors, agents, and evidence" }] },
-  { id: "research", name: "Research Lead", floor: "academy-demo", rect: row("academy-demo", 1840, 200), purpose: "The AI research assistant that helps draft strategies and cites research. It helps write strategies but never grades or promotes them.", later: "You name the Research Lead when this role opens.", folders: [] },
-  { id: "alumni", name: "Alumni wall", floor: "academy-demo", rect: row("academy-demo", 2040, 400), purpose: "Portraits of agents that graduated to a live chair, and of retired agents, whose records are kept.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Agents and their records" }] },
+  boardroom("ops-board", "Operations Boardroom", "lobby", BOARD_X.hq, "operations", "Today at the firm: decisions, orders, fills, warnings, and safeguards, from the event log."),
+  // Academy A3: Floor 3 (OANDA Demo Desk), the Research Lead, the Alumni wall
+  { id: "demo-desk", name: "Demo Desk", floor: "academy-demo", rect: row("academy-demo", ACADEMY.x0, 700), purpose: "Floor 3: two seats trading real orders on an OANDA practice account (fake money), each in its own sub-account. After 4+ good weeks here, Graham writes a memo and you decide on a live chair.", later: "Opens once the OANDA practice account is set up. You give a Floor 2 agent a seat from its office, or approve Graham's proposal.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Floors, agents, and evidence" }] },
+  { id: "research", name: "Research Lead", floor: "academy-demo", rect: row("academy-demo", ACADEMY.x0 + 700, 220), purpose: "The AI research assistant that helps draft strategies and cites research. It helps write strategies but never grades or promotes them.", later: "You name the Research Lead when this role opens.", folders: [] },
+  { id: "alumni", name: "Alumni wall", floor: "academy-demo", rect: row("academy-demo", ACADEMY.x0 + 920, 400), purpose: "Portraits of agents that graduated to a live chair, and of retired agents, whose records are kept.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Agents and their records" }] },
+  boardroom("demo-board", "Demo Desk Boardroom", "academy-demo", BOARD_X.academy, "academy-demo", "Floor 3 at a glance: seats taken, the practice account, and who on Floor 2 is next in line."),
   // Academy A2: Floor 2
-  { id: "hall", name: "Paper Trading Hall", floor: "academy-hall", rect: row("academy-hall", 1340, 1100), purpose: "Floor 2: agents that passed research, each trading a fresh $10,000 virtual account on live OANDA prices for at least 4 weeks. No broker orders are placed. You choose who gets a Demo Desk seat.", later: "Agents arrive here automatically when they pass every research gate.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Floors, journal, and rates" }] },
+  { id: "hall", name: "Paper Trading Hall", floor: "academy-hall", rect: row("academy-hall", ACADEMY.x0, 1320), purpose: "Floor 2: agents that passed research, each trading a fresh $10,000 virtual account on live OANDA prices. You evaluate their weekly results; after 4 profitable weeks you can give a Demo Desk seat, and Graham may propose one after 2. No broker orders are placed.", later: "Agents arrive here automatically when they pass every research gate.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Floors, journal, and rates" }] },
+  boardroom("hall-board", "Paper Trading Boardroom", "academy-hall", BOARD_X.academy, "academy-hall", "Floor 2 week by week: each agent's weeks on paper, return, trades, and readiness for the Demo Desk."),
   // Academy A1: Floor 1
-  { id: "lab", name: "Strategy Lab", floor: "academy-research", rect: row("academy-research", 1340, 200), purpose: "Where the nightly research sprints run: candidate strategies scored on OANDA history, then the gates (validation with a locked final year, random-direction baselines, cost stress, and the day-1 test).", folders: [{ label: "Sprint reports", path: "/academy/reports", note: "Every night's results" }] },
-  { id: "studio", name: "Research floor", floor: "academy-research", rect: row("academy-research", 1540, 900), purpose: "Floor 1: agents in research. They do not trade; each night at 1:00 AM New York a sprint polishes their strategy on OANDA history, and an agent moves up automatically when it passes every gate.", later: "New agents start here.", folders: [{ label: "Sprint reports", path: "/academy/reports", note: "Every night's results" }, { label: "The 537 Academy", path: "/academy", note: "Agents and evidence" }] },
+  { id: "lab", name: "Strategy Lab", floor: "academy-research", rect: row("academy-research", ACADEMY.x0, 220), purpose: "Where the nightly research sprints run: candidate strategies scored on OANDA history, then the gates (validation with a locked final year, random-direction baselines, cost stress, and the day-1 test).", folders: [{ label: "Sprint reports", path: "/academy/reports", note: "Every night's results" }] },
+  { id: "studio", name: "Research floor", floor: "academy-research", rect: row("academy-research", ACADEMY.x0 + 220, 1100), purpose: "Floor 1: agents in research. They do not trade; each night at 1:00 AM New York a sprint polishes their strategy on OANDA history, and an agent moves up automatically when it passes every gate.", later: "New agents start here.", folders: [{ label: "Sprint reports", path: "/academy/reports", note: "Every night's results" }, { label: "The 537 Academy", path: "/academy", note: "Agents and evidence" }] },
+  boardroom("research-board", "Research Boardroom", "academy-research", BOARD_X.academy, "academy-research", "Floor 1 at a glance: the next sprint, last night's results, and each agent's validation."),
 ];
 
 export const deptById = (id: DeptId) => DEPTS.find((d) => d.id === id)!;
@@ -115,11 +138,16 @@ export const deptOf = (person: string) => DEPTS.find((d) => d.people?.includes(p
 /** Every page the map can open as a folder, for titles. */
 export const FOLDER_TITLES: [RegExp, string][] = [
   [/^\/$/, "Headquarters"],
-  [/^\/cio$/, "CIO Office"],
   [/^\/capital$/, "Capital"],
   [/^\/activity$/, "Activity"],
   [/^\/system$/, "System"],
   [/^\/analytics$/, "Firm analytics"],
+  [/^\/analytics\/core$/, "Core Investments analytics"],
+  [/^\/analytics\/forex$/, "Forex Division analytics"],
+  [/^\/analytics\/operations$/, "Operations analytics"],
+  [/^\/analytics\/academy-demo$/, "Floor 3 · Demo Desk analytics"],
+  [/^\/analytics\/academy-hall$/, "Floor 2 · Paper trading analytics"],
+  [/^\/analytics\/academy-research$/, "Floor 1 · Research analytics"],
   [/^\/academy$/, "The 537 Academy"],
   [/^\/academy\/reports/, "Sprint reports"],
   [/^\/academy\/(\w+)$/, "Academy agent"],

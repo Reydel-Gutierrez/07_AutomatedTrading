@@ -288,7 +288,18 @@ def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None, re
         "agents": agents,
         "academy": academy_space_block(),
         "treasury": _treasury_brief(firm),
+        "today": _today(firm),
     }
+
+
+def _today(firm: Firm) -> dict[str, int]:
+    """What the firm recorded since midnight New York (for the Operations boardroom)."""
+    start = iso(datetime.combine(et(firm.clock()).date(), datetime.min.time(), tzinfo=EASTERN))
+    ev = firm.db.one(
+        "SELECT count(*) AS events, sum(type = 'MANAGER_RUN') AS runs, sum(severity = 'warning') AS warnings, sum(severity = 'critical') AS critical,"
+        " sum(type LIKE 'CIO_%' OR type LIKE 'PROPOSAL_%') AS cio FROM events WHERE ts >= ?", (start,))
+    od = firm.db.one("SELECT count(*) AS orders, sum(status = 'FILLED') AS fills FROM orders WHERE created_at >= ?", (start,))
+    return {k: int(v or 0) for k, v in {**dict(ev), **dict(od)}.items()}
 
 
 def _treasury_brief(firm: Firm) -> dict[str, Any]:
@@ -327,6 +338,61 @@ def system(firm: Firm, health: dict[str, Any], jobs: dict[str, Any]) -> dict[str
         "ai_budget": firm.settings.get("ai_budget"),
         "reconciliations": snaps,
     }
+
+
+def book_analytics(firm: Firm, book: str, bucket: str) -> dict[str, Any]:
+    """Daily marks for one book and bucket (a manager's money): returns vs SPY, drawdowns, best/worst day."""
+    marks = firm.performance.marks(book, bucket)
+    daily, growth, peak, max_dd = [], Decimal(1), Decimal(1), 0.0
+    for prev, m in zip(marks, marks[1:]):
+        if prev.nav <= 0:
+            continue
+        r = (m.nav - m.net_flow) / prev.nav - 1
+        growth *= 1 + r
+        peak = max(peak, growth)
+        max_dd = max(max_dd, float(1 - growth / peak))
+        spy = (m.benchmark_close / prev.benchmark_close - 1) if m.benchmark_close and prev.benchmark_close else None
+        daily.append({"date": m.date, "nav": f(m.nav), "flow": f(m.net_flow), "return": float(r), "spy": float(spy) if spy is not None else None})
+    rets = [d["return"] for d in daily]
+    return {
+        "book": book, "daily": daily[-120:], "days_tracked": len(marks), "max_drawdown": max_dd, "current_drawdown": firm.performance.drawdown(marks),
+        "best_day": max(daily, key=lambda d: d["return"]) if daily else None, "worst_day": min(daily, key=lambda d: d["return"]) if daily else None,
+        "up_days": sum(1 for x in rets if x > 0), "down_days": sum(1 for x in rets if x < 0),
+    }
+
+
+def core_analytics(firm: Firm) -> dict[str, Any]:
+    """L3 Core Investments: each manager's daily record, orders, and decisions."""
+    out = []
+    for m in firm.registry.all():
+        book = m.book or "SIM"
+        orders = firm.db.query("SELECT status, count(*) AS n FROM orders WHERE manager_id = ? AND book = ? GROUP BY status", (m.id, book))
+        out.append({
+            "id": m.id, "name": m.display_name, "role": m.role, "mode": m.mode, "book": book, "implemented": m.id in firm.managers,
+            **book_analytics(firm, book, m.id),
+            "orders": {r["status"]: r["n"] for r in orders},
+            "decisions": firm.db.one("SELECT count(*) AS n FROM events WHERE manager_id = ? AND type = 'MANAGER_RUN'", (m.id,))["n"],
+        })
+    return {"managers": out}
+
+
+def operations_analytics(firm: Firm) -> dict[str, Any]:
+    """L1 Lobby & Operations: what the firm recorded day by day (events, orders, safeguards)."""
+    since = iso(firm.clock() - timedelta(days=14))
+    by_day: dict[str, dict[str, int]] = {}
+    for r in firm.db.query("SELECT substr(ts, 1, 10) AS day, type, severity FROM events WHERE ts >= ?", (since,)):
+        d = by_day.setdefault(r["day"], {"events": 0, "warnings": 0, "critical": 0, "runs": 0, "orders": 0, "fills": 0})
+        d["events"] += 1
+        d["warnings"] += r["severity"] == "warning"
+        d["critical"] += r["severity"] == "critical"
+        d["runs"] += r["type"] == "MANAGER_RUN"
+    for r in firm.db.query("SELECT substr(created_at, 1, 10) AS day, status FROM orders WHERE created_at >= ?", (since,)):
+        d = by_day.setdefault(r["day"], {"events": 0, "warnings": 0, "critical": 0, "runs": 0, "orders": 0, "fills": 0})
+        d["orders"] += 1
+        d["fills"] += r["status"] == "FILLED"
+    types = firm.db.query("SELECT type, count(*) AS n FROM events WHERE ts >= ? GROUP BY type ORDER BY n DESC LIMIT 12", (since,))
+    return {"days": [{"day": k, **v} for k, v in sorted(by_day.items(), reverse=True)], "top_types": [dict(r) for r in types],
+            "totals": {"events": firm.db.one("SELECT count(*) AS n FROM events")["n"], "orders": firm.db.one("SELECT count(*) AS n FROM orders")["n"]}}
 
 
 def money_analytics(firm: Firm) -> dict[str, Any]:

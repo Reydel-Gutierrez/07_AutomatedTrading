@@ -328,7 +328,10 @@ function AgentPage({ id }: { id: string }) {
           <p className="text-sm text-slate-400">{a.persona.tagline} · {STYLE_LABEL[a.style]} · strategy v{a.version}{a.version_note ? ` (${a.version_note})` : ""}</p>
           <p className="mt-2 max-w-3xl text-sm text-slate-300">{a.persona.about}</p>
         </div>
-        <Controls a={a} onDone={() => setBump((b) => b + 1)} />
+        <div className="flex flex-col items-end gap-2">
+          <Link to={`/firm/${a.id}`} className="btn-primary text-xs">Sit down with {a.name} →</Link>
+          <AcademyControls a={a} onDone={() => setBump((b) => b + 1)} />
+        </div>
       </header>
 
       <section className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -460,7 +463,7 @@ function AgentPage({ id }: { id: string }) {
   );
 }
 
-function Controls({ a, onDone }: { a: AgentDetail; onDone: () => void }) {
+export function AcademyControls({ a, onDone }: { a: AgentDetail; onDone: () => void }) {
   const [confirm, setConfirm] = useState<string | null>(null);
   const act = useAction((action: string) => api.post(`/api/academy/agents/${a.id}/${action}`, { note: "" }), onDone);
   const LABELS: Record<string, [string, string]> = {
@@ -503,14 +506,14 @@ function Controls({ a, onDone }: { a: AgentDetail; onDone: () => void }) {
   );
 }
 
-function CheckList({ checks }: { checks: Check[] }) {
+export function CheckList({ checks }: { checks: Check[] }) {
   return (
     <ul className="space-y-2 text-sm">
       {checks.map((c) => (
         <li key={c.name} className="flex gap-2">
           <span className={`mt-0.5 grid h-4 w-4 shrink-0 place-items-center rounded-full text-[10px] ${c.passed ? "bg-emerald-500/20 text-emerald-300" : "bg-slate-500/15 text-slate-400"}`}>{c.passed ? "✓" : "·"}</span>
           <div className="min-w-0">
-            <p className="text-slate-200">{c.name}</p>
+            <p className={c.advisory ? "text-slate-400" : "text-slate-200"}>{c.name}{c.advisory && <span className="ml-1.5 rounded bg-slate-500/10 px-1 text-[10px] text-slate-500">context, not a gate</span>}</p>
             <p className="text-xs text-slate-500">{c.detail ?? c.rule}{c.value !== undefined && c.value !== null ? ` · ${String(c.value)}` : ""}</p>
           </div>
         </li>
@@ -519,7 +522,7 @@ function CheckList({ checks }: { checks: Check[] }) {
   );
 }
 
-function ValidationCard({ report, summary }: { report?: ValidationReport; summary: AgentDetail["validation"] }) {
+export function ValidationCard({ report, summary }: { report?: ValidationReport; summary: AgentDetail["validation"] }) {
   if (!report) {
     return <Card title="Validation (the Examiner)"><p className="text-sm text-slate-500">{summary?.running ? `Running: ${summary.running.status.replace("RUNNING: ", "")}` : "Pending: runs once market history is loaded."}</p></Card>;
   }
@@ -585,7 +588,7 @@ function Diagnostics({ d }: { d: AgentDetail["diagnostics"] }) {
   );
 }
 
-function Params({ version }: { version?: AgentDetail["versions"][number] }) {
+export function Params({ version }: { version?: AgentDetail["versions"][number] }) {
   if (!version) return null;
   const env = version.envelope as Record<string, number | string | boolean>;
   const fmt = (v: unknown) => (Array.isArray(v) ? v.map((x) => (Array.isArray(x) ? x.join("–") : pair(String(x)))).join(", ") : String(v));
@@ -604,7 +607,7 @@ function Params({ version }: { version?: AgentDetail["versions"][number] }) {
   );
 }
 
-function Table({ head, children, className = "" }: { head: string[]; children: ReactNode; className?: string }) {
+export function Table({ head, children, className = "" }: { head: string[]; children: ReactNode; className?: string }) {
   return (
     <div className={`overflow-x-auto ${className}`}>
       <table className="w-full min-w-[520px] text-xs text-slate-300">
@@ -615,7 +618,7 @@ function Table({ head, children, className = "" }: { head: string[]; children: R
   );
 }
 
-function EquityLine({ points, color, empty = "No data yet.", windows }: { points: [number, number][]; color: string; empty?: string; windows?: Record<string, [number, number]> }) {
+export function EquityLine({ points, color, empty = "No data yet.", windows }: { points: [number, number][]; color: string; empty?: string; windows?: Record<string, [number, number]> }) {
   const [hover, setHover] = useState<number | null>(null);
   if (points.length < 2) return <div className="grid h-[150px] place-items-center text-sm text-slate-500">{empty}</div>;
   const w = 600, h = 170;

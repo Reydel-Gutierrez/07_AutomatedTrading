@@ -1,7 +1,7 @@
 // Types for /api/academy (the Forex engine's records, read-only through HQ).
 
 export type Stats = { trades: number; win_rate: number | null; avg_r: number | null; r_stdev: number | null; profit_factor: number | null; net_usd: number };
-export type Check = { name: string; value?: unknown; rule?: string; passed: boolean; detail?: string };
+export type Check = { name: string; value?: unknown; rule?: string; passed: boolean; detail?: string; advisory?: boolean };
 export type Persona = { tagline: string; about: string; color: string; look?: Record<string, unknown> };
 
 export type ValidationSummary = {
@@ -100,8 +100,13 @@ export type AgentCard = {
   validation: ValidationSummary | null;
   activity: string | null;
   last_event: { id: number; ts: string; type: string; summary: string } | null;
-  readiness: { next: string | null; automatic: boolean; eligible: boolean; label: string; checks: Check[] };
+  readiness: { next: string | null; automatic: boolean; eligible: boolean; label: string; checks: Check[]; days_on_floor?: number };
+  weekly: WeekResult[];
 };
+
+/** One 7-day period on the agent's current floor, counted from the day it arrived. */
+export type WeekResult = { week: number; start: number; end: number; complete: boolean; start_equity: number; end_equity: number; return_pct: number; trades: number; net_usd: number };
+export type StrategyInfo = { title?: string; style?: string; description?: string; tunables?: { name: string }[] };
 
 export type EngineStatus = {
   online: boolean;
@@ -148,6 +153,7 @@ export type AgentDetail = AgentCard & {
   diagnostics: Record<"by_instrument" | "by_exit" | "by_session" | "by_side", Record<string, Stats>>;
   sprints: SprintRow[];
   transitions: { id: number; from_stage: string | null; to_stage: string; by: string; reason: string; ts: string }[];
+  strategy_info?: StrategyInfo | null;
 };
 
 export const pair = (i: string) => i.replace("_", "/");

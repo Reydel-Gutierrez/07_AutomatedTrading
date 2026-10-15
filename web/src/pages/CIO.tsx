@@ -214,7 +214,7 @@ function Message({ m, proposals, onDecided }: { m: CioMessage; proposals: Record
         {m.citations.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {m.citations.map((c) => (
-              <Link key={`${c.type}-${c.id}`} to={c.type === "proposal" || c.type === "memory" ? "/cio" : c.type === "academy" ? "/academy" : "/activity"} title={c.label} className="max-w-[260px] truncate rounded-md border border-ink-700 px-2 py-0.5 text-[11px] text-slate-400 hover:text-slate-200">
+              <Link key={`${c.type}-${c.id}`} to={c.type === "proposal" || c.type === "memory" ? "/firm/cio" : c.type === "academy" ? "/academy" : "/activity"} title={c.label} className="max-w-[260px] truncate rounded-md border border-ink-700 px-2 py-0.5 text-[11px] text-slate-400 hover:text-slate-200">
                 {c.type} #{c.id}{c.label ? ` · ${c.label}` : ""}
               </Link>
             ))}
@@ -232,6 +232,7 @@ function describe(p: Proposal): string[] {
   if (p.kind === "reallocate") return x.moves.map((mv: any) => `Move ${money(Number(mv.amount))} from ${mv.from === "firm" ? "unallocated" : AGENTS[mv.from]?.name ?? mv.from} to ${mv.to === "firm" ? "unallocated" : AGENTS[mv.to]?.name ?? mv.to}`);
   if (p.kind === "mandate_change") return Object.entries(x.diff as Record<string, { from: any; to: any }>).map(([k, v]) => `${AGENTS[x.manager_id]?.name}: ${k} ${JSON.stringify(v.from)} → ${JSON.stringify(v.to)}`);
   if (p.kind === "mode_change") return [`${AGENTS[x.manager_id]?.name}: ${x.from} → ${x.mode}`];
+  if (p.kind === "academy_promotion") return [`Give ${x.agent} a Demo Desk seat: real orders on the OANDA practice account (fake money)`, `${x.days_on_paper} days on paper, ${x.return_pct >= 0 ? "+" : ""}${(x.return_pct * 100).toFixed(2)}% on its $10,000 virtual account`];
   return [`Deposit split → ${Object.entries(x.split as Record<string, number>).map(([k, v]) => `${AGENTS[k]?.name ?? k} ${Math.round(v * 100)}%`).join(", ") || "all unallocated"}`];
 }
 

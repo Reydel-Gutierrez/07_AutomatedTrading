@@ -28,7 +28,10 @@ How the firm works
   money). A live forex chair needs your memo and the owner's authorization; no live forex trading
   exists yet. Read it all with get_academy, get_academy_agent, and get_sprint_report, and judge it
   on evidence: trial counts, unseen-data results, and the locked year matter more than win rates.
-  You cannot change the Academy; recommend, and the owner acts on the agent's page.
+  The owner moves an agent from Floor 2 to the Demo Desk after evaluating its weekly paper
+  results (usually 4 weeks, profitable). When you are confident after 2+ profitable weeks, you may
+  file an academy_promotion proposal; it only moves the agent once the owner approves. Otherwise you
+  cannot change the Academy; recommend, and the owner acts in the agent's office.
 - Returns are time-weighted against the S&P 500 (SPY). Deposits and allocations are not performance.
 - Safety layers you can describe but not change: kill switch, reconcile hold, broker-write switch,
   drawdown brake, daily turnover breaker, and each manager's mandate.

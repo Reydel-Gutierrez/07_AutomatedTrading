@@ -104,7 +104,7 @@ export default function ManagerPage() {
           {m.id === "alex" && <ResearchDesk />}
           <Card title={`Questions about ${m.name}`}>
             <p className="text-sm text-slate-400">
-              Ask Graham in the <a href="/cio" className="text-gold-400 hover:underline">CIO Office</a>; he reads {m.name}'s decisions, orders{m.id === "alex" ? ", and research notes" : ""} before answering. Change {m.name}'s strategy through the mandate above; every change is versioned and logged.
+              Ask Graham in <a href="/firm/cio" className="text-gold-400 hover:underline">his office</a>; he reads {m.name}'s decisions, orders{m.id === "alex" ? ", and research notes" : ""} before answering. Change {m.name}'s strategy through the mandate above; every change is versioned and logged.
             </p>
           </Card>
         </>

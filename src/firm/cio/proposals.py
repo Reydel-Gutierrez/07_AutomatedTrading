@@ -5,6 +5,8 @@ Kinds
   mandate_change  {manager_id, changes: {...}} → new mandate version (validated; stale if the mandate moved)
   mode_change     {manager_id, mode: PAUSED|SIM|INACTIVE}  (LIVE is never proposable)
   deposit_split   {split: {manager: fraction}}
+  academy_promotion {agent_id}  a Floor 2 (paper) Academy agent takes an OANDA Demo Desk seat
+                  (practice account, fake money). Never a live chair: that is the owner's own decision.
 """
 
 from __future__ import annotations
@@ -23,7 +25,7 @@ from firm.money import D, cents
 if TYPE_CHECKING:
     from firm.core import Firm
 
-KINDS = ("reallocate", "mandate_change", "mode_change", "deposit_split")
+KINDS = ("reallocate", "mandate_change", "mode_change", "deposit_split", "academy_promotion")
 PROPOSABLE_MODES = ("PAUSED", "SIM", "INACTIVE")
 TTL = timedelta(days=7)
 
@@ -43,6 +45,14 @@ class Proposals:
         managers = {m.id: m for m in f.registry.all()}
         if kind not in KINDS:
             raise ProposalError(f"kind must be one of {KINDS}")
+        if kind == "academy_promotion":
+            from firm.api import academy
+
+            agent_id = str(payload.get("agent_id", "")).lower()
+            check = academy.promotion_check(agent_id)
+            if not check["allowed"]:
+                raise ProposalError(f"cannot propose a Demo Desk seat: {check['reason']}")
+            return {"agent_id": agent_id, "agent": check["agent"], "days_on_paper": check["days_on_paper"], "return_pct": check["return_pct"], "to": "DEMO"}
         if kind == "reallocate":
             moves = payload.get("moves") or []
             if not moves:
@@ -195,6 +205,11 @@ def apply(firm: "Firm", proposal: dict[str, Any], *, by: str, note: str) -> dict
     if kind == "mode_change":
         firm.registry.set_mode(payload["manager_id"], current["mode"], by=by, note=label)
         return {"mode": current["mode"]}
+    if kind == "academy_promotion":
+        from firm.api import academy
+
+        academy.send_command(current["agent_id"], "to_demo", by=by, note=label + (f" ({note})" if note else ""))
+        return {"agent_id": current["agent_id"], "command": "to_demo"}
     firm.settings.put("deposit_split", current["split"], by=by)
     firm.events.emit("SETTINGS_CHANGED", f"Deposit split updated ({label}).", actor=by)
     return {"split": current["split"]}

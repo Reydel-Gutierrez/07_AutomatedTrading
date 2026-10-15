@@ -1,14 +1,14 @@
 import { type MouseEvent, createContext, useCallback, useContext, useEffect, useState } from "react";
-import { Link, NavLink, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, NavLink, Navigate, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { api, type FirmEvent, type Overview } from "./api";
 import { useEventStream, useHeaderHeight, useResource } from "./hooks";
 import { folderTitle } from "./space/departments";
 import Academy from "./pages/Academy";
 import Analytics from "./pages/Analytics";
+import FloorAnalytics from "./pages/FloorAnalytics";
 import Activity from "./pages/Activity";
 import CapitalPage from "./pages/Capital";
 import { BRAND, Wordmark } from "./brand";
-import CioOffice from "./pages/CIO";
 import FirmSpace from "./pages/FirmSpace";
 import HQ from "./pages/HQ";
 import Login from "./pages/Login";
@@ -19,7 +19,7 @@ type Live = { events: FirmEvent[]; bump: number; connected: boolean; overview: O
 const LiveContext = createContext<Live>({ events: [], bump: 0, connected: false, overview: null, reloadOverview: () => {} });
 export const useLive = () => useContext(LiveContext);
 
-const NAV: [string, string][] = [["/", "Headquarters"], ["/firm", "The Firm"], ["/academy", "Academy"], ["/cio", "CIO Office"], ["/capital", "Capital"], ["/activity", "Activity"], ["/system", "System"]];
+const NAV: [string, string][] = [["/", "Headquarters"], ["/firm", "The Firm"], ["/academy", "Academy"], ["/capital", "Capital"], ["/activity", "Activity"], ["/system", "System"]];
 
 function useDocumentTitle() {
   const { pathname } = useLocation();
@@ -119,7 +119,8 @@ function pageRoutes() {
     <Route key="acid" path="/academy/:id" element={<Academy />} />,
     <Route key="acday" path="/academy/:id/:day" element={<Academy />} />,
     <Route key="an" path="/analytics" element={<Analytics />} />,
-    <Route key="cio" path="/cio" element={<CioOffice />} />,
+    <Route key="anscope" path="/analytics/:scope" element={<FloorAnalytics />} />,
+    <Route key="cio" path="/cio" element={<Navigate to="/firm/cio" replace />} />,
     <Route key="cap" path="/capital" element={<CapitalPage />} />,
     <Route key="act" path="/activity" element={<Activity />} />,
     <Route key="sys" path="/system" element={<SystemPage />} />,

@@ -11,9 +11,9 @@ import { Donut } from "../components/charts";
 import { AGENTS, Avatar, Badge, Empty } from "../components/ui";
 import { useHeaderHeight, usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
-import { Office } from "../space/Office";
+import { AcademyOffice, Office } from "../space/Office";
 import { type Camera, PanZoom } from "../space/PanZoom";
-import { ALLOC_COLORS, type AgentId, FirmMap, NAMES, type Selection, signedPctOf, traineeDoing, traineeLine } from "../space/FirmMap";
+import { ALLOC_COLORS, type AgentId, FirmMap, NAMES, type Selection, signedPctOf, traineeDoing, traineeLine, weekOnFloor } from "../space/FirmMap";
 import { ACADEMY, DEPTS, GROUND, type Dept, type DeptId, FLOORS, type Floor, type FloorId, type Folder, type Rect, TOWER, WORLD, deptById, deptOf, floorById, fxMarketOpen } from "../space/departments";
 import { type AcademySpaceAgent, type AgentState, CIO_TYPES, MOOD_LABEL, type Mood, type Space, STATE_META, cioState, etTime, managerState, moodOf } from "../space/state";
 
@@ -91,11 +91,16 @@ export default function FirmSpace() {
       if (s.kind === "dept") focus(deptById(s.id).rect);
       else if (s.kind === "floor") focus(floorById(s.id).rect);
       else if (s.kind === "person") focus(deptOf(s.id)!.rect);
-      else focus(deptById("studio").rect);
+      else {
+        const stage = space?.academy?.agents?.find((a) => a.id === s.id)?.stage;
+        focus(deptById(stage === "PAPER" ? "hall" : stage === "DEMO" ? "demo-desk" : stage === "RETIRED" ? "alumni" : "studio").rect);
+      }
     },
-    [select, focus],
+    [select, focus, space],
   );
-  const openFolder = useCallback((path: string) => navigate(`${location.pathname}?open=${encodeURIComponent(path)}`), [navigate, location.pathname]);
+  // Offices (/firm/<someone>) replace the map; every other folder opens over it.
+  const openFolder = useCallback((path: string) => (path.startsWith("/firm/") ? navigate(path) : navigate(`${location.pathname}?open=${encodeURIComponent(path)}`)), [navigate, location.pathname]);
+  const sit = useCallback((id: string) => navigate(`/firm/${id}`), [navigate]);
 
   // Old floor links (/firm/forex, /firm/academy) open on that part of the map.
   const start = useRef(params.office === "forex" ? floorById("forex").rect : params.office === "academy" ? ACADEMY_RECT : undefined).current;
@@ -112,6 +117,8 @@ export default function FirmSpace() {
     return () => window.removeEventListener("keydown", onKey);
   }, [office, location.search]);
 
+  const trainee = !office && params.office ? space?.academy?.agents?.find((a) => a.id === params.office) ?? null : null;
+
   if (error) return <div className="p-6"><Empty>{error.message}</Empty></div>;
   if (!space || !states || !moods) return <div className="p-6 text-slate-500">Opening the building…</div>;
 
@@ -119,7 +126,7 @@ export default function FirmSpace() {
   return (
     <div className="relative overflow-hidden" style={{ height: `calc(100dvh - ${header}px)` }}>
       <PanZoom ref={camera} world={WORLD} start={start} label="Map of The 537 Firm" insetRight={wide && panel ? PANEL_W : 0} insetBottom={sheet ? Math.round(window.innerHeight * 0.45) : 0}>
-        <FirmMap space={space} states={states} moods={moods} overview={overview} events={events} now={now} sel={sel} onSelect={select} onFocus={focus} onOpen={openFolder} onBackground={() => setSel(null)} />
+        <FirmMap space={space} states={states} moods={moods} overview={overview} events={events} now={now} sel={sel} onSelect={select} onFocus={focus} onOpen={openFolder} onSit={sit} onBackground={() => setSel(null)} />
       </PanZoom>
 
       <Controls camera={camera} onJump={goTo} onTower={() => focus(TOWER_RECT)} onAcademy={() => focus(ACADEMY_RECT)} />
@@ -147,7 +154,7 @@ export default function FirmSpace() {
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-4">
             {sel?.kind === "person" && <PersonPanel key={sel.id} id={sel.id} state={states[sel.id]} mood={moods[sel.id]} space={space} onFolder={openFolder} onSit={() => navigate(`/firm/${sel.id}`)} />}
-            {sel?.kind === "trainee" && <TraineePanel a={space.academy?.agents?.find((a) => a.id === sel.id)} space={space} onFolder={openFolder} />}
+            {sel?.kind === "trainee" && <TraineePanel a={space.academy?.agents?.find((a) => a.id === sel.id)} space={space} onFolder={openFolder} onSit={() => sit(sel.id)} />}
             {sel?.kind === "dept" && <DeptPanel d={deptById(sel.id)} space={space} states={states} events={events} now={now} onPick={goTo} onFolder={openFolder} />}
             {sel?.kind === "floor" && <FloorPanel f={floorById(sel.id)} onPick={goTo} />}
             {!sel && <OverviewPanel space={space} events={events} onPick={goTo} onFolder={openFolder} />}
@@ -159,6 +166,7 @@ export default function FirmSpace() {
         People, screens, and boards show live records. Furniture, plants, lighting, and the city are decorative.
       </p>
       {office && <Office id={office} state={states[office]} mood={moods[office]} space={space} top={header} onClose={() => navigate("/firm")} />}
+      {trainee && <AcademyOffice a={trainee} space={space} top={header} onClose={() => navigate("/firm")} />}
     </div>
   );
 }
@@ -349,7 +357,7 @@ function PersonPanel({ id, state, mood, space, onFolder, onSit }: { id: AgentId;
   );
 }
 
-function TraineePanel({ a, space, onFolder }: { a: AcademySpaceAgent | undefined; space: Space; onFolder: (p: string) => void }) {
+function TraineePanel({ a, space, onFolder, onSit }: { a: AcademySpaceAgent | undefined; space: Space; onFolder: (p: string) => void; onSit: () => void }) {
   if (!a) return <p className="text-sm text-slate-500">This agent is no longer in the Academy's records.</p>;
   const paused = !!a.paused || a.status === "PAUSED";
   return (
@@ -392,6 +400,10 @@ function TraineePanel({ a, space, onFolder }: { a: AcademySpaceAgent | undefined
         {a.validation && <p className="mt-2 text-xs text-slate-400">Validation: {a.validation}</p>}
       </section>
       )}
+      {a.stage !== "RESEARCH" && a.stage !== "RETIRED" && a.stage_since && (
+        <p className="mt-2 text-xs text-slate-400">Week {weekOnFloor(a.stage_since)} on this floor · {a.floor_trades ?? 0} trades here{a.stage === "PAPER" ? " · you decide on a Demo Desk seat after 4 profitable weeks" : ""}</p>
+      )}
+      <button onClick={onSit} className="btn-primary mt-4 w-full">Sit down with {a.name} →</button>
       <FolderButtons folders={[{ label: `${a.name}'s record`, path: `/academy/${a.id}`, note: "Trades, validation evidence, revisions" }, { label: "The 537 Academy", path: "/academy", note: "Floors, journal, and rates" }, { label: "Sprint reports", path: "/academy/reports", note: "Every night's research results" }]} onFolder={onFolder} />
     </div>
   );
@@ -429,6 +441,27 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
     }
     case "research":
       return ["Unoccupied."];
+    case "core-board":
+      return overview ? overview.managers.map((m) => {
+        const p = m.mode === "SIM" ? m.performance.SIM : m.performance.LIVE;
+        return `${m.name} (${m.mode.toLowerCase()}): ${m.mode === "INACTIVE" ? "not trading" : `${money(m.mode === "SIM" ? m.sim.nav : m.live.nav)}, ${signedPct(p.twr)} vs S&P ${signedPct(p.benchmark)}`}`;
+      }) : ["Loading…"];
+    case "forex-board": {
+      const n = (st: string) => (ac?.agents ?? []).filter((a) => a.stage === st).length;
+      return ["0 of 4 live chairs filled. Live forex trading is not authorized.", ac?.available ? `Academy pipeline: ${n("DEMO")} on the Demo Desk, ${n("PAPER")} paper trading, ${n("RESEARCH")} in research.` : "The Forex engine is not running."];
+    }
+    case "ops-board": {
+      const t = space.today;
+      return t ? [`Today: ${t.runs} manager decisions, ${t.orders} orders (${t.fills} filled).`, `${t.events} events recorded · ${t.warnings + t.critical} warnings · ${t.cio} by Graham.`] : ["Loading…"];
+    }
+    case "demo-board": case "hall-board": case "research-board": {
+      if (!ac?.available) return ["The Forex engine is not running."];
+      const stage = d.id === "demo-board" ? "DEMO" : d.id === "hall-board" ? "PAPER" : "RESEARCH";
+      const agents = (ac.agents ?? []).filter((a) => a.stage === stage);
+      if (stage === "RESEARCH") return [ac.latest_report ? `Last sprint ${ac.latest_report.day}: passed ${ac.latest_report.passed.join(", ") || "none"}; improved ${ac.latest_report.improved.join(", ") || "none"}.` : "No sprint yet.", `${agents.filter((a) => a.validation === "PASSED").length} of ${agents.length} pass validation. Next sprint 1:00 AM New York.`];
+      if (!agents.length) return [stage === "DEMO" ? `No agent on the Demo Desk. Practice account ${ac.engine?.demo?.configured ? "connected" : "not set up yet"}.` : "No agent is paper trading yet."];
+      return agents.map((a) => `${a.name}: week ${weekOnFloor(a.stage_since) ?? 1}, ${signedPctOf(a.return_pct)}, ${a.floor_trades ?? 0} trades`);
+    }
     case "alumni": {
       const retired = (ac?.agents ?? []).filter((a) => a.stage === "RETIRED");
       return retired.length ? [`${retired.map((a) => a.name).join(", ")} (records kept).`] : ["Empty. No agent has graduated or retired."];

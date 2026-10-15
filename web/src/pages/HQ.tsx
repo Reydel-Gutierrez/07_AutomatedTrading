@@ -94,7 +94,7 @@ function CioCard() {
   const { bump } = useLive();
   const open = useResource<{ proposals: Proposal[] }>("/api/cio/proposals?status=PENDING", { every: 60000, bump }).data?.proposals.length ?? 0;
   return (
-    <Link to="/cio" className="card flex flex-col border-gold-500/30 bg-gradient-to-br from-ink-900 to-ink-850 transition hover:border-gold-500/60">
+    <Link to="/firm/cio" className="card flex flex-col border-gold-500/30 bg-gradient-to-br from-ink-900 to-ink-850 transition hover:border-gold-500/60">
       <div className="flex items-center gap-3">
         <Avatar id="cio" />
         <div>

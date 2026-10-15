@@ -78,7 +78,9 @@ SPECS = [
         "create_proposal",
         "File a structured proposal for the owner to approve or decline in HQ. Nothing changes until they approve. "
         "kinds: reallocate {moves:[{from,to,amount}]} with 'firm' meaning unallocated; mandate_change {manager_id, changes:{key:value}}; "
-        "mode_change {manager_id, mode: PAUSED|SIM|INACTIVE} (never LIVE); deposit_split {split:{manager: fraction}}.",
+        "mode_change {manager_id, mode: PAUSED|SIM|INACTIVE} (never LIVE); deposit_split {split:{manager: fraction}}; "
+        "academy_promotion {agent_id} gives a Floor 2 Academy agent an OANDA Demo Desk seat (practice account, fake money) "
+        "once it has 2+ profitable weeks on paper (see demo_desk_proposal in get_academy_agent).",
         _obj(
             {
                 "kind": {"type": "string", "enum": list(PROPOSAL_KINDS)},

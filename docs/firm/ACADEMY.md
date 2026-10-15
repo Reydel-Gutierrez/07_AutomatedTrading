@@ -42,7 +42,7 @@ The sprint is `src/forex/research.py`; the engine schedules it.
    After 14 sprints without passing, the report suggests retirement.
 5. **Report.** It's stored as `sprint_report:<day>` and shown at HQ → Academy → reports. At
    08:00 New York the firm sends one short line ("Sprint report ready for review…": who was
-   tested, who passed, who improved) to Telegram and/or Discord.
+   tested, who passed, who improved) to Telegram.
 
 ## Agents
 
@@ -77,7 +77,7 @@ high-turnover strategies. Shared risk rules:
 
 ## Notifications
 
-Telegram as before. For Discord, add `DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/...`
+Telegram as before (no other channels for now).
 to `/etc/agentic-portfolio/env` (owner), then restart the service.
 
 ## Where things are

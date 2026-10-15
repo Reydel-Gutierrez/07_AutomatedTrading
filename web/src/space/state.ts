@@ -52,6 +52,8 @@ export type AcademySpaceAgent = {
   stage: "RESEARCH" | "PAPER" | "DEMO" | "RETIRED";
   sprinting?: string | null;
   last_sprint?: { day: string; outcome: string } | null;
+  stage_since?: string | null;
+  floor_trades?: number;
 };
 
 export type AcademySpace = {
@@ -77,6 +79,7 @@ export type TreasuryBrief = {
 export type Space = {
   academy?: AcademySpace;
   treasury?: TreasuryBrief;
+  today?: { events: number; runs: number; warnings: number; critical: number; cio: number; orders: number; fills: number };
   as_of: string;
   market: { regular_hours_open?: boolean; trading_day?: boolean; next_open?: string | null };
   benchmarks: { symbol: string; label: string; closes: { date: string; close: number }[] }[];

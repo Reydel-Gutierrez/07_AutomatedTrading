@@ -13,9 +13,12 @@ import { useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, until, when } from "../format";
 import { ChatThread, MemoryPanel, ProposalCard, useCioChat } from "../pages/CIO";
 import { DecisionLog, MandateCard, ModeControl, Orders, Positions, ResearchDesk, RunNow } from "../pages/Manager";
-import { Body, Chair, Hands, LOOKS, Zzz } from "./Character";
+import { type AgentDetail, fmtR, pair } from "../academy";
+import { AcademyControls, CheckList, EquityLine, Params, Table, ValidationCard } from "../pages/Academy";
+import { Body, Chair, Hands, LOOKS, type Look, Zzz } from "./Character";
+import { traineeDoing, weekOnFloor } from "./FirmMap";
 import { poseFor } from "./pose";
-import { type AgentState, MOOD_LABEL, type Mood, type Space, STATE_META } from "./state";
+import { type AcademySpaceAgent, type AgentState, MOOD_LABEL, type Mood, type Space, STATE_META, type StateKey } from "./state";
 
 const NAMES: Record<string, string> = { cio: "Graham", tim: "Tim", alex: "Alex", max: "Max" };
 const WALL: Record<string, [string, string, string]> = {
@@ -38,11 +41,13 @@ function useWide() {
 const glass = "rounded-2xl border border-white/10 bg-ink-950/75 shadow-2xl backdrop-blur-md";
 
 // -- the room ----------------------------------------------------------------------------
-function Room({ id, state, mood, shifted = false }: { id: string; state: AgentState; mood: Mood; shifted?: boolean }) {
-  const look = LOOKS[id] ?? LOOKS.tim;
+type Who = { look?: Look; name?: string; title?: string; wall?: [string, string, string] };
+
+function Room({ id, state, mood, shifted = false, who = {} }: { id: string; state: AgentState; mood: Mood; shifted?: boolean; who?: Who }) {
+  const look = who.look ?? LOOKS[id] ?? LOOKS.tim;
   const pose = poseFor(state.key);
   const meta = STATE_META[state.key];
-  const [top, low, wood] = WALL[id] ?? WALL.tim;
+  const [top, low, wood] = who.wall ?? WALL[id] ?? WALL.tim;
   const off = state.key === "inactive";
   const asleep = mood.kind === "asleep" && !off;
   const stressed = mood.kind === "stressed";
@@ -185,8 +190,8 @@ function Room({ id, state, mood, shifted = false }: { id: string; state: AgentSt
       <rect x={cx - 430} y={deskY + 24} width="860" height="8" fill="#000" opacity=".3" />
       <g transform={`translate(${cx} ${deskY + 88})`}>
         <rect x="-150" y="-34" width="300" height="68" rx="6" fill="#14110f" stroke="#cdb27a" strokeWidth="3" />
-        <text y="0" textAnchor="middle" fontSize="30" fontFamily="Fraunces, Georgia, serif" fill="#e4cf9f" letterSpacing="7">{NAMES[id].toUpperCase()}</text>
-        <text y="24" textAnchor="middle" fontSize="12" fontFamily="Inter, sans-serif" fill="#a8a29e" letterSpacing="3">{AGENTS[id].title.toUpperCase()}</text>
+        <text y="0" textAnchor="middle" fontSize="30" fontFamily="Fraunces, Georgia, serif" fill="#e4cf9f" letterSpacing="7">{(who.name ?? NAMES[id]).toUpperCase()}</text>
+        <text y="24" textAnchor="middle" fontSize="12" fontFamily="Inter, sans-serif" fill="#a8a29e" letterSpacing="3">{(who.title ?? AGENTS[id].title).toUpperCase()}</text>
       </g>
       {/* desk props */}
       {[...(id === "max" ? [cx - 330] : []), cx + 300].map((mx) => (
@@ -462,6 +467,7 @@ const GRAHAM_STARTERS = [
   "What should I do with the unallocated cash?",
   "Walk me through Alex's research notes.",
   "Are any risk limits close to triggering?",
+  "How is the Academy doing, and who is closest to the Demo Desk?",
 ];
 
 function GrahamOffice({ state, mood, space }: { state: AgentState; mood: Mood; space: Space }) {
@@ -576,9 +582,293 @@ export function Office({ id, state, mood, space, onClose, top = 57 }: { id: stri
           <span className="hidden text-xs text-slate-400 sm:inline">{AGENTS[id].title}</span>
           {agent && <Badge tone={agent.mode}>{agent.mode}</Badge>}
         </div>
-        <Link to={id === "cio" ? "/cio" : `/managers/${id}`} className={`${glass} ml-auto px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200`}>Full workspace ↗</Link>
+        {id !== "cio" && <Link to={`/managers/${id}`} className={`${glass} ml-auto px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200`}>Full workspace ↗</Link>}
       </header>
       {id === "cio" ? <GrahamOffice state={state} mood={mood} space={space} /> : <ManagerOffice id={id} state={state} mood={mood} onPanel={setPanelOpen} />}
+    </div>
+  );
+}
+
+// -- Academy agents ------------------------------------------------------------------------------
+const FLOOR_NAME: Record<string, string> = { RESEARCH: "Floor 1 · Research", PAPER: "Floor 2 · Paper Trading Hall", DEMO: "Floor 3 · Demo Desk", RETIRED: "the Alumni wall" };
+const OUTCOME: Record<string, string> = { PROMOTE: "promoted to Floor 2", PROMOTE_CURRENT: "promoted to Floor 2", IMPROVED: "improved", NO_IMPROVEMENT: "no improvement", INTERRUPTED: "interrupted", ERROR: "error" };
+
+const tsIso = (ts: string | number | null | undefined): string | null => {
+  if (ts === null || ts === undefined) return null;
+  const ms = typeof ts === "number" || /^\d+(\.\d+)?$/.test(ts) ? Number(ts) * 1000 : Date.parse(ts);
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+};
+
+const traineeLook = (a: AcademySpaceAgent): Look =>
+  ({ chair: "#1f2633", skin: "#d9a67c", hair: "#2b2523", hairStyle: "neat", top: "#334155", inner: "#e2e8f0", accent: a.persona.color, ...(a.persona.look ?? {}) }) as Look;
+
+function traineeState(a: AcademySpaceAgent, d: AgentDetail | null, dataReady: boolean): AgentState {
+  const paused = !!a.paused || a.status === "PAUSED";
+  const key: StateKey = paused ? "paused" : a.sprinting ? "analyzing" : a.positions ? "reviewing" : a.stage === "RESEARCH" ? "idle" : "waiting";
+  const doing = traineeDoing(a, dataReady);
+  return {
+    key, headline: paused ? `Paused${a.paused ? `: ${a.paused}` : ""}` : doing.charAt(0).toUpperCase() + doing.slice(1), sub: null,
+    detail: a.last_event?.summary ?? null,
+    symbols: (d?.positions ?? []).map((p) => ({ symbol: pair(p.instrument), side: p.side > 0 ? "buy" : "sell" })),
+    at: tsIso(a.last_event?.ts), source: "Forex engine records", book: null,
+  };
+}
+
+/** Answers in the agent's voice, assembled only from its Academy records. */
+function academyAnswers(d: AgentDetail): { q: string; a: string; source: string }[] {
+  const floor = FLOOR_NAME[d.stage];
+  const v = d.validation;
+  const u = v?.unseen;
+  const here = d.paper_current_version;
+  const weeks = d.weekly ?? [];
+  const failing = (v?.checks ?? []).filter((c) => !c.passed).map((c) => c.name.toLowerCase());
+  const qa: { q: string; a: string; source: string }[] = [];
+  qa.push({
+    q: "How are you doing?",
+    a: d.stage === "RESEARCH"
+      ? `I'm on ${floor}, so I don't trade yet. ${v?.status ? `My latest validation ${v.passed ? "passed" : "failed"}${failing.length ? ` (still failing: ${failing.join(", ")})` : ""}.` : "I haven't been validated yet."}${u ? ` On history I had never seen, I averaged ${fmtR(u.avg_r, 3)} over ${u.trades} trades.` : ""}`
+      : `I'm in week ${weekOnFloor(d.stage_since) ?? 1} on ${floor}. My $10,000 ${d.stage === "DEMO" ? "practice" : "virtual"} account is at ${money(d.equity)} (${signedPct(d.return_pct)}), with ${here.trades} trade${here.trades === 1 ? "" : "s"} here${here.avg_r !== null ? ` averaging ${fmtR(here.avg_r)}` : ""} and a max drawdown of ${pct(d.max_drawdown, 1)}.`,
+    source: d.stage === "RESEARCH" ? "Validation report" : "Account, equity marks, and trades",
+  });
+  qa.push({ q: "How do you trade?", a: `${d.strategy_info?.description ?? d.persona.about} I'm on version ${d.version}${d.version_note ? ` (${d.version_note})` : ""}.`, source: `Strategy catalog · v${d.version}` });
+  if (weeks.length) {
+    qa.push({ q: "How did each week go?", a: `${weeks.map((w) => `Week ${w.week}${w.complete ? "" : " so far"}: ${signedPct(w.return_pct)} with ${w.trades} trade${w.trades === 1 ? "" : "s"}`).join(". ")}.`, source: "Equity marks on this floor" });
+  }
+  const sp = d.sprints[0];
+  qa.push({
+    q: "What changed in your last sprint?",
+    a: sp ? `${sp.day}: ${OUTCOME[sp.outcome ?? ""] ?? (sp.outcome ?? "running").toLowerCase()}${sp.to_version ? `, now version ${sp.to_version}` : ""}. ${sp.summary.verdict ?? ""}${sp.summary.change ? ` The change: ${sp.summary.change}.` : ""}`
+      : d.stage === "RESEARCH" ? "Nothing yet; my first sprint runs tonight at 1:00 AM New York." : "Sprints only change Floor 1 agents. If my strategy needs work, I go back to research.",
+    source: sp ? `Sprint report ${sp.day}` : "Sprint schedule",
+  });
+  const todo = d.readiness.checks.filter((c) => !c.passed && !c.advisory && c.name !== "Owner decision");
+  qa.push({
+    q: "When do you move up?",
+    a: !d.readiness.next ? "I'm retired; my records stay on the Alumni wall."
+      : d.readiness.eligible ? `I meet every gate for ${d.readiness.next}. The decision is yours${d.stage === "PAPER" ? "; Graham can also propose it" : ""}.`
+        : `Next for me is ${d.readiness.next}. Still to do: ${todo.map((c) => `${c.name.toLowerCase()} (${c.detail ?? "pending"})`).join("; ")}.${d.stage === "RESEARCH" ? " That move is automatic when I pass." : ""}`,
+    source: "Readiness gates",
+  });
+  return qa;
+}
+
+function AcademySeat({ a, d, reload, state, onPanel }: { a: AcademySpaceAgent; d: AgentDetail | null; reload: () => void; state: AgentState; onPanel: (open: boolean) => void }) {
+  const navigate = useNavigate();
+  const answers = useMemo(() => (d ? academyAnswers(d) : []), [d]);
+  const [asked, setAsked] = useState<number | null>(null);
+  const [panel, setPanel] = useState<string | null>(null);
+  const trading = a.stage === "PAPER" || a.stage === "DEMO";
+  const v = d?.validation;
+  const widgets: Widget[] = !d ? [] : [
+    ...(trading ? [{
+      key: "account", label: a.stage === "DEMO" ? "Practice account" : "Paper account", icon: "◔", teaser: `${money(d.equity)} · ${signedPct(d.return_pct)}`,
+      body: (
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-1 rounded-xl bg-white/5 sm:grid-cols-4">
+            <Kpi label="Equity" value={money(d.equity)} />
+            <Kpi label="Return" value={<span className={tone(d.return_pct)}>{signedPct(d.return_pct)}</span>} />
+            <Kpi label="Max drawdown" value={pct(d.max_drawdown, 1)} />
+            <Kpi label="Trades here" value={d.paper_current_version.trades} sub={fmtR(d.paper_current_version.avg_r)} />
+          </div>
+          <EquityLine points={d.equity_series} color={a.persona.color} empty="The curve starts with the first 15-minute equity mark." />
+        </div>
+      ),
+    }, {
+      key: "weeks", label: "Week by week", icon: "▦", teaser: `${d.weekly.length} week${d.weekly.length === 1 ? "" : "s"} on this floor`,
+      body: d.weekly.length ? (
+        <Table head={["Week", "From", "Start", "End", "Return", "Trades", "Net"]}>
+          {d.weekly.map((w) => (
+            <tr key={w.week} className="border-t border-ink-800">
+              <td className="py-1.5 text-slate-200">{w.week}{w.complete ? "" : " (so far)"}</td>
+              <td className="text-slate-400">{new Date(w.start * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</td>
+              <td className="tabular-nums">{money(w.start_equity)}</td>
+              <td className="tabular-nums">{money(w.end_equity)}</td>
+              <td className={`tabular-nums ${tone(w.return_pct)}`}>{signedPct(w.return_pct)}</td>
+              <td className="tabular-nums">{w.trades}</td>
+              <td className={`tabular-nums ${tone(w.net_usd)}`}>{money(w.net_usd)}</td>
+            </tr>
+          ))}
+        </Table>
+      ) : <Empty>Week 1 starts the day the agent arrives on this floor.</Empty>,
+    }] : []),
+    {
+      key: "strategy", label: "Strategy", icon: "♟", teaser: `v${d.version} · ${d.strategy_info?.title ?? d.strategy}`,
+      body: (
+        <div className="space-y-3 text-sm">
+          {d.strategy_info?.title && <h4 className="font-medium text-slate-100">{d.strategy_info.title}</h4>}
+          <p className="text-slate-300">{d.strategy_info?.description ?? d.persona.about}</p>
+          <Params version={d.versions[0]} />
+        </div>
+      ),
+    },
+    { key: "validation", label: "Validation", icon: "✓", teaser: v?.status ? `${v.status.toLowerCase()}${v.unseen ? ` · unseen ${fmtR(v.unseen.avg_r, 3)}` : ""}` : "pending", body: <ValidationCard report={v?.report} summary={v ?? null} /> },
+    {
+      key: "next", label: "Next floor", icon: "↑", teaser: d.readiness.label,
+      body: (
+        <div className="space-y-4 text-sm">
+          {d.readiness.next && <p className="text-slate-300">Next: <span className="text-slate-100">{d.readiness.next}</span></p>}
+          <CheckList checks={d.readiness.checks} />
+          <AcademyControls a={d} onDone={reload} />
+        </div>
+      ),
+    },
+    {
+      key: "sprints", label: "Research sprints", icon: "⟳", teaser: d.sprints[0] ? `${d.sprints[0].day} · ${OUTCOME[d.sprints[0].outcome ?? ""] ?? "running"}` : "none yet",
+      body: d.sprints.length ? (
+        <ul className="space-y-3 text-sm">
+          {d.sprints.map((sp) => (
+            <li key={sp.id}>
+              <p className="text-slate-200"><Link to={`/firm?open=${encodeURIComponent(`/academy/reports/${sp.day}`)}`} className="text-gold-300 hover:underline">{sp.day}</Link> · {OUTCOME[sp.outcome ?? ""] ?? "running"}{sp.to_version ? ` → v${sp.to_version}` : ""}</p>
+              <p className="text-xs text-slate-500">{sp.summary.verdict ?? sp.summary.change ?? ""}</p>
+            </li>
+          ))}
+        </ul>
+      ) : <Empty>{a.stage === "RESEARCH" ? "The first sprint runs tonight at 1:00 AM New York." : "Only Floor 1 agents are in the nightly sprints."}</Empty>,
+    },
+    {
+      key: "trades", label: "Trades", icon: "⇄", teaser: `${d.positions.length} open · ${d.trades.length} recent`,
+      body: (
+        <div className="space-y-4">
+          {d.positions.length > 0 && (
+            <Table head={["Pair", "Side", "Units", "Entry", "Mark", "Stop", "Risk"]}>
+              {d.positions.map((p) => (
+                <tr key={p.id} className="border-t border-ink-800">
+                  <td className="py-1.5 font-semibold text-slate-200">{pair(p.instrument)}</td>
+                  <td className={p.side > 0 ? "text-emerald-300" : "text-rose-300"}>{p.side > 0 ? "Long" : "Short"}</td>
+                  <td className="tabular-nums">{p.units.toLocaleString()}</td>
+                  <td className="tabular-nums">{p.entry}</td>
+                  <td className="tabular-nums">{p.mark ?? "—"}</td>
+                  <td className="tabular-nums">{p.stop}</td>
+                  <td className="tabular-nums">{money(p.risk_usd)}</td>
+                </tr>
+              ))}
+            </Table>
+          )}
+          {d.trades.length ? (
+            <Table head={["Closed", "Pair", "Side", "P&L", "R", "Exit"]}>
+              {d.trades.slice(0, 40).map((t) => (
+                <tr key={t.id} className="border-t border-ink-800">
+                  <td className="py-1.5 text-slate-400">{when(new Date(t.closed_at * 1000).toISOString())}</td>
+                  <td className="font-semibold text-slate-200">{pair(t.instrument)}</td>
+                  <td className={t.side > 0 ? "text-emerald-300" : "text-rose-300"}>{t.side > 0 ? "Long" : "Short"}</td>
+                  <td className={`tabular-nums ${tone(t.pnl_usd + t.financing_usd)}`}>{money(t.pnl_usd + t.financing_usd)}</td>
+                  <td className={`tabular-nums ${tone(t.r)}`}>{fmtR(t.r)}</td>
+                  <td className="text-slate-400">{t.exit_reason}</td>
+                </tr>
+              ))}
+            </Table>
+          ) : <Empty>No closed trades yet.</Empty>}
+        </div>
+      ),
+    },
+    {
+      key: "journal", label: "Journal", icon: "✎", teaser: d.events[0] ? ago(tsIso(d.events[0].ts)) : "empty",
+      body: (
+        <ul className="space-y-2 text-sm">
+          {d.events.map((e) => (
+            <li key={e.id}>
+              <p className="text-slate-200">{e.summary.replace(`${d.name}: `, "")}</p>
+              <p className="text-[11px] text-slate-500">{e.type.toLowerCase().replace(/_/g, " ")} · {ago(tsIso(e.ts))}</p>
+            </li>
+          ))}
+        </ul>
+      ),
+    },
+  ];
+  const current = widgets.find((w) => w.key === panel);
+  useEffect(() => onPanel(!!current), [current, onPanel]);
+  const answer = asked !== null ? answers[asked] : null;
+  const wk = weekOnFloor(d?.stage_since ?? a.stage_since);
+  return (
+    <>
+      <div className="relative z-10 flex flex-col gap-3 p-4 lg:absolute lg:left-6 lg:top-20 lg:w-[min(24rem,28vw)] lg:p-0">
+        {answer ? (
+          <Speech id={a.id} state={state} title={`${a.name} · ${answer.q}`}>
+            <p className="mt-1.5 text-[15px] leading-relaxed text-slate-100">“{answer.a}”</p>
+            <div className="mt-2 flex items-center gap-3 text-[10px] text-slate-500">
+              <span>source: {answer.source}</span>
+              <button className="ml-auto text-slate-400 hover:text-slate-200" onClick={() => setAsked(null)}>What's happening now?</button>
+            </div>
+          </Speech>
+        ) : (
+          <Speech id={a.id} state={state} title={`${a.name} · right now`} />
+        )}
+        <div className={`${glass} p-3`}>
+          <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Ask {a.name}</div>
+          <div className="flex flex-wrap gap-1.5">
+            {answers.map((qa, i) => (
+              <button key={qa.q} onClick={() => setAsked(i)} className={`rounded-full border px-3 py-1.5 text-xs transition ${asked === i ? "border-gold-500/70 bg-white/10 text-slate-50" : "border-white/10 text-slate-300 hover:border-white/25 hover:text-slate-100"}`}>
+                {qa.q}
+              </button>
+            ))}
+            <button onClick={() => navigate(`/firm/cio?ask=${encodeURIComponent(`Give me your honest assessment of ${a.name} in the Academy: the strategy, the evidence so far${trading ? ", the week-by-week paper results, and whether ${a.name} is ready for the Demo Desk" : ", and what the sprints are finding"}.`)}`)} className="rounded-full border border-gold-500/40 px-3 py-1.5 text-xs text-gold-300 hover:border-gold-500">
+              Ask Graham about {a.name} →
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="relative z-10 p-4 lg:absolute lg:bottom-24 lg:right-6 lg:top-20 lg:flex lg:w-[min(38rem,40vw)] lg:flex-col lg:p-0">
+        {!d ? (
+          <div className={`${glass} p-4 text-sm text-slate-400`}>Pulling up {a.name}'s records…</div>
+        ) : current ? (
+          <Panel title={`${current.icon}  ${current.label}`} onClose={() => setPanel(null)}>{current.body}</Panel>
+        ) : (
+          <div className="lg:ml-auto lg:w-72"><WidgetList widgets={widgets} open={setPanel} /></div>
+        )}
+      </div>
+
+      {d && (
+        <div className={`${glass} relative z-10 mx-4 mb-4 flex flex-wrap justify-center divide-x divide-white/10 lg:absolute lg:bottom-6 lg:left-1/2 lg:mx-0 lg:mb-0 lg:-translate-x-1/2`}>
+          <Kpi label="Floor" value={<span className="text-base">{FLOOR_NAME[d.stage].split(" · ")[0]}</span>} sub={trading && wk ? `week ${wk}` : `v${d.version}`} />
+          {trading ? (
+            <>
+              <Kpi label="Equity" value={money(d.equity)} />
+              <Kpi label="Return" value={<span className={tone(d.return_pct)}>{signedPct(d.return_pct)}</span>} sub={`${d.paper_current_version.trades} trades here`} />
+            </>
+          ) : (
+            <>
+              <Kpi label="Validation" value={<span className={v?.passed ? "text-emerald-300" : "text-base text-slate-300"}>{v?.status ? v.status.toLowerCase() : "pending"}</span>} />
+              <Kpi label="Unseen data" value={fmtR(v?.unseen?.avg_r, 3)} sub={v?.unseen ? `${v.unseen.trades} trades` : undefined} />
+            </>
+          )}
+          <Kpi label="Next" value={<span className="text-base">{d.readiness.eligible ? "ready" : d.readiness.next ? "proving" : "—"}</span>} sub={d.readiness.label} />
+        </div>
+      )}
+    </>
+  );
+}
+
+/** Sit down with an Academy agent: the same 1-on-1 as a manager's office, from the Academy's records. */
+export function AcademyOffice({ a, space, onClose, top = 57 }: { a: AcademySpaceAgent; space: Space; onClose: () => void; top?: number }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const { bump } = useLive();
+  const { data: d, reload } = useResource<AgentDetail>(`/api/academy/agents/${a.id}`, { every: 30000, bump });
+  const wide = useWide();
+  const [panelOpen, setPanelOpen] = useState(false);
+  const state = traineeState(a, d, !!space.academy?.engine?.data_ready);
+  const mood: Mood = { kind: a.stage !== "RESEARCH" && a.return_pct <= -0.05 ? "stressed" : a.stage !== "RESEARCH" && a.return_pct >= 0.02 ? "pleased" : "calm", reason: null };
+  const who: Who = { look: traineeLook(a), name: a.name, title: `${a.style === "day" ? "Day trader" : "Swing trader"} · ${FLOOR_NAME[a.stage].split(" · ")[0]}`, wall: ["#22201c", "#141210", "#4a3b30"] };
+  return (
+    <div className="fixed inset-x-0 bottom-0 z-40 overflow-y-auto bg-ink-950 lg:overflow-hidden" style={{ top }} role="dialog" aria-label={`1-on-1 with ${a.name}`}>
+      <div className="relative h-[46vh] lg:absolute lg:inset-0 lg:h-auto">
+        <Room id={a.id} state={state} mood={mood} shifted={wide && panelOpen} who={who} />
+        <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-ink-950/50 via-transparent to-ink-950/60" />
+      </div>
+      <header className="absolute left-0 right-0 top-0 z-20 flex items-center gap-3 px-4 py-3 lg:px-6">
+        <button onClick={onClose} className={`${glass} px-3 py-1.5 text-xs text-slate-200 hover:text-white`}>← The Firm</button>
+        <div className={`${glass} flex items-center gap-2 px-3 py-1.5`}>
+          <span className="h-2 w-2 rounded-full" style={{ background: a.persona.color }} />
+          <span className="font-display text-lg leading-none text-slate-50">{a.name}</span>
+          <span className="hidden text-xs text-slate-400 sm:inline">{a.persona.tagline} · {FLOOR_NAME[a.stage]}</span>
+        </div>
+        <Link to={`/academy/${a.id}`} className={`${glass} ml-auto px-3 py-1.5 text-xs text-slate-400 hover:text-slate-200`}>Full record ↗</Link>
+      </header>
+      <AcademySeat a={a} d={d} reload={reload} state={state} onPanel={setPanelOpen} />
     </div>
   );
 }

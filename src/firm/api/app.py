@@ -214,6 +214,24 @@ def create_app(host: Host) -> FastAPI:
             ac = {"available": False}
         return {"money": views.money_analytics(firm), "academy": ac}
 
+    FLOOR_STAGES = {"academy-research": "RESEARCH", "academy-hall": "PAPER", "academy-demo": "DEMO"}
+
+    @app.get("/api/analytics/{scope}")
+    def floor_analytics(scope: str, _: str = Depends(user)) -> dict[str, Any]:
+        """One floor's boardroom: core (L3), forex (L2), operations (L1), or an Academy floor."""
+        try:
+            if scope == "core":
+                return views.core_analytics(firm)
+            if scope == "operations":
+                return views.operations_analytics(firm)
+            if scope == "forex":
+                return {"academy": academy.analytics_block(), "chairs": 4, "live_chairs_filled": 0}
+            if scope in FLOOR_STAGES:
+                return academy.floor_analytics(FLOOR_STAGES[scope])
+        except sqlite3.Error as exc:
+            raise HTTPException(503, f"Academy data unavailable: {exc}") from None
+        raise HTTPException(404, "unknown analytics scope")
+
     @app.get("/api/academy/reports")
     def academy_reports(_: str = Depends(user)) -> dict[str, Any]:
         try:

@@ -23,6 +23,8 @@ ACTIONS = {"pause", "resume", "validate", "sprint", "auto_on", "auto_off", "to_d
 START_CAPITAL = 10_000.0
 # Floor 2 (paper) and Floor 3 (OANDA demo): at least four weeks and enough trades for the result to mean something
 QUALIFY = {"PAPER": {"days": 28, "trades": {"day": 40, "swing": 15}}, "DEMO": {"days": 28, "trades": {"day": 30, "swing": 10}}}
+# Graham may propose a Demo Desk seat after this many profitable days on paper (the owner usually decides at 4 weeks)
+PROPOSE_AFTER_DAYS = 14
 FLOORS = {"RESEARCH": "Floor 1 · Research", "PAPER": "Floor 2 · Paper trading", "DEMO": "Floor 3 · OANDA Demo Desk", "RETIRED": "Alumni"}
 STALE_SECONDS = 120
 
@@ -67,6 +69,12 @@ def _stats(trades: list[sqlite3.Row]) -> dict[str, Any]:
         "profit_factor": (sum(wins) / sum(losses)) if losses else None,
         "net_usd": round(sum(net), 2),
     }
+
+
+def _epoch(iso_ts: str | None) -> int:
+    from datetime import datetime
+
+    return int(datetime.fromisoformat(iso_ts).timestamp()) if iso_ts else 0
 
 
 def _equity(conn: sqlite3.Connection, agent_id: str) -> list[tuple[int, float]]:
@@ -127,17 +135,20 @@ def _readiness(agent: sqlite3.Row, paper: dict[str, Any], validation: dict[str, 
         if expected is not None and paper.get("avg_r") is not None and sd and n > 1:
             band_ok = paper["avg_r"] >= expected - 2 * sd / math.sqrt(n)
         where = "paper" if stage == "PAPER" else "demo"
+        ret = paper.get("return_pct")
         checks = [
-            {"name": f"4+ weeks on this floor", "passed": days >= rule["days"], "detail": f"{days} days"},
-            {"name": f"{need}+ {where} trades", "passed": n >= need, "detail": f"{n} trades"},
-            {"name": f"{where.title()} results in line with the backtest", "passed": bool(band_ok), "detail": "not enough trades yet" if band_ok is None else ("within band" if band_ok else "below band")},
+            {"name": "4+ weeks on this floor", "passed": days >= rule["days"], "detail": f"{days} day{'' if days == 1 else 's'} ({days // 7} full week{'' if days // 7 == 1 else 's'})"},
+            {"name": f"Profitable over its {where} weeks", "passed": ret is not None and ret > 0, "detail": "no result yet" if ret is None else f"{ret:+.2%} since it arrived"},
             {"name": "Drawdown under 10% and not paused", "passed": dd < 0.10 and not paused, "detail": f"max {dd:.1%}" + (f", paused: {paused}" if paused else "")},
+            {"name": f"{need}+ {where} trades", "passed": n >= need, "detail": f"{n} trades", "advisory": True},
+            {"name": f"{where.title()} results in line with the backtest", "passed": bool(band_ok), "detail": "not enough trades yet" if band_ok is None else ("within band" if band_ok else "below band"), "advisory": True},
         ]
         nxt = "Floor 3 · Demo Desk (your approval)" if stage == "PAPER" else "Forex Division live chair (Graham's memo + your authorization)"
-        checks.append({"name": "Owner decision", "passed": False, "detail": "you decide; nothing moves automatically"})
-        ready = all(c["passed"] for c in checks[:-1])
-        return {"next": nxt, "automatic": False, "eligible": ready, "checks": checks,
-                "label": f"Eligible: {nxt}" if ready else f"Proving itself ({sum(c['passed'] for c in checks[:-1])}/4 gates)"}
+        gates = [c for c in checks if not c.get("advisory")]
+        checks.append({"name": "Owner decision", "passed": False, "detail": "you evaluate and decide; Graham may propose it" if stage == "PAPER" else "you decide; nothing moves automatically"})
+        ready = all(c["passed"] for c in gates)
+        return {"next": nxt, "automatic": False, "eligible": ready, "checks": checks, "days_on_floor": days,
+                "label": f"Ready for your review: {nxt}" if ready else f"Proving itself ({sum(c['passed'] for c in gates)}/{len(gates)} gates)"}
     return {"next": None, "automatic": False, "eligible": False, "checks": [], "label": "Retired"}
 
 
@@ -178,8 +189,29 @@ def _card(conn: sqlite3.Connection, a: sqlite3.Row, engine: dict[str, Any]) -> d
         "equity": round(equity, 2), "cash": round(acct["cash"], 2) if acct else None, "return_pct": equity / START_CAPITAL - 1, "max_drawdown": dd,
         "open_positions": len(positions), "paper": paper_all, "paper_current_version": paper_cur,
         "validation": val, "activity": live.get("activity"), "last_event": dict(last) if last else None,
-        "readiness": _readiness(a, paper_cur, val, dd, acct["paused"] if acct else None, sprint),
+        "readiness": _readiness(a, {**paper_cur, "return_pct": equity / START_CAPITAL - 1 if a["stage"] in ("PAPER", "DEMO") else None}, val, dd, acct["paused"] if acct else None, sprint),
+        "weekly": weekly(series, cur_trades, floor_since) if a["stage"] in ("PAPER", "DEMO") else [],
     }
+
+
+def weekly(series: list[tuple[int, float]], trades: list[Any], since: int) -> list[dict[str, Any]]:
+    """Week-by-week results on the current floor: each 7-day period from the day the agent arrived."""
+    if not since:
+        return []
+    now = int(time.time())
+    out = []
+    week = 0
+    while since + week * 7 * 86400 <= now:
+        a, b = since + week * 7 * 86400, since + (week + 1) * 7 * 86400
+        before = [e for t, e in series if t < a]
+        inside = [e for t, e in series if a <= t < b]
+        start = before[-1] if before else START_CAPITAL
+        end = inside[-1] if inside else start
+        tr = [t for t in trades if a <= t["closed_at"] < b]
+        out.append({"week": week + 1, "start": a, "end": min(b, now), "complete": b <= now, "start_equity": round(start, 2), "end_equity": round(end, 2),
+                    "return_pct": end / start - 1 if start else 0.0, "trades": len(tr), "net_usd": round(sum(t["pnl_usd"] + t["financing_usd"] for t in tr), 2)})
+        week += 1
+    return out
 
 
 def overview() -> dict[str, Any]:
@@ -228,6 +260,7 @@ def agent(agent_id: str) -> dict[str, Any] | None:
         transitions = [dict(r) for r in conn.execute("SELECT * FROM stage_transitions WHERE agent_id = ? ORDER BY id DESC", (agent_id,))]
         validation = _validation(conn, agent_id, a["current_version"], full=True)
         prices = {r["instrument"]: dict(r) for r in conn.execute("SELECT * FROM prices")}
+        strategy_info = _strategy_catalog(conn).get(a["strategy"])
     for p in positions:
         q = prices.get(p["instrument"])
         p["mark"] = (q["bid"] if p["side"] > 0 else q["ask"]) if q else None
@@ -235,6 +268,7 @@ def agent(agent_id: str) -> dict[str, Any] | None:
         **card, "equity_series": series[::step] + (series[-1:] if series and (len(series) - 1) % step else []),
         "positions": positions, "trades": trades, "versions": versions, "revisions": revisions, "events": events,
         "validation": validation, "decision": decision, "diagnostics": diagnostics(all_trades), "sprints": sprints, "transitions": transitions,
+        "strategy_info": strategy_info,
     }
 
 
@@ -279,7 +313,9 @@ def space_block() -> dict[str, Any]:
                     "id": a["id"], "name": a["name"], "style": a["style"], "persona": json.loads(a["persona_json"]), "status": a["status"],
                     "paused": acct["paused"] if acct else None, "equity": round(eq, 2), "return_pct": eq / START_CAPITAL - 1, "positions": n_pos,
                     "activity": ((eng.get("agents") or {}).get(a["id"]) or {}).get("activity"), "last_event": dict(ev) if ev else None,
-                    "validation": val["status"] if val else None, "version": a["current_version"], "stage": a["stage"],
+                    "validation": val["status"] if val else None, "version": a["current_version"], "stage": a["stage"], "stage_since": a["stage_since"],
+                    "floor_trades": conn.execute("SELECT count(*) AS n FROM trades WHERE agent_id = ? AND version = ? AND closed_at >= ?",
+                                                 (a["id"], a["current_version"], _epoch(a["stage_since"]))).fetchone()["n"],
                     "sprinting": ((_kv(conn, f"sprint:{a['id']}", {}) or {}).get("step") if (_kv(conn, f"sprint:{a['id']}", {}) or {}).get("running") else None),
                     "last_sprint": (lambda r: {"day": r["day"], "outcome": r["outcome"]} if r else None)(
                         conn.execute("SELECT day, outcome FROM sprints WHERE agent_id = ? AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1", (a["id"],)).fetchone()),
@@ -337,7 +373,7 @@ def report(day: str) -> dict[str, Any] | None:
 
 
 def morning_message(day: str) -> str | None:
-    """One short line for Telegram/Discord: the report is ready, who was tested, who passed."""
+    """One short line for Telegram: the report is ready, who was tested, who passed."""
     conn = _connect()
     if conn is None:
         return None
@@ -401,7 +437,7 @@ def cio_overview() -> dict[str, Any]:
     eng = ov.get("engine") or {}
     return {
         "available": True,
-        "how_it_works": "Floor 1 research (no trading; a sprint every night at 01:00 NY polishes each strategy on OANDA history; promotion to Floor 2 is automatic when validation and the day-1 test pass). Floor 2 paper trading ($10,000 virtual, 4+ weeks; owner gives a Demo Desk seat). Floor 3 OANDA practice account (owner decides on a live chair after Graham's memo). No live forex trading exists.",
+        "how_it_works": "Floor 1 research (no trading; a sprint every night at 01:00 NY polishes each strategy on OANDA history; promotion to Floor 2 is automatic when validation and the day-1 test pass). Floor 2 paper trading ($10,000 virtual, 4+ weeks; the owner evaluates the weekly results and gives a Demo Desk seat when it is profitable; you may propose a seat with an academy_promotion proposal after 2+ profitable weeks). Floor 3 OANDA practice account (owner decides on a live chair after Graham's memo). No live forex trading exists.",
         "engine": {k: eng.get(k) for k in ("online", "market_open", "data_ready", "job", "queue", "last_error", "demo")},
         "agents": agents,
         "latest_report": ov.get("latest_report"),
@@ -433,7 +469,8 @@ def cio_agent(agent_id: str) -> dict[str, Any] | None:
                      "change": s["summary"].get("change"), "current": s["summary"].get("current"), "best": s["summary"].get("best"), "day1": s["summary"].get("day1")} for s in a["sprints"][:10]],
         "paper_account": {"equity": a["equity"], "return_pct": a["return_pct"], "max_drawdown": a["max_drawdown"], "all_time": a["paper"], "this_floor": a["paper_current_version"]},
         "open_positions": a["positions"], "recent_trades": a["trades"][:25], "diagnostics": a["diagnostics"],
-        "floor_history": a["transitions"], "readiness": a["readiness"],
+        "floor_history": a["transitions"], "readiness": a["readiness"], "weeks_on_this_floor": a["weekly"],
+        "demo_desk_proposal": promotion_check(a["id"]),
         "recent_events": [{"academy_event_id": e["id"], "ts": e["ts"], "type": e["type"], "summary": e["summary"]} for e in a["events"][:20]],
     }
 
@@ -488,3 +525,58 @@ def analytics_block() -> dict[str, Any]:
         "paper_equity": round(sum(p["equity"] for p in paper), 2), "paper_capital": 10_000.0 * len(paper),
         "latest_report": ov.get("latest_report"), "sprint_history": hist,
     }
+
+
+def promotion_check(agent_id: str) -> dict[str, Any]:
+    """Whether Graham may propose a Demo Desk seat for this agent now, and why not."""
+    ov = overview()
+    if not ov.get("available"):
+        return {"allowed": False, "reason": "the Academy is not running"}
+    a = next((x for x in ov["agents"] if x["id"] == agent_id), None)
+    if a is None:
+        return {"allowed": False, "reason": f"no Academy agent '{agent_id}'"}
+    if a["stage"] != "PAPER":
+        return {"allowed": False, "reason": f"{a['name']} is on {a['floor']}; only Floor 2 agents can take a Demo Desk seat"}
+    days = a["readiness"].get("days_on_floor", 0)
+    demo = (ov.get("engine") or {}).get("demo") or {}
+    seats_taken = sum(1 for x in ov["agents"] if x["stage"] == "DEMO")
+    reasons = []
+    if days < PROPOSE_AFTER_DAYS:
+        reasons.append(f"only {days} days on paper (propose after {PROPOSE_AFTER_DAYS}+)")
+    if a["return_pct"] <= 0:
+        reasons.append(f"not profitable on paper ({a['return_pct']:+.2%})")
+    if a["max_drawdown"] >= 0.10:
+        reasons.append(f"drawdown {a['max_drawdown']:.1%} is 10% or more")
+    if not demo.get("configured"):
+        reasons.append("the OANDA practice account for the Demo Desk is not set up yet")
+    if seats_taken >= 2:
+        reasons.append("both Demo Desk seats are taken")
+    return {"allowed": not reasons, "reason": "; ".join(reasons) or None, "agent": a["name"], "days_on_paper": days, "return_pct": a["return_pct"],
+            "max_drawdown": a["max_drawdown"], "weekly": a.get("weekly", [])}
+
+
+def floor_analytics(stage: str) -> dict[str, Any]:
+    """One Academy floor in depth, for that floor's boardroom."""
+    ov = overview()
+    if not ov.get("available"):
+        return {"available": False}
+    agents = [a for a in ov["agents"] if a["stage"] == stage]
+    rows = []
+    for a in agents:
+        v = a.get("validation") or {}
+        rows.append({
+            "id": a["id"], "name": a["name"], "color": a["persona"]["color"], "style": a["style"], "version": a["version"], "since": a["stage_since"],
+            "equity": a["equity"], "return_pct": a["return_pct"], "max_drawdown": a["max_drawdown"], "open_positions": a["open_positions"],
+            "this_floor": a["paper_current_version"], "weekly": a.get("weekly", []), "readiness": a["readiness"],
+            "validation": {"status": v.get("status"), "passed": v.get("passed"), "unseen": v.get("unseen"), "failing": [c["name"] for c in v.get("checks", []) if not c["passed"]]} if v else None,
+            "sprint": a.get("sprint"), "auto_revise": a["auto_revise"], "trials": a["trials"],
+        })
+    out: dict[str, Any] = {"available": True, "stage": stage, "floor": FLOORS.get(stage, stage), "agents": rows, "engine": {k: (ov.get("engine") or {}).get(k) for k in ("online", "market_open", "data_ready", "demo")}}
+    if stage == "RESEARCH":
+        conn = _connect()
+        with closing(conn):  # type: ignore[arg-type]
+            out["sprint_history"] = [dict(r) for r in conn.execute(  # type: ignore[union-attr]
+                "SELECT day, count(*) AS tested, sum(passed) AS passed, sum(outcome = 'IMPROVED') AS improved, sum(outcome = 'PROMOTE') AS promoted"
+                " FROM sprints WHERE finished_at IS NOT NULL GROUP BY day ORDER BY day DESC LIMIT 30")]
+        out["latest_report"] = ov.get("latest_report")
+    return out
