@@ -206,6 +206,14 @@ def create_app(host: Host) -> FastAPI:
             raise HTTPException(404, "no such Academy agent")
         return data
 
+    @app.get("/api/analytics")
+    def analytics(_: str = Depends(user)) -> dict[str, Any]:
+        try:
+            ac = academy.analytics_block()
+        except sqlite3.Error:
+            ac = {"available": False}
+        return {"money": views.money_analytics(firm), "academy": ac}
+
     @app.get("/api/academy/reports")
     def academy_reports(_: str = Depends(user)) -> dict[str, Any]:
         try:

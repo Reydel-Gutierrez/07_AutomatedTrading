@@ -6,7 +6,7 @@
 export type FloorId = "exec" | "core" | "forex" | "lobby" | "academy-demo" | "academy-hall" | "academy-research";
 
 export type DeptId =
-  | "cio" | "boardroom" | "treasury"
+  | "cio" | "treasury"
   | "tim" | "alex" | "max"
   | "market-room" | "day-1" | "day-2" | "swing-1" | "swing-2"
   | "lobby" | "records" | "operations"
@@ -82,8 +82,7 @@ const chair = (id: DeptId, name: string, style: "day" | "swing", x: number): Dep
 export const DEPTS: Dept[] = [
   // L4 Executive
   { id: "cio", name: "Office of the CIO", floor: "exec", rect: row("exec", 120, 400), purpose: "Graham, the Chief Investment Officer: oversees the firm, allocates his capital pool, and answers your questions with the records behind every answer.", people: ["cio"], folders: [{ label: "CIO Office", path: "/cio", note: "Conversations, proposals, memory" }] },
-  { id: "boardroom", name: "Boardroom", floor: "exec", rect: row("exec", 520, 280), purpose: "Where Graham's proposals wait for your decision. Nothing he proposes changes until you approve it.", folders: [{ label: "CIO Office", path: "/cio", note: "Review and decide on proposals" }] },
-  { id: "treasury", name: "Treasury", floor: "exec", rect: row("exec", 800, 400), purpose: "The firm's capital: what each manager holds, unallocated cash, Graham's pool, deposits, and every capital movement.", folders: [{ label: "Capital", path: "/capital", note: "Allocate, recall, fund the pool, caps" }, { label: "Headquarters", path: "/", note: "Firm totals and allocation" }] },
+  { id: "treasury", name: "Boardroom & Treasury", floor: "exec", rect: row("exec", 520, 680), purpose: "The firm's numbers in one room: capital, what you have contributed against what it is worth, overall and daily returns against the S&P 500, drawdowns, Graham's proposals waiting for you, and the Academy's floors and latest sprint. Click the room for the full analytics.", folders: [{ label: "Firm analytics", path: "/analytics", note: "Returns, contributions, daily marks, managers, and the Academy" }, { label: "CIO Office", path: "/cio", note: "Review and decide on proposals" }, { label: "Capital", path: "/capital", note: "Allocate, recall, fund the pool, caps" }] },
   // L3 Core Investments
   manager("tim", "Tim", "Core Investment Manager: a diversified long-term ETF portfolio, new cash invested toward targets, rebalanced on drift.", 120),
   manager("alex", "Alex", "Strategic Growth Manager: systematic momentum stock selection, each candidate checked by an AI research desk.", 480),
@@ -120,6 +119,7 @@ export const FOLDER_TITLES: [RegExp, string][] = [
   [/^\/capital$/, "Capital"],
   [/^\/activity$/, "Activity"],
   [/^\/system$/, "System"],
+  [/^\/analytics$/, "Firm analytics"],
   [/^\/academy$/, "The 537 Academy"],
   [/^\/academy\/reports/, "Sprint reports"],
   [/^\/academy\/(\w+)$/, "Academy agent"],

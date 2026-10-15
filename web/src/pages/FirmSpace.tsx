@@ -119,7 +119,7 @@ export default function FirmSpace() {
   return (
     <div className="relative overflow-hidden" style={{ height: `calc(100dvh - ${header}px)` }}>
       <PanZoom ref={camera} world={WORLD} start={start} label="Map of The 537 Firm" insetRight={wide && panel ? PANEL_W : 0} insetBottom={sheet ? Math.round(window.innerHeight * 0.45) : 0}>
-        <FirmMap space={space} states={states} moods={moods} overview={overview} events={events} now={now} sel={sel} onSelect={select} onFocus={focus} onBackground={() => setSel(null)} />
+        <FirmMap space={space} states={states} moods={moods} overview={overview} events={events} now={now} sel={sel} onSelect={select} onFocus={focus} onOpen={openFolder} onBackground={() => setSel(null)} />
       </PanZoom>
 
       <Controls camera={camera} onJump={goTo} onTower={() => focus(TOWER_RECT)} onAcademy={() => focus(ACADEMY_RECT)} />
@@ -405,10 +405,6 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
   switch (d.id) {
     case "cio": case "tim": case "alex": case "max":
       return [`${NAMES[d.id]}: ${states[d.id].headline}`];
-    case "boardroom": {
-      const p = space.cio.pending_proposals;
-      return p.length ? [`${p.length} proposal${p.length > 1 ? "s" : ""} awaiting your decision.`, ...p.slice(0, 4).map((x) => `#${x.id} ${x.title} · expires ${ago(x.expires_at)}`)] : ["No proposals awaiting your decision."];
-    }
     case "treasury":
       return overview ? [`Firm capital ${money(overview.firm.nav)}, of which ${money(overview.firm.unallocated)} is unallocated.`, ...overview.allocation.map((a) => `${a.name}: ${money(a.nav)} (${pct(a.pct, 0)})`)] : ["Loading capital…"];
     case "market-room": {

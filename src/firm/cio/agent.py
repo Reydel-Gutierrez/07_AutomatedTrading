@@ -192,6 +192,9 @@ class CIO:
         snapshot = tools.t_get_firm_overview()
         memories = self.memory.active()
         parts = [base, "## Firm snapshot (from the ledger and broker, as of now)\n" + json.dumps(snapshot, default=str)]
+        academy_now = academy_snapshot()
+        if academy_now:
+            parts.append("## The 537 Academy right now (details: get_academy, get_academy_agent, get_sprint_report)\n" + academy_now)
         if memories:
             parts.append("## What you remember (memory ids are citable)\n" + "\n".join(f"- [memory {m['id']}] ({m['kind']}) {m['text']}" for m in reversed(memories)))
         if conv.get("summary"):
@@ -234,3 +237,30 @@ def _msg(row: Any) -> dict[str, Any]:
     for k in ("citations_json", "tools_json", "proposals_json", "flags_json"):
         d[k.removesuffix("_json")] = json.loads(d.pop(k) or "[]")
     return d
+
+
+def academy_snapshot() -> str | None:
+    """One line per Academy agent for the CIO's context; never fails the conversation."""
+    try:
+        from firm.api.academy import cio_overview
+
+        ov = cio_overview()
+    except Exception:  # noqa: BLE001
+        return None
+    if not ov.get("available"):
+        return None
+    lines = []
+    for a in ov["agents"]:
+        v = a.get("validation") or {}
+        unseen = v.get("unseen") or {}
+        sp = a.get("last_sprint") or {}
+        acct = a["paper_account"]
+        money_part = f"paper ${acct['equity']:,.2f} ({acct['return_pct']:+.2%}), " if a["stage"] in ("PAPER", "DEMO") else ""
+        lines.append(
+            f"- {a['name']} ({a['style']}, class {a['class']}) {a['floor']} v{a['version']}: {money_part}validation {v.get('status') or 'pending'}"
+            + (f" (unseen {unseen.get('avg_r', 0) or 0:+.3f}R over {unseen.get('trades', 0)} trades)" if unseen else "")
+            + (f"; last sprint {sp.get('day')} {str(sp.get('outcome', '')).lower()}" if sp else "")
+        )
+    rep = ov.get("latest_report") or {}
+    head = f"Latest sprint report {rep.get('day')}: passed {', '.join(rep.get('passed') or []) or 'none'}." if rep else "No sprint report yet."
+    return head + "\n" + "\n".join(lines)

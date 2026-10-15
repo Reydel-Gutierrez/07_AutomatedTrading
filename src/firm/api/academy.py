@@ -290,7 +290,9 @@ def space_block() -> dict[str, Any]:
                 for a in conn.execute("SELECT id FROM agents") if (_kv(conn, f"sprint:{a['id']}", {}) or {}).get("running")
             ]
             prices = [dict(r) for r in conn.execute("SELECT instrument, bid, ask, time, tradeable FROM prices ORDER BY instrument")]
-        return {"available": True, "engine": {k: eng.get(k) for k in ("online", "heartbeat", "market_open", "data_ready", "job", "last_error", "demo")}, "agents": agents, "validations_running": running, "prices": prices}
+            latest = _kv(conn, "sprint_report_latest") or {}
+        report_brief = {k: latest.get(k) for k in ("day", "passed", "improved", "floor2")} if latest else None
+        return {"available": True, "latest_report": report_brief, "engine": {k: eng.get(k) for k in ("online", "heartbeat", "market_open", "data_ready", "job", "last_error", "demo")}, "agents": agents, "validations_running": running, "prices": prices}
     except sqlite3.Error as exc:
         return {"available": False, "error": str(exc)}
 
@@ -359,3 +361,130 @@ def morning_message(day: str) -> str | None:
     if retire:
         parts.append(f"Retirement suggested: {', '.join(retire)}.")
     return " ".join(parts)
+
+
+# -- Graham's read access and the analytics room ---------------------------------------------------
+
+def _strategy_catalog(conn: sqlite3.Connection) -> dict[str, Any]:
+    return _kv(conn, "strategy_catalog", {}) or {}
+
+
+def _brief_validation(v: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not v:
+        return None
+    rep = v.get("report") or {}
+    return {
+        "status": v.get("status"), "passed": v.get("passed"), "finished_at": v.get("finished_at"),
+        "failing": [c["name"] for c in (v.get("checks") or []) if not c.get("passed")],
+        "unseen": v.get("unseen"), "holdout": (rep.get("metrics") or {}).get("holdout"),
+        "trial_adjusted_sharpe": v.get("trial_adjusted_sharpe"),
+    }
+
+
+def cio_overview() -> dict[str, Any]:
+    """Everything happening in the Academy, compact enough for one tool result."""
+    ov = overview()
+    if not ov.get("available"):
+        return ov
+    agents = []
+    for a in ov["agents"]:
+        sp = a.get("sprint") or {}
+        agents.append({
+            "id": a["id"], "name": a["name"], "style": a["style"], "class": a["klass"], "floor": a["floor"], "stage": a["stage"], "since": a["stage_since"],
+            "strategy": a["strategy"], "version": a["version"], "version_note": a["version_note"], "variants_tried": a["trials"],
+            "paused": a["paused"], "nightly_sprints": a["auto_revise"],
+            "paper_account": {"equity": a["equity"], "return_pct": a["return_pct"], "max_drawdown": a["max_drawdown"], "open_positions": a["open_positions"], "this_floor": a["paper_current_version"]},
+            "validation": _brief_validation(a.get("validation")),
+            "last_sprint": {k: sp.get(k) for k in ("day", "outcome", "verdict", "to_version")} if sp else None,
+            "next_gate": a["readiness"]["next"], "readiness": a["readiness"]["label"],
+        })
+    eng = ov.get("engine") or {}
+    return {
+        "available": True,
+        "how_it_works": "Floor 1 research (no trading; a sprint every night at 01:00 NY polishes each strategy on OANDA history; promotion to Floor 2 is automatic when validation and the day-1 test pass). Floor 2 paper trading ($10,000 virtual, 4+ weeks; owner gives a Demo Desk seat). Floor 3 OANDA practice account (owner decides on a live chair after Graham's memo). No live forex trading exists.",
+        "engine": {k: eng.get(k) for k in ("online", "market_open", "data_ready", "job", "queue", "last_error", "demo")},
+        "agents": agents,
+        "latest_report": ov.get("latest_report"),
+        "recent_events": [{"academy_event_id": e["id"], "ts": e["ts"], "agent": e["agent_id"], "type": e["type"], "summary": e["summary"]} for e in ov.get("events", [])[:25]],
+        "rates": ov.get("prices"),
+    }
+
+
+def cio_agent(agent_id: str) -> dict[str, Any] | None:
+    a = agent(agent_id)
+    if a is None:
+        return None
+    conn = _connect()
+    with closing(conn):  # type: ignore[arg-type]
+        cat = _strategy_catalog(conn).get(a["strategy"], {})  # type: ignore[arg-type]
+    v = a.get("validation") or {}
+    rep = v.get("report") or {}
+    return {
+        "id": a["id"], "name": a["name"], "persona": a["persona"].get("about"), "floor": a["floor"], "stage": a["stage"], "since": a["stage_since"],
+        "strategy": {"key": a["strategy"], "title": cat.get("title"), "description": cat.get("description"), "tunable_settings": cat.get("tunables")},
+        "current_version": a["version"],
+        "versions": [{"version": x["version"], "note": x["note"], "created_at": x["created_at"], "by": x["created_by"], "validation": x["validation_status"], "params": x["params"], "risk_envelope": x["envelope"]} for x in a["versions"][:6]],
+        "validation": {
+            **(_brief_validation(v) or {}), "checks": rep.get("checks"), "windows": rep.get("windows"), "metrics": rep.get("metrics"),
+            "random_baseline_p": (rep.get("baseline") or {}).get("p_value"), "cost_stress": rep.get("stress"), "mc_dd95": rep.get("monte_carlo_dd95"),
+            "by_instrument": rep.get("by_instrument"), "day1": rep.get("day1"),
+        } if v else None,
+        "sprints": [{"day": s["day"], "outcome": s["outcome"], "from_version": s["from_version"], "to_version": s["to_version"], "verdict": s["summary"].get("verdict"),
+                     "change": s["summary"].get("change"), "current": s["summary"].get("current"), "best": s["summary"].get("best"), "day1": s["summary"].get("day1")} for s in a["sprints"][:10]],
+        "paper_account": {"equity": a["equity"], "return_pct": a["return_pct"], "max_drawdown": a["max_drawdown"], "all_time": a["paper"], "this_floor": a["paper_current_version"]},
+        "open_positions": a["positions"], "recent_trades": a["trades"][:25], "diagnostics": a["diagnostics"],
+        "floor_history": a["transitions"], "readiness": a["readiness"],
+        "recent_events": [{"academy_event_id": e["id"], "ts": e["ts"], "type": e["type"], "summary": e["summary"]} for e in a["events"][:20]],
+    }
+
+
+def cio_report(day: str | None = None) -> dict[str, Any] | None:
+    if day is None:
+        rs = reports(1)
+        if not rs:
+            return None
+        day = rs[0]["day"]
+    rep = report(day)
+    if rep is None:
+        return None
+    for s in rep.get("sprints", []):
+        s["summary"].pop("top_candidates", None)
+    return rep
+
+
+def event_label(event_id: int) -> str | None:
+    conn = _connect()
+    if conn is None:
+        return None
+    with closing(conn):
+        row = conn.execute("SELECT summary FROM events WHERE id = ?", (event_id,)).fetchone()
+    return row["summary"] if row else None
+
+
+def analytics_block() -> dict[str, Any]:
+    """The Academy at a glance, for the Boardroom & Treasury."""
+    ov = overview()
+    if not ov.get("available"):
+        return {"available": False}
+    agents = ov["agents"]
+    floors: dict[str, list[dict[str, Any]]] = {s: [] for s in ("RESEARCH", "PAPER", "DEMO", "RETIRED")}
+    for a in agents:
+        unseen = ((a.get("validation") or {}).get("unseen")) or {}
+        floors.setdefault(a["stage"], []).append({
+            "id": a["id"], "name": a["name"], "color": a["persona"]["color"], "version": a["version"], "style": a["style"],
+            "equity": a["equity"], "return_pct": a["return_pct"], "trades": a["paper_current_version"]["trades"], "avg_r": a["paper_current_version"]["avg_r"],
+            "validation": (a.get("validation") or {}).get("status"), "unseen_avg_r": unseen.get("avg_r"), "unseen_trades": unseen.get("trades"),
+            "last_sprint": (a.get("sprint") or {}).get("outcome"), "readiness": a["readiness"]["label"],
+        })
+    conn = _connect()
+    with closing(conn):  # type: ignore[arg-type]
+        hist = [dict(r) for r in conn.execute(  # type: ignore[union-attr]
+            "SELECT day, count(*) AS tested, sum(passed) AS passed, sum(outcome = 'IMPROVED') AS improved FROM sprints WHERE finished_at IS NOT NULL GROUP BY day ORDER BY day DESC LIMIT 14"
+        )]
+    paper = floors["PAPER"] + floors["DEMO"]
+    return {
+        "available": True, "engine_online": (ov.get("engine") or {}).get("online"), "floors": floors,
+        "counts": {k: len(v) for k, v in floors.items()},
+        "paper_equity": round(sum(p["equity"] for p in paper), 2), "paper_capital": 10_000.0 * len(paper),
+        "latest_report": ov.get("latest_report"), "sprint_history": hist,
+    }

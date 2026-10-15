@@ -14,7 +14,7 @@ from datetime import timedelta
 from typing import Any, Callable
 
 from firm.ai.providers import ToolSpec
-from firm.api import views
+from firm.api import academy, views
 from firm.broker.errors import BrokerUnavailable
 from firm.capital_pool import CapitalPool
 from firm.cio.memory import KINDS as MEMORY_KINDS
@@ -26,7 +26,7 @@ from firm.core import Firm
 from firm.money import D
 
 MAX_RESULT_CHARS = 14000
-CITATION_TYPES = ("event", "order", "proposal", "memory")
+CITATION_TYPES = ("event", "order", "proposal", "memory", "academy")
 
 
 def _obj(props: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -46,6 +46,32 @@ SPECS = [
     ToolSpec("get_risk_controls", "Kill switch, reconcile hold, drawdown brake and its scope, firm limits, and each sleeve's current drawdown.", _obj({})),
     ToolSpec("get_quotes", "Current Robinhood quotes (bid/ask/last/previous close) for up to 10 symbols. Read-only.", _obj({"symbols": {"type": "array", "items": {"type": "string"}}}, ["symbols"])),
     ToolSpec("get_price_history", "Stored daily closes for a symbol (VTI, VXUS, BND, SPY are always kept).", _obj({"symbol": {"type": "string"}, "days": {"type": "integer"}}, ["symbol"])),
+    ToolSpec(
+        "get_firm_analytics",
+        "The firm's money over time: total contributed (deposits minus withdrawals), dividends, every capital flow, daily marks and "
+        "daily returns vs SPY, best/worst day, up/down days, max and current drawdown. Combine with get_firm_overview for today's value.",
+        _obj({}),
+    ),
+    ToolSpec(
+        "get_academy",
+        "The 537 Academy (the firm's Forex Division training ground, on OANDA data): every agent's floor (1 research, 2 paper trading, "
+        "3 OANDA demo desk), strategy, version, validation result (failing checks, unseen-data and locked-year results), last nightly "
+        "sprint verdict, paper account, the latest sprint report, engine status, live rates, and recent Academy events (cite as type 'academy').",
+        _obj({}),
+    ),
+    ToolSpec(
+        "get_academy_agent",
+        "One Academy agent in depth: the strategy's full description and tunable settings (the algorithm), every recent version with its "
+        "parameters and risk envelope, the full validation report (windows, baseline, cost stress, Monte Carlo, day-1 test, by pair), "
+        "sprint history, paper trades and positions, diagnostics, floor history, and readiness for the next floor.",
+        _obj({"agent_id": {"type": "string"}}, ["agent_id"]),
+    ),
+    ToolSpec(
+        "get_sprint_report",
+        "A night's research sprint report (latest if no day is given, format YYYY-MM-DD): per agent, the candidates tried, the change "
+        "adopted, validation and day-1 results, and the verdict.",
+        _obj({"day": {"type": "string"}}),
+    ),
     ToolSpec("search_memory", "Search what you have been told to remember (objectives, preferences, decisions, concerns).", _obj({"query": {"type": "string"}}, ["query"])),
     ToolSpec("list_proposals", "Proposals and their status (PENDING, APPLIED, REJECTED, EXPIRED, FAILED).", _obj({"status": {"type": "string"}})),
     ToolSpec(
@@ -194,6 +220,20 @@ class CIOTools:
         step = max(1, len(bars) // 60)
         return {"symbol": symbol.upper(), "closes": [{"date": b.date, "close": str(b.close)} for b in bars[::step]], "count": len(bars)}
 
+    def t_get_firm_analytics(self) -> dict[str, Any]:
+        return views.money_analytics(self.firm)
+
+    def t_get_academy(self) -> dict[str, Any]:
+        return academy.cio_overview()
+
+    def t_get_academy_agent(self, agent_id: str) -> dict[str, Any]:
+        out = academy.cio_agent(agent_id)
+        return out if out is not None else {"error": f"no Academy agent '{agent_id}'"}
+
+    def t_get_sprint_report(self, day: str | None = None) -> dict[str, Any]:
+        out = academy.cio_report(day)
+        return out if out is not None else {"error": "no sprint report for that day yet"}
+
     def t_search_memory(self, query: str) -> dict[str, Any]:
         return {"memories": [{"id": m["id"], "kind": m["kind"], "text": m["text"], "active": bool(m["active"]), "created_at": m["created_at"]} for m in self.memory.search(query)]}
 
@@ -238,6 +278,10 @@ class CIOTools:
             if (kind, cid) in seen:
                 continue
             seen.add((kind, cid))
+            if kind == "academy" and isinstance(cid, int):
+                label = academy.event_label(cid)
+                (good if label else bad).append({"type": kind, "id": cid, **({"label": label[:140]} if label else {})})
+                continue
             if kind not in tables or not isinstance(cid, int):
                 bad.append(c)
                 continue

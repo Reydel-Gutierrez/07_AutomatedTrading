@@ -117,6 +117,7 @@ class Engine:
         self.load_specs()
         self.load_agents()
         self.load_demo()
+        self.publish_catalog()
         for key in self.feeds():
             last = self.store.last_time(*key)
             if last is not None:
@@ -209,6 +210,16 @@ class Engine:
         except (OandaError, KeyError) as exc:
             self.last_error = f"demo {rt.agent_id}: {exc}"
             rt.activity = "demo account error"
+
+    def publish_catalog(self) -> None:
+        """Each strategy's plain-English description and tunable settings, for HQ and Graham."""
+        from forex.strategies import STRATEGIES
+
+        self.db.put("strategy_catalog", {
+            k: {"title": st.title, "style": st.style, "description": (st.description or "").strip(), "defaults": dict(st.defaults),
+                "tunables": [{"name": t.name, "choices": list(t.choices) if t.choices else None, "step": t.step, "min": t.lo, "max": t.hi} for t in st.tunables]}
+            for k, st in STRATEGIES.items()
+        })
 
     def load_specs(self) -> None:
         if self.client is not None:

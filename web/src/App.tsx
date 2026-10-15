@@ -4,6 +4,7 @@ import { api, type FirmEvent, type Overview } from "./api";
 import { useEventStream, useHeaderHeight, useResource } from "./hooks";
 import { folderTitle } from "./space/departments";
 import Academy from "./pages/Academy";
+import Analytics from "./pages/Analytics";
 import Activity from "./pages/Activity";
 import CapitalPage from "./pages/Capital";
 import { BRAND, Wordmark } from "./brand";
@@ -117,6 +118,7 @@ function pageRoutes() {
     <Route key="ac" path="/academy" element={<Academy />} />,
     <Route key="acid" path="/academy/:id" element={<Academy />} />,
     <Route key="acday" path="/academy/:id/:day" element={<Academy />} />,
+    <Route key="an" path="/analytics" element={<Analytics />} />,
     <Route key="cio" path="/cio" element={<CioOffice />} />,
     <Route key="cap" path="/capital" element={<CapitalPage />} />,
     <Route key="act" path="/activity" element={<Activity />} />,

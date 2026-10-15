@@ -28,6 +28,7 @@ type Ctx = {
   sel: Selection | null;
   onSelect: (s: Selection) => void;
   onFocus: (r: Rect) => void;
+  onOpen?: (path: string) => void; // open a page over the map (a folder)
 };
 
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1).trimEnd()}…` : s);
@@ -395,18 +396,21 @@ function Trainee({ a, x, floorY, c }: { a: AcademySpaceAgent; x: number; floorY:
 // -- rooms ------------------------------------------------------------------------------------------
 
 const WALLS: Partial<Record<DeptId, string>> = {
-  cio: "#2b2119", boardroom: "#2a2420", treasury: "#22261f",
+  cio: "#2b2119", treasury: "#232620",
   tim: "#1a2740", alex: "#241e38", max: "#1e2129",
   "market-room": "#18202e", "day-1": "#1b2230", "day-2": "#1b2230", "swing-1": "#231d30", "swing-2": "#231d30",
   lobby: "#2a231d", records: "#252019", operations: "#151b24",
   lab: "#1a2230", research: "#2a2119", alumni: "#251f1a", hall: "#211c19",
 };
 
-function Room({ d, c, sub, muted, children }: { d: Dept; c: Ctx; sub?: string; muted?: boolean; children?: ReactNode }) {
+function Room({ d, c, sub, muted, open, children }: { d: Dept; c: Ctx; sub?: string; muted?: boolean; open?: string; children?: ReactNode }) {
   const [x, y, w, h] = d.rect;
   const floorY = fy(d.rect);
   const on = c.sel?.kind === "dept" && c.sel.id === d.id;
-  const select = () => c.onSelect({ kind: "dept", id: d.id });
+  const select = () => {
+    c.onSelect({ kind: "dept", id: d.id });
+    if (open) c.onOpen?.(open); // rooms whose click opens a page over the map
+  };
   return (
     <g
       role="button"
@@ -459,65 +463,110 @@ function CioRoom({ d, c }: { d: Dept; c: Ctx }) {
   );
 }
 
-function Boardroom({ d, c }: { d: Dept; c: Ctx }) {
+const pctTxt = (x: number | null | undefined, d = 2) => (x === null || x === undefined ? "—" : `${x >= 0 ? "+" : ""}${(x * 100).toFixed(d)}%`);
+/** Today's return: live value against the last close, or once today's close is marked, that day's return. */
+export function todayReturn(nav: number | null, lastMark: { date: string; nav: number } | null, flowsSince: number, lastDay: { date: string; return: number } | null): number | null {
+  const etToday = new Date().toLocaleDateString("en-CA", { timeZone: "America/New_York" });
+  if (lastDay && lastDay.date === etToday) return lastDay.return;
+  return nav !== null && lastMark && lastMark.nav > 0 ? (nav - flowsSince) / lastMark.nav - 1 : null;
+}
+const toneOf = (x: number | null | undefined) => (x === null || x === undefined ? "#94a3b8" : x >= 0 ? "#34d399" : "#fb7185");
+
+/** The firm's numbers in one room. Clicking it opens the full analytics over the map. */
+function Treasury({ d, c }: { d: Dept; c: Ctx }) {
   const [x, y, w] = d.rect;
   const f = fy(d.rect);
-  const pending = c.space.cio.pending_proposals;
-  return (
-    <Room d={d} c={c} sub={pending.length ? `${pending.length} awaiting you` : "Nothing awaiting you"}>
-      <Board x={x + 24} y={y + 58} w={w - 48} h={88}>
-        <text x={x + 36} y={y + 76} fontSize="8.5" fontWeight="700" letterSpacing="1.6" fill="#cdb27a">AWAITING YOUR DECISION</text>
-        <text x={x + 36} y={y + 104} fontSize="24" fontWeight="700" fill={pending.length ? "#fbbf24" : "#64748b"}>{pending.length}</text>
-        {pending.length ? (
-          pending.slice(0, 2).map((p, i) => (
-            <text key={p.id} x={x + 66} y={y + 96 + i * 13} fontSize="8.5" fill="#cbd5e1">#{p.id} {cut(p.title, 30)}</text>
-          ))
-        ) : (
-          <text x={x + 66} y={y + 101} fontSize="8.5" fill="#94a3b8">No open proposals</text>
-        )}
-      </Board>
-      <g pointerEvents="none">
-        {[0, 1, 2, 3, 4].map((i) => <rect key={i} x={x + 48 + i * 40} y={f - 84} width={24} height={40} rx={6} fill="#3a2a22" />)}
-        <rect x={x + 30} y={f - 52} width={w - 60} height={10} rx={3} fill="#6b4430" />
-        <rect x={x + 44} y={f - 42} width={8} height={42} fill="#3b2519" />
-        <rect x={x + w - 52} y={f - 42} width={8} height={42} fill="#3b2519" />
-      </g>
-      <Plant x={x + w - 18} y={f} s={0.9} />
-    </Room>
-  );
-}
-
-function Treasury({ d, c }: { d: Dept; c: Ctx }) {
-  const [x, y] = d.rect;
-  const f = fy(d.rect);
   const o = c.overview;
-  const total = o ? o.allocation.reduce((s, a) => s + Math.max(0, a.nav), 0) : 0;
+  const t = c.space.treasury;
+  const pending = c.space.cio.pending_proposals;
+  const ac = c.space.academy;
+  const nav = o?.firm.nav ?? null;
+  const contributed = t?.contributed ?? null;
+  const gain = nav !== null && contributed !== null ? nav - contributed : null;
+  const gainPct = gain !== null && contributed ? gain / contributed : null;
+  const today = todayReturn(nav, t?.last_mark ?? null, t?.flows_since_last_mark ?? 0, t?.last_day ?? null);
+  const perf = o?.firm.performance;
+  const total = o ? o.allocation.reduce((sum, a) => sum + Math.max(0, a.nav), 0) : 0;
+  const spark = t?.spark ?? [];
+  const floors = { RESEARCH: 0, PAPER: 0, DEMO: 0, RETIRED: 0 } as Record<string, number>;
+  for (const a of ac?.agents ?? []) floors[a.stage] = (floors[a.stage] ?? 0) + 1;
+  const paper = (ac?.agents ?? []).filter((a) => a.stage === "PAPER" || a.stage === "DEMO");
   let acc = 0;
+  const A = x + 18, B = x + 286, C = x + 486; // three boards
   return (
-    <Room d={d} c={c} sub="Capital, allocation, and flows">
-      <Board x={x + 24} y={y + 58} w={220} h={108}>
-        <text x={x + 36} y={y + 76} fontSize="8.5" fontWeight="700" letterSpacing="1.6" fill="#cdb27a">FIRM CAPITAL</text>
-        <text x={x + 36} y={y + 102} fontSize="22" fontWeight="700" fill="#f8fafc">{o ? money(o.firm.nav) : "…"}</text>
-        {o && total > 0 && (
-          <g>
-            {o.allocation.map((a) => {
-              const wPx = (Math.max(0, a.nav) / total) * 196;
-              const el = <rect key={a.id} x={x + 36 + acc} y={y + 114} width={Math.max(0, wPx - 1)} height={10} fill={ALLOC_COLORS[a.id] ?? "#64748b"} />;
-              acc += wPx;
-              return el;
-            })}
-            <text x={x + 36} y={y + 142} fontSize="9" fill="#94a3b8">Unallocated {money(o.firm.unallocated)}</text>
-          </g>
-        )}
-      </Board>
-      <g transform={`translate(${x + 320} ${f - 100})`} pointerEvents="none">
-        <rect x={-62} y={-62} width={124} height={124} rx={8} fill="#2b2f36" stroke="#4a4f58" strokeWidth="3" />
-        <circle r={48} fill="#3a3f48" stroke="#8a8f99" strokeWidth="4" />
-        <circle r={12} fill="#1f2329" stroke="#b8975a" strokeWidth="2" />
-        {[0, 60, 120].map((r) => <rect key={r} x={-2} y={-36} width={4} height={72} fill="#b8975a" transform={`rotate(${r})`} />)}
-      </g>
-      <Plant x={x + 255} y={f} s={0.9} />
-    </Room>
+    <g>
+      <Room d={d} c={c} open="/analytics" sub={pending.length ? `${pending.length} awaiting you · click for analytics` : "Click for full analytics"}>
+        {/* capital and returns */}
+        <Board x={A} y={y + 48} w={256} h={206}>
+          <text x={A + 12} y={y + 66} fontSize="8.5" fontWeight="700" letterSpacing="1.6" fill="#cdb27a">FIRM CAPITAL</text>
+          <text x={A + 12} y={y + 94} fontSize="24" fontWeight="700" fill="#f8fafc">{nav !== null ? money(nav) : "…"}</text>
+          <text x={A + 244} y={y + 94} textAnchor="end" fontSize="11" fontWeight="700" fill={toneOf(today)}>{today !== null ? `${pctTxt(today)} today` : ""}</text>
+          {[
+            ["Overall return", perf ? pctTxt(perf.twr) : "—", toneOf(perf?.twr)],
+            ["S&P 500, same days", perf ? pctTxt(perf.benchmark) : "—", toneOf(perf?.benchmark)],
+            ["Contributed", contributed !== null ? money(contributed) : "—", "#e2e8f0"],
+            ["Gain on contributions", gain !== null ? `${gain >= 0 ? "+" : "-"}${money(Math.abs(gain))} (${pctTxt(gainPct)})` : "—", toneOf(gain)],
+            ["Max drawdown", t ? `${(t.max_drawdown * 100).toFixed(2)}%` : "—", "#e2e8f0"],
+          ].map(([k, v, col], i) => (
+            <g key={k}>
+              <text x={A + 12} y={y + 118 + i * 17} fontSize="9" fill="#94a3b8">{k}</text>
+              <text x={A + 244} y={y + 118 + i * 17} textAnchor="end" fontSize="9.5" fontWeight="600" fill={col}>{v}</text>
+            </g>
+          ))}
+          {o && total > 0 && o.allocation.map((a) => {
+            const wPx = (Math.max(0, a.nav) / total) * 232;
+            const el = <rect key={a.id} x={A + 12 + acc} y={y + 210} width={Math.max(0, wPx - 1)} height={8} fill={ALLOC_COLORS[a.id] ?? "#64748b"} />;
+            acc += wPx;
+            return el;
+          })}
+          <text x={A + 12} y={y + 234} fontSize="8" fill="#64748b">{o ? o.allocation.map((a) => `${a.name} ${(a.pct * 100).toFixed(0)}%`).join(" · ") : ""}</text>
+        </Board>
+        {/* growth and the boardroom */}
+        <Board x={B} y={y + 48} w={190} h={206}>
+          <text x={B + 12} y={y + 66} fontSize="8.5" fontWeight="700" letterSpacing="1.6" fill="#cdb27a">VALUE, LAST {Math.max(spark.length, 0)} CLOSES</text>
+          {spark.length > 1 ? (() => {
+            const lo = Math.min(...spark), hi = Math.max(...spark);
+            const pts = spark.map((v, i) => `${B + 12 + (i / (spark.length - 1)) * 166},${y + 140 - ((v - lo) / (hi - lo || 1)) * 56}`).join(" ");
+            const up = spark[spark.length - 1] >= spark[0];
+            return <polyline points={pts} fill="none" stroke={up ? "#34d399" : "#fb7185"} strokeWidth="2" />;
+          })() : <text x={B + 12} y={y + 112} fontSize="9" fill="#64748b">Builds up after a few daily closes</text>}
+          <text x={B + 12} y={y + 162} fontSize="9" fill="#94a3b8">{t ? `${t.days_tracked} daily closes tracked` : ""}</text>
+          <line x1={B + 12} x2={B + 178} y1={y + 174} y2={y + 174} stroke="#283044" />
+          <text x={B + 12} y={y + 192} fontSize="8.5" fontWeight="700" letterSpacing="1.4" fill="#cdb27a">AWAITING YOUR DECISION</text>
+          <text x={B + 12} y={y + 220} fontSize="20" fontWeight="700" fill={pending.length ? "#fbbf24" : "#64748b"}>{pending.length}</text>
+          <text x={B + 38} y={y + 216} fontSize="8.5" fill="#cbd5e1">{pending.length ? cut(`#${pending[0].id} ${pending[0].title}`, 26) : "No open proposals"}</text>
+        </Board>
+        {/* the Academy */}
+        <Board x={C} y={y + 48} w={w - (C - x) - 18} h={206}>
+          <text x={C + 12} y={y + 66} fontSize="8.5" fontWeight="700" letterSpacing="1.6" fill="#cdb27a">THE 537 ACADEMY</text>
+          {ac?.available ? (
+            <g>
+              {[["Floor 3 · Demo", floors.DEMO], ["Floor 2 · Paper", floors.PAPER], ["Floor 1 · Research", floors.RESEARCH]].map(([k, n], i) => (
+                <g key={k as string}>
+                  <text x={C + 12} y={y + 86 + i * 15} fontSize="9" fill="#94a3b8">{k}</text>
+                  <text x={C + 164} y={y + 86 + i * 15} textAnchor="end" fontSize="9.5" fontWeight="600" fill="#e2e8f0">{n}</text>
+                </g>
+              ))}
+              {paper.slice(0, 3).map((a, i) => (
+                <g key={a.id}>
+                  <circle cx={C + 15} cy={y + 133 + i * 14} r={3} fill={a.persona.color} />
+                  <text x={C + 23} y={y + 136 + i * 14} fontSize="9" fill="#cbd5e1">{a.name}</text>
+                  <text x={C + 164} y={y + 136 + i * 14} textAnchor="end" fontSize="9" fontWeight="600" fill={toneOf(a.return_pct)}>{pctTxt(a.return_pct)}</text>
+                </g>
+              ))}
+              <text x={C + 12} y={y + 190} fontSize="8.5" fontWeight="700" letterSpacing="1.2" fill="#cdb27a">{ac.latest_report ? `SPRINT ${ac.latest_report.day.slice(5)}` : "NO SPRINT YET"}</text>
+              {ac.latest_report && (
+                <>
+                  <text x={C + 12} y={y + 206} fontSize="8.5" fill="#cbd5e1">{cut(`Passed: ${ac.latest_report.passed.join(", ") || "none"}`, 30)}</text>
+                  <text x={C + 12} y={y + 220} fontSize="8.5" fill="#94a3b8">{cut(`Improved: ${ac.latest_report.improved.join(", ") || "none"}`, 30)}</text>
+                </>
+              )}
+            </g>
+          ) : <text x={C + 12} y={y + 90} fontSize="9" fill="#64748b">Forex engine not running</text>}
+        </Board>
+        <Plant x={x + w - 14} y={f} s={0.8} />
+      </Room>
+    </g>
   );
 }
 
@@ -839,7 +888,6 @@ function DemoDesk({ d, c }: { d: Dept; c: Ctx }) {
 function DeptRoom({ d, c }: { d: Dept; c: Ctx }) {
   switch (d.id) {
     case "cio": return <CioRoom d={d} c={c} />;
-    case "boardroom": return <Boardroom d={d} c={c} />;
     case "treasury": return <Treasury d={d} c={c} />;
     case "tim": case "alex": case "max": return <ManagerRoom d={d} c={c} id={d.id} />;
     case "market-room": return <MarketRoom d={d} c={c} />;

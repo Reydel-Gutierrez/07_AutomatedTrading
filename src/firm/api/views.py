@@ -9,11 +9,11 @@ from typing import Any
 
 from firm.api.academy import space_block as academy_space_block
 from firm.broker.errors import BrokerUnavailable
-from firm.clock import CALENDAR, EASTERN, et, iso, parse_hhmm
+from firm.clock import CALENDAR, EASTERN, et, iso, parse, parse_hhmm
 from firm.core import Firm
 from firm.capital_pool import POOL, POOL_NAME, CapitalPool
 from firm.ledger import FIRM, SUSPENSE
-from firm.money import ZERO, cents
+from firm.money import ZERO, D, cents
 
 ACTIVITY_EVENTS = ("MANAGER_RUN", "ORDER_FILLED", "ORDER_SUBMITTED", "ORDER_BLOCKED", "ORDER_DEFERRED", "ORDER_REJECTED", "MANAGER_DEGRADED", "MANAGER_WAITING", "MANAGER_MODE", "MANDATE_CHANGED", "CAPITAL_ALLOCATED", "CAPITAL_DEALLOCATED")
 
@@ -287,6 +287,16 @@ def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None, re
         },
         "agents": agents,
         "academy": academy_space_block(),
+        "treasury": _treasury_brief(firm),
+    }
+
+
+def _treasury_brief(firm: Firm) -> dict[str, Any]:
+    """What the Boardroom & Treasury room shows beside the live value (cheap: two small queries)."""
+    m = money_analytics(firm)
+    last = m["daily"][-1] if m["daily"] else None
+    return {k: m[k] for k in ("contributed", "last_mark", "flows_since_last_mark", "days_tracked", "max_drawdown", "current_drawdown")} | {
+        "last_day": last, "spark": [d["nav"] for d in m["daily"][-30:]],
     }
 
 
@@ -316,4 +326,55 @@ def system(firm: Firm, health: dict[str, Any], jobs: dict[str, Any]) -> dict[str
         "firm_limits": firm.settings.get("firm_limits"),
         "ai_budget": firm.settings.get("ai_budget"),
         "reconciliations": snaps,
+    }
+
+
+def money_analytics(firm: Firm) -> dict[str, Any]:
+    """The firm's money over time from its own records (no quotes): what the owner put in, what came
+    back, daily marks and returns, best and worst days, and drawdown. Current value comes from the
+    overview (live prices); the dashboard combines the two."""
+    flows = firm.db.query(
+        "SELECT ts, kind, cash FROM ledger WHERE book = 'LIVE' AND kind IN ('OPENING_BALANCE','EXTERNAL_IN','EXTERNAL_OUT') ORDER BY id"
+    )
+    deposits = sum((D(r["cash"]) for r in flows if r["kind"] in ("OPENING_BALANCE", "EXTERNAL_IN")), ZERO)
+    withdrawals = -sum((D(r["cash"]) for r in flows if r["kind"] == "EXTERNAL_OUT"), ZERO)
+    dividends = sum((D(r["cash"]) for r in firm.db.query("SELECT cash FROM ledger WHERE book = 'LIVE' AND kind = 'DIVIDEND'")), ZERO)
+    timeline, running = [], ZERO
+    for r in flows:
+        running += D(r["cash"])
+        timeline.append({"ts": r["ts"], "kind": r["kind"], "amount": f(D(r["cash"])), "contributed": f(running)})
+    marks = firm.performance.marks("LIVE", "_firm")
+    daily, growth, peak, max_dd = [], Decimal(1), Decimal(1), 0.0
+    for prev, m in zip(marks, marks[1:]):
+        if prev.nav <= 0:
+            continue
+        r = (m.nav - m.net_flow) / prev.nav - 1
+        growth *= 1 + r
+        peak = max(peak, growth)
+        max_dd = max(max_dd, float(1 - growth / peak))
+        spy = (m.benchmark_close / prev.benchmark_close - 1) if m.benchmark_close and prev.benchmark_close else None
+        daily.append({"date": m.date, "nav": f(m.nav), "flow": f(m.net_flow), "return": float(r), "spy": float(spy) if spy is not None else None})
+    last = marks[-1] if marks else None
+    flows_since = ZERO
+    if last:
+        for r in flows:
+            if et(parse(r["ts"])).date().isoformat() > last.date:
+                flows_since += D(r["cash"])
+    rets = [d["return"] for d in daily]
+    return {
+        "contributed": f(deposits - withdrawals),
+        "deposits": f(deposits),
+        "withdrawals": f(withdrawals),
+        "dividends": f(dividends),
+        "flows": timeline[-60:],
+        "daily": daily[-120:],
+        "last_mark": {"date": last.date, "nav": f(last.nav)} if last else None,
+        "flows_since_last_mark": f(flows_since),
+        "days_tracked": len(marks),
+        "best_day": max(daily, key=lambda d: d["return"]) if daily else None,
+        "worst_day": min(daily, key=lambda d: d["return"]) if daily else None,
+        "up_days": sum(1 for x in rets if x > 0),
+        "down_days": sum(1 for x in rets if x < 0),
+        "max_drawdown": max_dd,
+        "current_drawdown": firm.performance.drawdown(marks),
     }

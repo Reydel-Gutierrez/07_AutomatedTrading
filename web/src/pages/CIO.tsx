@@ -214,7 +214,7 @@ function Message({ m, proposals, onDecided }: { m: CioMessage; proposals: Record
         {m.citations.length > 0 && (
           <div className="flex flex-wrap gap-1.5">
             {m.citations.map((c) => (
-              <Link key={`${c.type}-${c.id}`} to={c.type === "proposal" || c.type === "memory" ? "/cio" : "/activity"} title={c.label} className="max-w-[260px] truncate rounded-md border border-ink-700 px-2 py-0.5 text-[11px] text-slate-400 hover:text-slate-200">
+              <Link key={`${c.type}-${c.id}`} to={c.type === "proposal" || c.type === "memory" ? "/cio" : c.type === "academy" ? "/academy" : "/activity"} title={c.label} className="max-w-[260px] truncate rounded-md border border-ink-700 px-2 py-0.5 text-[11px] text-slate-400 hover:text-slate-200">
                 {c.type} #{c.id}{c.label ? ` · ${c.label}` : ""}
               </Link>
             ))}

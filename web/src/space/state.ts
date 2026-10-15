@@ -60,10 +60,23 @@ export type AcademySpace = {
   agents?: AcademySpaceAgent[];
   validations_running?: { agent_id: string; status: string }[];
   prices?: { instrument: string; bid: number; ask: number; time: number; tradeable: number }[];
+  latest_report?: { day: string; passed: string[]; improved: string[]; floor2: string[] } | null;
+};
+
+export type TreasuryBrief = {
+  contributed: number;
+  last_mark: { date: string; nav: number } | null;
+  flows_since_last_mark: number;
+  days_tracked: number;
+  max_drawdown: number;
+  current_drawdown: number;
+  last_day: { date: string; nav: number; flow: number; return: number; spy: number | null } | null;
+  spark: number[];
 };
 
 export type Space = {
   academy?: AcademySpace;
+  treasury?: TreasuryBrief;
   as_of: string;
   market: { regular_hours_open?: boolean; trading_day?: boolean; next_open?: string | null };
   benchmarks: { symbol: string; label: string; closes: { date: string; close: number }[] }[];

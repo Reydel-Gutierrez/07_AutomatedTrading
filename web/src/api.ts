@@ -142,7 +142,7 @@ export const api = {
   put: <T = { ok: boolean },>(path: string, body?: unknown) => request<T>("PUT", path, body ?? {}),
 };
 
-export type Citation = { type: "event" | "order" | "proposal" | "memory"; id: number; label?: string };
+export type Citation = { type: "event" | "order" | "proposal" | "memory" | "academy"; id: number; label?: string };
 export type CioMessage = {
   id: number;
   role: "user" | "assistant" | "notice";
