@@ -14,6 +14,9 @@ The screen decides; research can only veto. Each run:
      or whose research turned to reject. On the first run of each month (or with new
      money), rebalance fully: sell names that left the target, then buy the
      underweights. Sales come first; the proceeds are invested on a follow-up run.
+     A rebalance sale the desk did not carry out (deferred, blocked) is sent again on
+     later runs that month while the name is still held and still out of the target;
+     a name with a sell order already working is never sold twice.
 Nothing smaller than the minimum trade is ever sent. The desk enforces the
 universe, spread, order count, and the sleeve drawdown pause on top of this.
 """
@@ -64,6 +67,8 @@ DEFAULT_MANDATE: dict[str, Any] = {
 
 # Idle cash (above the buffer) worth investing between monthly rebalances.
 TOP_UP_SHARE = Decimal("0.05")
+
+REBALANCE_EXIT = "left the target portfolio at the monthly rebalance"
 
 
 def validate_mandate(m: Mapping[str, Any]) -> list[str]:
@@ -147,9 +152,13 @@ class Alex:
         days = max(int(mandate.get("momentum_lookback_days", 252)), int(mandate.get("trend_sma_days", 200))) + 40
         from firm.research import Research
 
+        book = firm.registry.get(ID).book
         return {
             "closes": firm.market.recent_closes(self.symbols(mandate), sessions=days),
             "research": Research(firm.db, clock=firm.clock).latest(ID),
+            "rebalance_exits": rebalance_exits(firm.events, book, firm.clock()),
+            "open_sells": sorted({r["symbol"] for r in firm.db.query(
+                "SELECT symbol FROM orders WHERE manager_id = ? AND book = ? AND side = 'sell' AND status IN ('PENDING','SUBMITTED','UNKNOWN')", (ID, book))}),
         }
 
     def run(self, ctx: ManagerContext) -> RunResult:
@@ -162,6 +171,8 @@ class Alex:
         n = int(m.get("positions", 8))
         cap_pct = D(m.get("max_position_pct", 0.15))
         max_age = int(m.get("research_max_age_days", 30))
+        decided = set(ctx.extras.get("rebalance_exits") or ())
+        working = set(ctx.extras.get("open_sells") or ())
 
         held = {s: q for s, q in view.holdings.items() if q > 0}
         missing = sorted(s for s in held if not view.price(s))
@@ -193,6 +204,8 @@ class Alex:
         # 1. Exits that cannot wait for month end.
         exits: dict[str, str] = {}
         for sym in sorted(held):
+            if sym in working:
+                continue  # a sell is already at the broker; never sell twice
             sc = score(closes.get(sym) or [], m)
             note = research.get(sym)
             if sym not in (m.get("universe") or []):
@@ -201,8 +214,8 @@ class Alex:
                 exits[sym] = f"trend broke (close {sc['last']:.2f} below the {int(m.get('trend_sma_days', 200))}-day average {sc['sma']:.2f})"
             elif note and note.get("verdict") == "reject" and fresh(note, ctx.now, max_age):
                 exits[sym] = "research now rejects it"
-            elif rebalance_day and targets and sym not in targets:
-                exits[sym] = "left the target portfolio at the monthly rebalance"
+            elif targets and sym not in targets and (rebalance_day or sym in decided):
+                exits[sym] = REBALANCE_EXIT  # decided this month but still held: the sale did not go through
         if exits:
             sells = [OrderIntent(ctx.manager_id, ctx.book, s, "sell", quantity=held[s], reason=why) for s, why in exits.items()]
             names = "; ".join(f"{s} ({why})" for s, why in exits.items())
@@ -240,6 +253,19 @@ class Alex:
         ]
         names = ", ".join(f"${amt} {s}" for s, amt in sorted(buys.items(), key=lambda kv: targets.index(kv[0])))
         return RunResult(f"Investing ${sum(buys.values(), ZERO)} in research-approved momentum leaders: {names}.", intents=intents, detail=detail, activity="investing")
+
+
+def rebalance_exits(events: Any, book: str | None, now: datetime) -> list[str]:
+    """Names this month's rebalance decided to sell in this book (from Alex's run log)."""
+    month = et(now).strftime("%Y-%m")
+    out: set[str] = set()
+    for ev in events.recent(manager_id=ID, types=["MANAGER_RUN"], limit=500):
+        if et(datetime.fromisoformat(ev.ts)).strftime("%Y-%m") != month:
+            break  # newest first: everything further back is an earlier month
+        if ev.payload.get("book") != book:
+            continue
+        out |= {s for s, why in ((ev.payload.get("detail") or {}).get("exits") or {}).items() if why == REBALANCE_EXIT}
+    return sorted(out)
 
 
 def _allocate(available: Decimal, deficits: Mapping[str, Decimal], min_trade: Decimal) -> dict[str, Decimal]:

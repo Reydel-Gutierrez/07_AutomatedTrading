@@ -39,11 +39,11 @@ def note(verdict="approve", days_old=1, now=None):
     return {"verdict": verdict, "conviction": 4, "created_at": (now - timedelta(days=days_old)).isoformat()}
 
 
-def ctx(clock, *, cash="1000", holdings=None, research=None, closes=CLOSES, trigger="scheduled", last_run=None, mandate=SMALL):
+def ctx(clock, *, cash="1000", holdings=None, research=None, closes=CLOSES, trigger="scheduled", last_run=None, mandate=SMALL, **extras):
     holdings = holdings or {}
     quotes = {s: Quote(s, bid=D(str(round(c[-1], 2))) - D("0.01"), ask=D(str(round(c[-1], 2))) + D("0.01"), last=D(str(round(c[-1], 2))), observed_at=clock(), close=None) for s, c in closes.items()}
     view = BookView(book="SIM", cash=D(cash), holdings={k: D(v) for k, v in holdings.items()}, quotes=quotes)
-    return ManagerContext(manager_id="alex", book="SIM", now=clock(), trigger=trigger, mandate=mandate, view=view, last_run=last_run, extras={"closes": closes, "research": research or {}})
+    return ManagerContext(manager_id="alex", book="SIM", now=clock(), trigger=trigger, mandate=mandate, view=view, last_run=last_run, extras={"closes": closes, "research": research or {}, **extras})
 
 
 def test_screen_ranks_risk_adjusted_momentum_and_requires_an_uptrend():
@@ -212,3 +212,55 @@ def test_anthropic_researcher_continues_paused_turns_and_drops_unretrieved_sourc
     assert v.sources == [{"title": "AAA beats", "url": "https://news.example/aaa"}] and v.dropped_sources == 1
     assert client.calls[0]["tools"][0]["type"] == "web_search_20260209"
     assert client.calls[1]["messages"][-1]["role"] == "assistant"  # paused turn continued, not restarted
+
+
+def test_rebalance_sale_the_desk_did_not_carry_out_is_sent_again(clock):
+    last = {"last_rebalance_month": "2026-10"}  # the month is already marked rebalanced
+    held = {"AAA": "2", "BBB": "3", "CCC": "4"}
+    research = {"AAA": note(), "BBB": note(), "CCC": note()}
+    # Before the fix CCC was simply held until next month.
+    r = Alex().run(ctx(clock, cash="0", holdings=held, research=research, last_run=last))
+    assert not r.intents and r.activity == "holding"
+    r = Alex().run(ctx(clock, cash="0", holdings=held, research=research, last_run=last, rebalance_exits=["CCC"]))
+    assert [(i.symbol, i.side, i.quantity) for i in r.intents] == [("CCC", "sell", D("4"))]
+    assert "left the target portfolio" in r.intents[0].reason and r.detail["last_rebalance_month"] == "2026-10"
+
+
+def test_rebalance_retry_never_double_sells_or_sells_a_name_back_in_the_target(clock):
+    last = {"last_rebalance_month": "2026-10"}
+    research = {"AAA": note(), "BBB": note(), "CCC": note()}
+    r = Alex().run(ctx(clock, cash="0", holdings={"AAA": "2", "BBB": "3", "CCC": "4"}, research=research, last_run=last, rebalance_exits=["CCC", "BBB"], open_sells=["CCC"]))
+    assert not r.intents  # CCC has a sell working; BBB is back in the target
+    # Once sold it is not held, so nothing is sent again.
+    r = Alex().run(ctx(clock, cash="0", holdings={"AAA": "2", "BBB": "3"}, research=research, last_run=last, rebalance_exits=["CCC", "BBB"]))
+    assert not r.intents
+
+
+def test_deferred_rebalance_sells_are_resent_and_filled_once(firm, clock):
+    from datetime import datetime, timezone
+
+    m = {**firm.registry.mandate("alex")[1], **{k: SMALL[k] for k in ("universe", "max_position_pct", "research_candidates")}, "positions": 3}
+    firm.registry.update_mandate("alex", m, by="test", note="three names")
+    store(firm, clock)
+    firm.allocate("alex", D("100"), by="reydel")
+    firm.registry.set_mode("alex", "SIM", by="reydel")
+    build_research(firm, {}, researcher=FakeResearcher({})).run()
+    firm.run_manager("alex")
+    assert sorted(firm.ledger.holdings("SIM", "alex")["alex"]) == ["AAA", "BBB", "CCC"]
+
+    # Next morning, before the open: two positions, so CCC leaves the target. The desk defers the sale.
+    clock.set(datetime(2026, 10, 14, 12, 56, tzinfo=timezone.utc))
+    firm.registry.update_mandate("alex", {**m, "positions": 2}, by="test", note="two names")
+    out = firm.run_manager("alex", trigger="mandate_changed")
+    assert [(o["symbol"], o["side"], o["status"]) for o in out.orders] == [("CCC", "sell", "DEFERRED")]
+
+    # The scheduled run after the open sends it again (the month is already marked rebalanced) and it fills.
+    clock.set(datetime(2026, 10, 14, 14, 20, tzinfo=timezone.utc))
+    out = firm.run_manager("alex")
+    assert [(o["symbol"], o["side"], o["status"]) for o in out.orders] == [("CCC", "sell", "FILLED")]
+    assert "CCC" not in firm.ledger.holdings("SIM", "alex")["alex"]
+
+    # Filled: later runs never sell it again.
+    clock.advance(minutes=10)
+    out = firm.run_manager("alex")
+    assert not [o for o in out.orders if o["side"] == "sell"]
