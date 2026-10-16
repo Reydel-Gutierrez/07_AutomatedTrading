@@ -87,7 +87,9 @@ class Engine:
 
     # -- data -------------------------------------------------------------------------------
     def load_data(self) -> None:
-        if self.job is not None or self.clock() - self.loaded_at < RELOAD_EVERY and self.panel is not None:
+        # reload every 10 minutes, and soon after start (the firm may still be fetching history)
+        every = RELOAD_EVERY if self.panel is not None and len(self.panel.dates) >= 1000 else 60
+        if self.job is not None or self.clock() - self.loaded_at < every and self.panel is not None:
             return
         self.loaded_at = self.clock()
         panel = load_panel(self.firm_db, wanted_symbols())
@@ -117,12 +119,20 @@ class Engine:
         for a in active:
             if a["stage"] != "RESEARCH":
                 continue
-            never = self.db.one("SELECT 1 FROM sprints WHERE agent_id = ?", (a["id"],)) is None
-            if nightly or never:
+            if nightly or self.untested(a["id"]):
                 self.enqueue(f"sprint:{a['id']}", lambda aid=a["id"], d=day: self.run_sprint(aid, d))
         if nightly:
             self.db.put("sprint_day", day)
             self.enqueue("report", lambda d=day: self.report(d))
+
+    def untested(self, agent_id: str) -> bool:
+        """No real sprint yet: never run, or only interrupted / waiting for history that has since grown."""
+        last = self.db.one("SELECT outcome, summary_json FROM sprints WHERE agent_id = ? AND outcome NOT IN ('INTERRUPTED') AND finished_at IS NOT NULL ORDER BY id DESC LIMIT 1", (agent_id,))
+        if last is None:
+            return True
+        if last["outcome"] != "NO_DATA":
+            return False
+        return (json.loads(last["summary_json"] or "{}").get("sessions") or 0) < len(self.panel.dates if self.panel else [])
 
     def enqueue(self, name: str, fn: Callable[[], Any]) -> None:
         if any(n == name for n, _ in self.queue) or (self.job and self.job[0] == name):
@@ -178,6 +188,7 @@ class Engine:
             if not to_version:
                 self.db.set_validation_status(agent_id, version, "VALIDATED" if r["passed"] else r["validation"].get("status", "FAILED"))
         summary = {k: v for k, v in r.items() if k not in ("validation",)}
+        summary["sessions"] = len(self.panel.dates)
         summary["validation_checks"] = (r.get("validation") or {}).get("checks")
         summary["unseen"] = ((r.get("validation") or {}).get("metrics") or {}).get("unseen")
         self.db.finish_sprint(sid, outcome=r["outcome"], to_version=to_version, passed=bool(r.get("passed")), summary=summary)

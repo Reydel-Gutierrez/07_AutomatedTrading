@@ -177,3 +177,19 @@ def test_owner_commands_and_hq_view(setup):
     assert data["available"] and [a["name"] for a in data["agents"]] == ["Juniper", "Rook", "Meridian", "Talon"]
     assert equity_academy.space_block()["agents"][3]["status"] == "PAUSED"
     assert equity_academy.agent("nobody") is None
+
+
+def test_a_sprint_that_waited_for_history_reruns_when_more_arrives(setup):
+    eng, _ = setup
+    eng.start()
+    eng.load_data()
+    full = eng.panel
+    from equity.data import Panel
+
+    eng.panel = Panel(full.dates[-300:], {s: type(v)(v.o[-300:], v.h[-300:], v.l[-300:], v.c[-300:]) for s, v in full.series.items()})
+    assert eng.run_sprint("rook", "2026-10-17")["outcome"] == "NO_DATA"
+    assert not eng.untested("rook")  # same short history: no rerun
+    eng.panel = full
+    assert eng.untested("rook")  # the backfill arrived: run a real sprint
+    eng.run_sprint("rook", "2026-10-17")
+    assert not eng.untested("rook")
