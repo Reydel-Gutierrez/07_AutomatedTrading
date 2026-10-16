@@ -441,8 +441,13 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
     }
     case "research":
       return ["Unoccupied."];
-    case "stock-swing":
-      return ["Not open yet. Designed in docs/firm/EQUITY_ACADEMY.md; opens when you approve the build."];
+    case "stock-swing": {
+      const eq = space.equity_class;
+      if (!eq?.available) return ["The Stock Swing Class engine is not running yet."];
+      return (eq.agents ?? []).map((a) => `${a.name}: ${a.status !== "ACTIVE" ? a.status.toLowerCase() : a.sprinting ? `sprinting (${a.sprinting})` : a.stage === "PAPER" ? `paper ${signedPct(a.return_pct)}` : a.last_sprint ? `research, last sprint ${a.last_sprint.day}: ${a.last_sprint.outcome.toLowerCase().replace("_", " ")}` : "research, waiting for history"}`);
+    }
+    case "live-seats":
+      return ["Both seats open. No challenger has finished Floor 2 yet."];
     case "core-board": case "trading-board":
       return overview ? overview.managers.filter((m) => (d.id === "trading-board" ? m.id === "max" : m.id !== "max")).map((m) => {
         const p = m.mode === "SIM" ? m.performance.SIM : m.performance.LIVE;

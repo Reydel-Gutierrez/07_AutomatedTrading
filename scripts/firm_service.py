@@ -63,6 +63,7 @@ def main(argv: list[str] | None = None) -> int:
     worker = threading.Thread(target=service.run_scheduler, args=(stop,), name="firm-scheduler", daemon=True)
     worker.start()
     forex = start_forex_engine(service)
+    equity = start_equity_academy(service)
     server = uvicorn.Server(uvicorn.Config(create_app(service), host=host, port=int(cfg["port"]), log_level="warning", proxy_headers=True))
 
     def shutdown(*_):
@@ -74,6 +75,8 @@ def main(argv: list[str] | None = None) -> int:
     stop.set()
     if forex:
         forex.stop()
+    if equity:
+        equity.stop()
     worker.join(timeout=15)
     return 0
 
@@ -88,6 +91,19 @@ def start_forex_engine(service):
     sidecar = Sidecar("forex-engine", [sys.executable, str(root / "scripts" / "forex_engine.py")], cwd=str(root), environ=os.environ)
     sidecar.start()
     service.sidecars["forex-engine"] = sidecar
+    return sidecar
+
+
+def start_equity_academy(service):
+    """The Stock Swing Class engine runs as its own, lowest-priority process (FIRM_EQUITY_ACADEMY=off disables it)."""
+    if str(os.environ.get("FIRM_EQUITY_ACADEMY", "on")).lower() in ("off", "0", "false", "no"):
+        return None
+    from firm.sidecar import Sidecar
+
+    root = Path(__file__).resolve().parents[1]
+    sidecar = Sidecar("equity-academy", [sys.executable, str(root / "scripts" / "equity_academy.py")], cwd=str(root), environ=os.environ, nice=15)
+    sidecar.start()
+    service.sidecars["equity-academy"] = sidecar
     return sidecar
 
 

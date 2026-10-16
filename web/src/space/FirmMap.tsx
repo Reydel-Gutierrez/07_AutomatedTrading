@@ -10,7 +10,7 @@ import { money } from "../format";
 import { Body, Chair, Hands, LOOKS, type Look, type Pose, Zzz } from "./Character";
 import { ACADEMY, DEPTS, type Dept, type DeptId, FLOORS, type Floor, type FloorId, GROUND, type Rect, SESSIONS, SLAB, TOWER, WORLD, fxMarketOpen, localTime, sessionOpen } from "./departments";
 import { poseFor } from "./pose";
-import { type AcademySpaceAgent, type AgentState, type Mood, PHASE, type Space, STATE_META } from "./state";
+import { type AcademySpaceAgent, type AgentState, type EquityClassAgent, type Mood, PHASE, type Space, STATE_META } from "./state";
 
 export type AgentId = "cio" | "tim" | "alex" | "max";
 export type Selection = { kind: "person"; id: AgentId } | { kind: "dept"; id: DeptId } | { kind: "trainee"; id: string } | { kind: "floor"; id: FloorId };
@@ -1091,18 +1091,62 @@ function Research({ d, c }: { d: Dept; c: Ctx }) {
   );
 }
 
+/** A Stock Swing Class agent at its desk (the room opens the class page; figures are not separate buttons). */
+function EquityFigure({ a, x, floorY }: { a: EquityClassAgent; x: number; floorY: number }) {
+  const look = { chair: "#1f2633", skin: "#d9a67c", hair: "#2b2523", hairStyle: "neat", top: "#334155", inner: "#e2e8f0", accent: a.persona.color, ...(a.persona.look ?? {}) } as Look;
+  const paused = a.status !== "ACTIVE";
+  const busy = !paused && !!a.sprinting;
+  const pose: Pose = busy ? "typing" : "idle";
+  const feeling = a.return_pct <= -0.05 ? "stressed" : a.return_pct >= 0.02 ? "pleased" : "calm";
+  const s = 0.72;
+  const top = floorY - 54;
+  const line = paused ? a.status.toLowerCase() : a.sprinting ? `sprint: ${a.sprinting}` : a.stage === "PAPER" ? `paper ${a.return_pct >= 0 ? "+" : ""}${(a.return_pct * 100).toFixed(1)}%` : a.last_sprint ? `researching · v${a.version}` : "waiting for history";
+  return (
+    <g pointerEvents="none">
+      {busy && <ellipse cx={x} cy={top} rx={80} ry={50} fill="url(#fm-warm)" className="fs-pulse" />}
+      <g className={paused ? "fs-off" : undefined}>
+        <g transform={`translate(${x} ${top}) scale(${s})`}>
+          <Chair look={look} />
+          <Body look={look} pose={pose} working={busy} feeling={feeling} gaze={busy ? "monitor" : "wander"} chair={false} />
+        </g>
+        <rect x={x - 56} y={top} width={112} height={floorY - top} fill="#33281f" />
+        <rect x={x - 59} y={top - 5} width={118} height={8} rx={2} fill="#4a3b30" />
+        <Monitor x={x + 38} y={top - 5} color={busy ? a.persona.color : "#13243c"} off={false} pulse={busy} chart={busy ? undefined : a.persona.color} />
+        <g transform={`translate(${x} ${top}) scale(${s})`}>
+          <Hands look={look} pose={pose} />
+        </g>
+        <rect x={x - Math.max(64, textW(a.name.toUpperCase(), 8, 700, 1.2) + 14) / 2} y={top + 16} width={Math.max(64, textW(a.name.toUpperCase(), 8, 700, 1.2) + 14)} height={14} rx={2} fill="#14110f" stroke={a.persona.color} strokeOpacity=".7" />
+        <text x={x} y={top + 26} textAnchor="middle" fontSize="8" fontWeight="700" letterSpacing="1.2" fill={a.persona.color}>{a.name.toUpperCase()}</text>
+      </g>
+      <Chip x={x} y={floorY - 140} name={a.name} line={line} dot={a.persona.color} pulse={busy} alert={a.stage === "PAPER" && feeling === "stressed"} selected={false} />
+    </g>
+  );
+}
+
 function StockSwing({ d, c }: { d: Dept; c: Ctx }) {
-  const [x, y, w] = d.rect;
+  const [x, , w] = d.rect;
+  const f = fy(d.rect);
+  const eq = c.space.equity_class;
+  const agents = (eq?.agents ?? []).filter((a) => a.stage !== "RETIRED");
+  const n = Math.max(agents.length, 4);
+  const step = (w - 20) / n;
+  const paper = agents.filter((a) => a.stage === "PAPER").length;
+  const sub = !eq?.available ? "Engine not running" : `${agents.length - paper} in research · ${paper} on paper`;
+  return (
+    <Room d={d} c={c} sub={sub} muted={!eq?.available}>
+      {agents.map((a, i) => <EquityFigure key={a.id} a={a} x={x + 10 + step * (i + 0.5)} floorY={f} />)}
+      {Array.from({ length: n - agents.length }, (_, i) => <EmptyDesk key={i} x={x + 10 + step * (agents.length + i + 0.5)} y={f} w={96} plate="OPEN DESK" tone="#4a3b30" />)}
+    </Room>
+  );
+}
+
+function LiveSeats({ d, c }: { d: Dept; c: Ctx }) {
+  const [x, , w] = d.rect;
   const f = fy(d.rect);
   return (
-    <Room d={d} c={c} sub="Not open yet" muted>
-      <Board x={x + 20} y={y + 58} w={180} h={72}>
-        <text x={x + 30} y={y + 76} fontSize="8.5" fontWeight="700" letterSpacing="1.6" fill="#f59e0b">CHALLENGERS FOR THE DESK</text>
-        <text x={x + 30} y={y + 96} fontSize="8.5" fill="#94a3b8">Research on daily history,</text>
-        <text x={x + 30} y={y + 110} fontSize="8.5" fill="#94a3b8">then paper beside Max.</text>
-      </Board>
-      <EmptyDesk x={x + w / 2 + 40} y={f} w={96} plate="SEAT 1" tone="#6b4430" />
-      <EmptyDesk x={x + w / 2 + 170} y={f} w={96} plate="SEAT 2" tone="#6b4430" />
+    <Room d={d} c={c} sub="0 of 2 taken" muted>
+      <EmptyDesk x={x + w / 4 + 4} y={f} w={70} plate="SEAT 1" tone="#6b4430" />
+      <EmptyDesk x={x + (3 * w) / 4 - 4} y={f} w={70} plate="SEAT 2" tone="#6b4430" />
     </Room>
   );
 }
@@ -1175,6 +1219,7 @@ function DeptRoom({ d, c }: { d: Dept; c: Ctx }) {
     case "core-board": return <CoreBoard d={d} c={c} ids={["tim", "alex"]} title="CORE INVESTMENTS" />;
     case "trading-board": return <CoreBoard d={d} c={c} ids={["max"]} title="EQUITY TRADING" />;
     case "stock-swing": return <StockSwing d={d} c={c} />;
+    case "live-seats": return <LiveSeats d={d} c={c} />;
     case "forex-board": return <ForexBoard d={d} c={c} />;
     case "ops-board": return <OpsBoard d={d} c={c} />;
     case "demo-board": return <DemoBoard d={d} c={c} />;

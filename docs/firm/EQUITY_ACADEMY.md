@@ -1,141 +1,81 @@
-# Equity Academy: the Stock Swing Class (design, not built)
+# Equity Academy: the Stock Swing Class
 
-Status: design approved in direction by the owner on 2026-10-16 ("keep Max's desk, give it its
-own floor, and let an equity Academy class compete for it"). Nothing here is built yet. Building
-it needs the owner's go-ahead; putting a challenger's strategy on the desk needs the owner's
-approval each time.
+Status (2026-10-16): **built** (Floors 1 and 2). The owner approved the build, asked Claude to name
+the agents, allowed each agent its own list of names, and decided that a winner gets **its own live
+seat** (beside Max's desk, not replacing it), or more tests, by the owner's approval. The live
+seat's trading code is built when the first challenger finishes Floor 2; nothing here can place an
+order.
 
-## The idea in one paragraph
+## What runs where
 
-Max is a **desk**, not a strategy. The desk is the seat that holds real (or SIM) capital on the
-Equity Trading floor (L3), with the owner-approved sleeve stops, the spread limit, the daily order
-limit, and the cooldown and group guards. Today the desk runs one strategy, `trend_pullback_v1`.
-That strategy is the **incumbent**. The Stock Swing Class is a set of Academy agents that research
-and paper trade **challenger** strategies on US stocks and ETFs. A challenger that beats the
-incumbent over the same weeks, on paper, after costs, can take over the desk, but only with the
-owner's approval. Max keeps his name, his office and his record. What changes is the strategy he
-runs, as a new mandate version.
+| Piece | Where |
+|---|---|
+| Engine (Floor 1 sprints, Floor 2 paper records, owner commands) | `src/equity/`, `scripts/equity_academy.py`; a separate process started by the firm service (`FIRM_EQUITY_ACADEMY=off` disables it), nice 15, allowlisted environment |
+| State | `state/equity_academy/academy.db`, `engine.log`, `inbox/` (`EQUITY_STATE_ROOT` overrides) |
+| Market data | the firm's daily bars (`firm.db`, read only). The firm's `equity_academy_bars` job (17:15 New York) fetches the names the engine asks for; a name with under 1,000 stored bars gets ~6.5 years once |
+| HQ | `/equity-academy` (class and agent pages), `/api/equity-academy`, the map's L3 rooms, Graham's `get_stock_swing_class`, one line in the 08:00 message |
 
-We don't open a second swing desk now. With about $124 on the desk, splitting it would make every
-position too small to matter. A second seat makes sense once the desk holds about $1,000 and two
-challengers with different behavior both qualify (see "Later" below).
+## The class
 
-## How it follows the forex Academy, and where it differs
-
-| | Forex Academy | Stock Swing Class |
+| Agent | Strategy | Names |
 |---|---|---|
-| Floor 1, Research | nightly sprint on OANDA history | nightly sprint on daily US stock history |
-| Floor 2, Paper | $10k virtual on live OANDA prices | $10k virtual on live Robinhood quotes, in the same 15:15 ET window Max uses |
-| Floor 3 | Demo Desk on an OANDA practice account | **none**: Robinhood has no practice account. Floor 2 already runs side by side with the desk on the same days |
-| Promotion | owner gives a live chair | owner swaps the desk's strategy (Max's mandate) to the challenger's |
-| Bars | intraday + daily | daily only (swing holds of 1 to 20 sessions) |
+| **Juniper**, steady dip buyer | RSI(2) pullback in an uptrend, stops sized to each name's daily range (ATR), 5 positions | Max's 22 ETFs and mega caps |
+| **Rook**, breakout trader | close above the prior 20-day high in an uptrend, ATR trailing stop, 5 positions | 20 large-cap leaders across sectors |
+| **Meridian**, sector rotator | every 5 sessions hold the top 3 by 63-day return that are above their trend | 11 sector ETFs, SMH, GLD, TLT |
+| **Talon**, high-beta risk taker | the pullback rule on volatile growth names, 20% positions, wide ATR stops | TSLA, AMD, MU, PLTR, COIN, SHOP, NET, CRWD, DDOG, SNOW, RBLX, DKNG, AFRM, ROKU, ENPH |
 
-Code reuse: the Academy's validation, revision and sprint machinery (`src/forex/validation.py`,
-`research.py`, `revision.py`) is written for forex instruments. The class adds an equity data
-adapter and an equity simulator next to them, with its own `state/equity_academy/academy.db`. It
-runs in the existing sidecar process (`src/firm/sidecar.py`, nice 10), **never** in the firm's
-trading loop, and reads quotes from the firm's market cache only. Tim's path is untouched.
+Every agent runs with the desk's guards: no re-entry for 3 sessions after a stop, and at most 2
+positions per group of names that move together.
 
-## The starting class (4 agents)
+## Simulation (the same code for research and paper)
 
-Every challenger has a per-trade stop and the desk's guards. The desk refuses any order without a
-stop.
+Decisions at a day's close use only bars up to that day; orders fill at the next open plus costs
+(5 to 10 bps a fill by agent). Stops fill at the stop, or at the open when a day gaps through it; a
+buy whose next open is already below its stop is refused. Long only, no leverage, fractional shares.
+**Cash account:** sale proceeds settle the next session. Buys may use unsettled proceeds, as
+Robinhood allows, but selling that position before the money settles is a good-faith violation, and
+the run counts them.
 
-1. **Pullback+**: the incumbent, tuned. RSI(2) below 15 to 20 instead of 10, 5 to 6 smaller
-   positions instead of 4, and stops sized to each name's typical daily range (ATR) instead of a
-   fixed 6%. This answers Graham's options 1 and 2 with evidence, before any setting changes on
-   the desk.
-2. **Breakout**: buys a close above the 20-day high while above the 200-day average, with an
-   ATR trailing stop. It does well in rising markets, where pullback buying sits idle.
-3. **Rotation**: once a week, holds the 2 to 3 strongest sector ETFs by 1 to 3 month relative
-   strength. Each position has a stop, and it exits on the weekly rerank. It is the most
-   diversified of the four by construction.
-4. **High-beta pullback**: the pullback rule on more volatile names (TSLA, AMD, MU, PLTR, COIN),
-   with ATR stops and at most one position per group. This is the "risk taker" Graham proposed,
-   tested on paper instead of with the desk's money.
+## Floor 1: research (nightly, 01:30 New York)
 
-The owner names the agents, as in the forex Academy. Each agent may trade only its own fixed list
-of symbols, so a challenger can't drift into names nobody approved.
+Same method as the forex Academy: up to 16 variants around the current version (settings moved,
+the weakest name dropped, two-setting combinations), scored on the research window in four periods,
+then the best goes through the gates. Gates (all must pass):
 
-## Gates
+- history: 4+ years after warm-up for at least two thirds of the agent's names
+- evidence: 40+ trades on unseen data (out-of-sample plus the locked final year)
+- expectancy: unseen average R > 0 and profit factor >= 1.1
+- Sharpe: unseen Sharpe >= 0.5 after costs
+- hold-out: the locked final year's average R >= -0.05
+- skill: beats 20 random-name baselines (same entry days, stop distances and exits) at p <= 0.10
+- luck: trial-adjusted Sharpe >= 0.3 (stricter with every variant the agent has ever tried)
+- cost stress: still profitable on unseen data with 10 bps more cost on every fill
+- drawdown: at least 80% of rolling one-year windows stay within the desk's 10% sleeve stop
+- cash account: never 3 good-faith violations within 12 months
+- day-1 test: 30 fresh $10,000 accounts on random start dates, 6 months each: >= 55% profitable,
+  median > 0, 10th percentile >= -8%
 
-**Floor 1 → Floor 2** (automatic, nightly):
-- walk-forward over at least 5 years of daily bars, including 2022, with the last 12 months
-  locked out of tuning
-- out-of-sample Sharpe above 0.5 after costs: half the quoted spread plus 5 bps slippage on each
-  side
-- at least 40 out-of-sample trades
-- beats a random-entry baseline that uses the same exits, sizing and symbols (p < 0.05)
-- max drawdown inside the desk's 10% sleeve stop on at least 90% of rolling one-year windows
-- **cash-account check**: the simulator spends only settled cash (T+1) and counts would-be
-  good-faith violations. A strategy that needs unsettled cash to work fails.
+Calibration on synthetic data: 0 of 48 sprints passed on random-walk prices (no edge), and a
+built-in short-term reversal edge passed in most runs.
 
-**Floor 2 → the desk** (owner's decision):
-- at least 4 weeks on paper, judged week by week, the same rule as forex
-- ahead of the incumbent over the same weeks, as a percentage return after costs, and not just
-  ahead of zero
-- no more than its share of the overlap problem: its average overlap with Alex's holdings is
-  reported next to its return
-- Graham may file a `desk_challenge` proposal (a new proposal type, modeled on
-  `academy_promotion`) after 2 profitable weeks ahead of the incumbent. It does nothing until the
-  owner approves it.
+## Floor 2: paper trading
 
-**On approval**: Max's mandate gets a new version with the challenger's strategy id and
-parameters. The desk keeps its current mode: if Max is in SIM, the new strategy starts in SIM, and
-the LIVE gate (at least 20 SIM trading days) restarts. The old strategy stays on Floor 2 as a
-challenger, so a swap can be reversed on evidence.
+From the night it passes, an agent's $10,000 paper record is rebuilt each time new daily bars arrive,
+with its frozen version, starting from its last known close before promotion. HQ shows it week by
+week and against Max's desk over the same days. After at least 20 sessions and 10 trades, the owner
+decides: a live seat, or more tests (back to research). Graham can read it all but can't move anyone.
 
-## What the floor shows
+## Known limits
 
-- **Max's office**: the desk's live record and current strategy.
-- **Stock Swing Class room**: the challengers, with each one's floor, weeks on paper, and return
-  against Max over the same weeks. It is a placeholder on the map until the build.
-- **Trading Boardroom** (`/analytics/trading`): the desk against the S&P 500. After the build,
-  it also shows a leaderboard of challengers against the incumbent.
+- **Survivorship**: each list is today's names, which flatters backtests, especially Talon's. Floor 2
+  weighs more than backtests.
+- **Prices only**: dividends aren't modeled, so ETF returns are slightly understated.
+- **History**: Robinhood's daily history may not reach back far enough for the youngest names; an
+  agent waits (NO_DATA) rather than testing on too little.
+- **Day trading** stays out: in a cash account of this size it wouldn't be meaningful.
 
-## Build plan (after the owner's go-ahead)
+## Next, when a challenger finishes Floor 2
 
-1. **Data**: daily bars for each challenger's symbols, 5+ years. Today `refresh_bars` fetches 400
-   days, so it needs a longer one-time backfill, stored in the equity Academy's own database.
-   Prices only: dividends aren't modeled, so ETF returns are slightly understated, and this is
-   said on every report.
-2. **Simulator + gates**: an equity simulator that models settled cash, the desk's guards, costs,
-   walk-forward, the random baseline, and the locked final year. Tests use known synthetic series.
-3. **Floor 1**: the four agents, a nightly sprint at 01:30 New York (after the forex sprint), and
-   the sprint report in the 08:00 Telegram line.
-4. **Floor 2**: paper trading at 15:15 ET from the firm's quote cache, and a weekly comparison
-   against the desk.
-5. **Desk challenge**: the `desk_challenge` proposal, owner approval in Max's office, and the
-   mandate swap.
-6. **Map**: the Stock Swing Class room becomes live, and the challenger leaderboard appears in
-   the Trading Boardroom.
-
-Rough size: steps 1 and 2 are the bulk, comparable to the forex Academy's first build. Steps 3 to 6
-reuse the forex patterns.
-
-## Known limits, said up front
-
-- **Survivorship**: each challenger's list is today's names, and names that failed aren't in the
-  history. This flatters backtests, especially high-beta, so out-of-sample results and Floor 2 weigh
-  more than backtests.
-- **Small money**: on about $124, fractional shares work, but a $1 minimum and spreads matter. The
-  simulator uses the desk's real minimum trade.
-- **Day trading stays out**: in a cash account, settlement limits how often money can be reused,
-  and with this sleeve size intraday trading wouldn't be meaningful. It can be reconsidered when
-  the sleeve and the account type change.
-
-## Decisions for the owner
-
-1. Approve the build (steps 1 to 6).
-2. Name the four agents.
-3. May the high-beta challenger trade names outside Max's current 22? (On paper only, until it
-   wins the desk.)
-4. Should a winning challenger replace the desk's strategy (recommended), or wait for a second
-   seat?
-
-## Later
-
-- A second swing seat once the desk holds about $1,000 and two qualified challengers behave
-  differently. The Stock Swing Class room already has two seats drawn for this.
-- An equity class for Alex's style (monthly momentum) if the owner wants Alex's research desk to
-  compete as well.
+1. The live seat: a firm manager that runs the challenger's frozen version through the desk (the
+   same safeguards as Max: sleeve stops, spread limit, order limit), with an owner-set allocation.
+2. A `desk_challenge` / seat proposal Graham may file after 2+ good weeks (applies only on approval).

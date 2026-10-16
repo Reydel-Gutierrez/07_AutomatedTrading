@@ -56,6 +56,22 @@ export type AcademySpaceAgent = {
   floor_trades?: number;
 };
 
+export type EquityClassAgent = {
+  id: string;
+  name: string;
+  persona: { tagline: string; color: string; look?: Record<string, unknown> };
+  stage: "RESEARCH" | "PAPER" | "RETIRED";
+  status: string;
+  version: number;
+  equity: number;
+  return_pct: number;
+  sprinting: string | null;
+  last_sprint: { day: string; outcome: string } | null;
+  activity: string | null;
+};
+
+export type EquityClassSpace = { available: boolean; online?: boolean; data_ready?: boolean; agents?: EquityClassAgent[] };
+
 export type AcademySpace = {
   available: boolean;
   engine?: { online: boolean; heartbeat?: number; market_open?: boolean; data_ready?: boolean; job?: { name: string; since: number } | null; last_error?: string | null; demo?: { configured: boolean; problem: string | null; seats: number } };
@@ -78,6 +94,7 @@ export type TreasuryBrief = {
 
 export type Space = {
   academy?: AcademySpace;
+  equity_class?: EquityClassSpace;
   treasury?: TreasuryBrief;
   today?: { events: number; runs: number; warnings: number; critical: number; cio: number; orders: number; fills: number };
   as_of: string;

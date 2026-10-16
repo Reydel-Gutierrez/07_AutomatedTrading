@@ -14,7 +14,7 @@ from datetime import timedelta
 from typing import Any, Callable
 
 from firm.ai.providers import ToolSpec
-from firm.api import academy, views
+from firm.api import academy, equity_academy, views
 from firm.broker.errors import BrokerUnavailable
 from firm.capital_pool import CapitalPool
 from firm.cio.memory import KINDS as MEMORY_KINDS
@@ -71,6 +71,14 @@ SPECS = [
         "A night's research sprint report (latest if no day is given, format YYYY-MM-DD): per agent, the candidates tried, the change "
         "adopted, validation and day-1 results, and the verdict.",
         _obj({"day": {"type": "string"}}),
+    ),
+    ToolSpec(
+        "get_stock_swing_class",
+        "The Stock Swing Class (equity Academy agents competing for a live swing seat on the Equity Trading floor, on the firm's "
+        "daily US stock bars): each agent's floor (1 research, 2 paper trading), strategy, names, version, latest validation "
+        "(failing checks, unseen-data results, day-1 test), last sprint verdict, and on Floor 2 its paper record week by week "
+        "against Max's desk over the same days. Nothing here trades real money; a live seat needs the owner's approval.",
+        _obj({}),
     ),
     ToolSpec("search_memory", "Search what you have been told to remember (objectives, preferences, decisions, concerns).", _obj({"query": {"type": "string"}}, ["query"])),
     ToolSpec("list_proposals", "Proposals and their status (PENDING, APPLIED, REJECTED, EXPIRED, FAILED).", _obj({"status": {"type": "string"}})),
@@ -235,6 +243,9 @@ class CIOTools:
     def t_get_sprint_report(self, day: str | None = None) -> dict[str, Any]:
         out = academy.cio_report(day)
         return out if out is not None else {"error": "no sprint report for that day yet"}
+
+    def t_get_stock_swing_class(self) -> dict[str, Any]:
+        return equity_academy.cio_brief(self.firm)
 
     def t_search_memory(self, query: str) -> dict[str, Any]:
         return {"memories": [{"id": m["id"], "kind": m["kind"], "text": m["text"], "active": bool(m["active"]), "created_at": m["created_at"]} for m in self.memory.search(query)]}

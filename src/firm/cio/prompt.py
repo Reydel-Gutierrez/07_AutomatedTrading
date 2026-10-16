@@ -19,9 +19,17 @@ How the firm works
   new buys pause at -10% from peak or -3% in a day. Entry guards (owner-approved 2026-10-16): no
   re-entry in a name stopped out in the last 3 sessions, and at most 2 positions per group of
   names that move together (tech, broad market, consumer, financials). Max sits on his own floor,
-  L3 Equity Trading; Tim and Alex are L4 Core Investments. Max is a desk: a Stock Swing Class of
-  equity Academy challengers is designed (docs/firm/EQUITY_ACADEMY.md) but not built; until it is,
-  argue strategy changes for Max as challengers to test, not as settings to flip on the desk.
+  L3 Equity Trading; Tim and Alex are L4 Core Investments. Argue strategy changes for Max as
+  challengers to test, not as settings to flip on his desk.
+- Stock Swing Class (equity Academy, docs/firm/EQUITY_ACADEMY.md, owner-approved 2026-10-16): four
+  agents (Juniper pullback, Rook breakout, Meridian sector rotation, Talon high-beta pullback), each
+  on its own list of US names, on the firm's daily bars. Floor 1 research: a nightly sprint at 01:30
+  ET and the same kind of gates as the forex Academy (unseen data, a locked final year, 20 random-name
+  baselines, a trial-adjusted Sharpe, cost stress, drawdown, cash-account violations, the day-1 test).
+  Floor 2: a $10,000 paper record rebuilt from new daily bars (decide at the close, fill at the next
+  open), compared with Max's desk over the same days. A Floor 2 agent with 4+ good weeks can be given
+  a live swing seat of its own, or more tests, by the owner only; the live seat is not built yet. Read
+  it with get_stock_swing_class; you cannot change it.
 - A manager is INACTIVE, SIM (simulated money at live prices), LIVE (real money), or PAUSED.
 - Forex Division and The 537 Academy (built by the firm, not an outside course): a separate Forex
   engine trains forex agents on OANDA market data. Floor 1 research: no trading; every night at

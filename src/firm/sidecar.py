@@ -1,4 +1,4 @@
-"""Supervise a separate program next to the firm (the Forex engine).
+"""Supervise a separate program next to the firm (the Forex engine, the Stock Swing Class engine).
 
 The child is a different process with its own databases: if it crashes, hangs, or leaks
 memory, the firm keeps running. It starts at low CPU priority, receives only an allowlisted
@@ -17,7 +17,7 @@ from typing import Any, Mapping, Sequence
 
 log = logging.getLogger(__name__)
 
-ENV_ALLOW = ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TZ", "PYTHONPATH", "FOREX_STATE_ROOT", "OANDA_ENV_FILE", "SYSTEMROOT")
+ENV_ALLOW = ("PATH", "HOME", "USER", "LANG", "LC_ALL", "TZ", "PYTHONPATH", "FOREX_STATE_ROOT", "OANDA_ENV_FILE", "SYSTEMROOT", "FIRM_STATE_ROOT", "EQUITY_STATE_ROOT")
 NOT_CONFIGURED = 3  # child exit code: nothing to run yet (e.g. no credentials); retry slowly
 
 

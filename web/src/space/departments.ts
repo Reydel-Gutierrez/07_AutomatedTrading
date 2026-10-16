@@ -8,7 +8,7 @@ export type FloorId = "exec" | "core" | "trading" | "forex" | "lobby" | "academy
 export type DeptId =
   | "cio" | "treasury"
   | "tim" | "alex" | "core-board"
-  | "max" | "stock-swing" | "trading-board"
+  | "max" | "stock-swing" | "live-seats" | "trading-board"
   | "market-room" | "day-1" | "day-2" | "swing-1" | "swing-2" | "forex-board"
   | "lobby" | "records" | "operations" | "ops-board"
   | "lab" | "studio" | "research-board" | "research" | "alumni" | "demo-desk" | "demo-board" | "hall" | "hall-board";
@@ -108,8 +108,9 @@ export const DEPTS: Dept[] = [
   manager("alex", "Alex", "Strategic Growth Manager: systematic momentum stock selection, each candidate checked by an AI research desk.", 660, "core", 540),
   boardroom("core-board", "Core Boardroom", "core", BOARD_X.hq, "core", "Core Investments at a glance: Tim's and Alex's value, return against the S&P 500 over the same days, and mode."),
   // L3 Equity Trading: short-term money
-  manager("max", "Max", "Swing Desk: Max runs the firm's stock swing-trading seat (today a trend-pullback strategy with per-trade stops, a cooldown after a stop, and at most two names per correlated group).", 120, "trading", 540),
-  { id: "stock-swing", name: "Stock Swing Class", floor: "trading", rect: row("trading", 660, 540), purpose: "Where challengers for Max's desk will come from: equity Academy agents researched on years of daily US stock history, then paper traded on live prices. A challenger that beats the desk's current strategy over the same weeks can take over the desk, on your approval.", later: "Designed (docs/firm/EQUITY_ACADEMY.md); opens when you approve the build.", folders: [{ label: "Max's workspace", path: "/managers/max", note: "The desk's current strategy and record" }] },
+  manager("max", "Max", "Swing Desk: Max runs the firm's stock swing-trading seat (a trend-pullback strategy with per-trade stops, a cooldown after a stop, and at most two names per correlated group).", 120, "trading", 380),
+  { id: "stock-swing", name: "Stock Swing Class", floor: "trading", rect: row("trading", 500, 520), open: "/equity-academy", purpose: "Four equity Academy challengers (Juniper, Rook, Meridian, Talon), each on its own list of US names. Floor 1: a research sprint every night at 1:30 AM New York on years of daily history, with the same kind of gates as the forex Academy. Floor 2: a $10,000 paper record on new daily bars, compared with Max's desk over the same days. Click the room for the class.", folders: [{ label: "Stock Swing Class", path: "/equity-academy", note: "Agents, gates, sprints, and paper records" }] },
+  { id: "live-seats", name: "Live swing seats", floor: "trading", rect: row("trading", 1020, 180), purpose: "Two seats for challengers that prove themselves on paper. A seat trades real money with its own allocation, beside Max's desk.", later: "You give a seat (or more tests) after about four good weeks on Floor 2. The seat itself is built when the first challenger gets there.", folders: [{ label: "Stock Swing Class", path: "/equity-academy", note: "Who is closest to a seat" }] },
   boardroom("trading-board", "Trading Boardroom", "trading", BOARD_X.hq, "trading", "Equity Trading at a glance: the swing desk's value, return against the S&P 500 over the same days, and mode."),
   // L2 Forex
   { id: "market-room", name: "Market room", floor: "forex", rect: row("forex", 120, 360), purpose: "Live OANDA rates, the Tokyo, London, and New York sessions, and the desk heads' workstations for the day and swing desks.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Rates, agents, and validation evidence" }] },
@@ -155,6 +156,8 @@ export const FOLDER_TITLES: [RegExp, string][] = [
   [/^\/analytics\/academy-hall$/, "Floor 2 · Paper trading analytics"],
   [/^\/analytics\/academy-research$/, "Floor 1 · Research analytics"],
   [/^\/academy$/, "The 537 Academy"],
+  [/^\/equity-academy$/, "Stock Swing Class"],
+  [/^\/equity-academy\/(\w+)$/, "Stock Swing Class agent"],
   [/^\/academy\/reports/, "Sprint reports"],
   [/^\/academy\/(\w+)$/, "Academy agent"],
   [/^\/managers\/(\w+)$/, "Manager workspace"],

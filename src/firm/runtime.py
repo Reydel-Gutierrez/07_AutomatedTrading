@@ -146,6 +146,7 @@ class Service:
             add(Job("cio:pool_review", self._pool_review_due, self.pool_review, 900))
         add(Job("marks", lambda now, st: self._daily_after(now, "marks", time(16, 20), trading_only=True), self.marks, 300))
         add(Job("market_bars", lambda now, st: self._daily_after(now, "market_bars", time(17, 0)), self.market_bars, 300))
+        add(Job("equity_academy_bars", lambda now, st: self._daily_after(now, "equity_academy_bars", time(17, 15)), self.equity_academy_bars, 900))
         add(Job("backup", lambda now, st: self._daily_after(now, "backup", time(2, 30)), self.backup, 900))
         add(Job("academy_report", lambda now, st: self._daily_after(now, "academy_report", time(8, 0)), self.academy_report, 60))
 
@@ -272,12 +273,31 @@ class Service:
         self._mark_daily("market_bars")
         return n
 
+    def equity_academy_bars(self) -> dict[str, Any]:
+        """17:15 New York: daily bars for the Stock Swing Class's names (it asks in its own database;
+        the firm never imports its code). A name with little stored history gets ~6.5 years once."""
+        from firm.api.equity_academy import wanted_symbols
+
+        wanted = wanted_symbols()
+        if not wanted:
+            return {"symbols": 0}  # the class engine has not started yet; try again on the next pass
+        have = {r["symbol"]: r["n"] for r in self.firm.db.query("SELECT symbol, count(*) AS n FROM market_bars GROUP BY symbol")}
+        backfill = [s for s in wanted if have.get(s, 0) < 1000]
+        stored = self.firm.market.refresh_bars(backfill, days=2400) if backfill else 0
+        stored += self.firm.market.refresh_bars([s for s in wanted if s not in backfill], days=10)
+        self._mark_daily("equity_academy_bars")
+        return {"symbols": len(wanted), "backfilled": len(backfill), "stored": stored}
+
     def academy_report(self) -> dict[str, Any]:
         """08:00 New York: tell the owner the night's Academy research report is ready (a short line, not the report)."""
         from firm.api.academy import morning_message
 
         # only a morning message: after a restart later in the day, skip it rather than send a stale note
-        msg = morning_message(et_date(self.clock()).isoformat()) if et(self.clock()).time() < time(12, 0) else None
+        from firm.api.equity_academy import morning_line
+
+        day = et_date(self.clock()).isoformat()
+        morning = et(self.clock()).time() < time(12, 0)
+        msg = " ".join(x for x in ((morning_message(day), morning_line(day)) if morning else ()) if x) or None
         if msg:
             self.firm.events.emit("ACADEMY_REPORT", msg, actor="academy")
         self._mark_daily("academy_report")
