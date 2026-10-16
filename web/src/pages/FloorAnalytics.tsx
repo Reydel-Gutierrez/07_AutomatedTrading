@@ -4,7 +4,7 @@
  */
 import { Link, useParams } from "react-router-dom";
 import { useLive } from "../App";
-import { type AgentCard, type Check, type WeekResult, fmtR } from "../academy";
+import { type AgentCard, type Check, type WeekResult, fmtR, MARKET, marketOf } from "../academy";
 import { Card, Empty, Stat } from "../components/ui";
 import { useResource } from "../hooks";
 import { money, pct, signedPct, tone } from "../format";
@@ -15,6 +15,7 @@ type BookStats = { daily: Daily[]; days_tracked: number; max_drawdown: number; c
 type CoreManager = BookStats & { id: string; name: string; role: string; mode: string; book: string; implemented: boolean; orders: Record<string, number>; decisions: number };
 type OpsDay = { day: string; events: number; warnings: number; critical: number; runs: number; orders: number; fills: number };
 type FloorAgent = {
+  market?: "forex" | "stocks";
   id: string; name: string; color: string; style: string; version: number; since: string | null; equity: number; return_pct: number; max_drawdown: number; open_positions: number;
   this_floor: AgentCard["paper"]; weekly: WeekResult[]; readiness: AgentCard["readiness"];
   validation: { status: string | null; passed: boolean | null; unseen: { avg_r: number | null; trades: number } | null; failing: string[] } | null;
@@ -33,8 +34,8 @@ const TITLES: Record<string, [string, string]> = {
   forex: ["Forex Division", "L2 · live chairs and the Academy pipeline that fills them"],
   operations: ["Operations", "L1 · what the firm recorded over the last two weeks"],
   "academy-demo": ["Floor 3 · Demo Desk", "Real orders on an OANDA practice account (fake money)"],
-  "academy-hall": ["Floor 2 · Paper Trading Hall", "$10,000 virtual accounts on live OANDA prices, week by week"],
-  "academy-research": ["Floor 1 · Research", "No trading: nightly sprints on OANDA history, then the gates"],
+  "academy-hall": ["Floor 2 · Paper trading", "$10,000 virtual accounts, week by week: forex on live OANDA prices, stocks on new daily bars"],
+  "academy-research": ["Floor 1 · Research", "No trading: nightly sprints (forex on OANDA history, stocks on daily US history), then the gates"],
 };
 
 export default function FloorAnalytics() {
@@ -226,7 +227,7 @@ function Forex() {
 function AcademyFloor({ scope }: { scope: string }) {
   const { data, error } = useScope<FloorData>(scope);
   if (!data) return <Loading error={error} />;
-  if (!data.available) return <Empty>The Forex engine has not created the Academy yet.</Empty>;
+  if (!data.available) return <Empty>The Academy's engines have not started yet.</Empty>;
   const trading = data.stage !== "RESEARCH";
   return (
     <div className="space-y-6">
@@ -243,7 +244,7 @@ function AcademyFloor({ scope }: { scope: string }) {
       {data.agents.length === 0 ? (
         <Card><Empty>{data.stage === "PAPER" ? "No agent has passed research yet. Agents arrive here automatically when they pass every gate." : data.stage === "DEMO" ? "No agent has a Demo Desk seat yet. You give one to a Floor 2 agent after evaluating its weekly results." : "No agents in research."}</Empty></Card>
       ) : data.agents.map((a) => (
-        <Card key={a.id} title={<span><span className="mr-2 inline-block h-2.5 w-2.5 rounded-full" style={{ background: a.color }} />{a.name} <span className="text-xs font-normal text-slate-500">v{a.version} · {a.style} trader</span></span>} action={<Link className="text-xs text-gold-400 hover:underline" to={`/firm/${a.id}`}>Sit down with {a.name} →</Link>}>
+        <Card key={a.id} title={<span><span className="mr-2 inline-block h-2.5 w-2.5 rounded-full" style={{ background: a.color }} />{a.name} <span className="text-xs font-normal text-slate-500">v{a.version} · {MARKET[marketOf(a)].label} · {MARKET[marketOf(a)].trader(a.style).toLowerCase()}</span></span>} action={<Link className="text-xs text-gold-400 hover:underline" to={`/firm/${a.id}`}>Sit down with {a.name} →</Link>}>
           {trading ? <TradingAgent a={a} /> : <ResearchAgent a={a} />}
         </Card>
       ))}
@@ -284,7 +285,7 @@ function TradingAgent({ a }: { a: FloorAgent }) {
       <div>
         <h3 className="label mb-2">{a.readiness.next ? `Next: ${a.readiness.next}` : "Next"}</h3>
         <CheckList checks={a.readiness.checks as Check[]} />
-        <p className="mt-3 text-xs text-slate-500">You evaluate and decide. Graham may propose a Demo Desk seat after 2 profitable weeks; it moves only when you approve.</p>
+        <p className="mt-3 text-xs text-slate-500">{marketOf(a) === "stocks" ? "You evaluate and decide: a live swing seat on L3, or more tests." : "You evaluate and decide. Graham may propose a Demo Desk seat after 2 profitable weeks; it moves only when you approve."}</p>
       </div>
     </div>
   );

@@ -13,10 +13,10 @@ import { useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, until, when } from "../format";
 import { ChatThread, MemoryPanel, ProposalCard, useCioChat } from "../pages/CIO";
 import { DecisionLog, MandateCard, ModeControl, Orders, Positions, ResearchDesk, RunNow } from "../pages/Manager";
-import { type AgentDetail, fmtR, pair } from "../academy";
+import { type AgentDetail, fmtR, pair, MARKET, marketOf } from "../academy";
 import { AcademyControls, CheckList, EquityLine, Params, Table, ValidationCard } from "../pages/Academy";
 import { Body, Chair, Hands, LOOKS, type Look, Zzz } from "./Character";
-import { traineeDoing, weekOnFloor } from "./FirmMap";
+import { traineeDoing, weekOnFloor, dataReadyFor } from "./FirmMap";
 import { poseFor } from "./pose";
 import { type AcademySpaceAgent, type AgentState, MOOD_LABEL, type Mood, type Space, STATE_META, type StateKey } from "./state";
 
@@ -590,7 +590,7 @@ export function Office({ id, state, mood, space, onClose, top = 57 }: { id: stri
 }
 
 // -- Academy agents ------------------------------------------------------------------------------
-const FLOOR_NAME: Record<string, string> = { RESEARCH: "Floor 1 · Research", PAPER: "Floor 2 · Paper Trading Hall", DEMO: "Floor 3 · Demo Desk", RETIRED: "the Alumni wall" };
+const FLOOR_NAME: Record<string, string> = { RESEARCH: "Floor 1 · Research", PAPER: "Floor 2 · Paper trading", DEMO: "Floor 3 · Demo Desk", RETIRED: "the Alumni wall" };
 const OUTCOME: Record<string, string> = { PROMOTE: "promoted to Floor 2", PROMOTE_CURRENT: "promoted to Floor 2", IMPROVED: "improved", NO_IMPROVEMENT: "no improvement", INTERRUPTED: "interrupted", ERROR: "error" };
 
 const tsIso = (ts: string | number | null | undefined): string | null => {
@@ -610,7 +610,7 @@ function traineeState(a: AcademySpaceAgent, d: AgentDetail | null, dataReady: bo
     key, headline: paused ? `Paused${a.paused ? `: ${a.paused}` : ""}` : doing.charAt(0).toUpperCase() + doing.slice(1), sub: null,
     detail: a.last_event?.summary ?? null,
     symbols: (d?.positions ?? []).map((p) => ({ symbol: pair(p.instrument), side: p.side > 0 ? "buy" : "sell" })),
-    at: tsIso(a.last_event?.ts), source: "Forex engine records", book: null,
+    at: tsIso(a.last_event?.ts), source: marketOf(a) === "stocks" ? "Stock class engine records" : "Forex engine records", book: null,
   };
 }
 
@@ -638,14 +638,14 @@ function academyAnswers(d: AgentDetail): { q: string; a: string; source: string 
   qa.push({
     q: "What changed in your last sprint?",
     a: sp ? `${sp.day}: ${OUTCOME[sp.outcome ?? ""] ?? (sp.outcome ?? "running").toLowerCase()}${sp.to_version ? `, now version ${sp.to_version}` : ""}. ${sp.summary.verdict ?? ""}${sp.summary.change ? ` The change: ${sp.summary.change}.` : ""}`
-      : d.stage === "RESEARCH" ? "Nothing yet; my first sprint runs tonight at 1:00 AM New York." : "Sprints only change Floor 1 agents. If my strategy needs work, I go back to research.",
+      : d.stage === "RESEARCH" ? `Nothing yet; my first sprint runs tonight at ${MARKET[marketOf(d)].sprintAt} New York.` : "Sprints only change Floor 1 agents. If my strategy needs work, I go back to research.",
     source: sp ? `Sprint report ${sp.day}` : "Sprint schedule",
   });
   const todo = d.readiness.checks.filter((c) => !c.passed && !c.advisory && c.name !== "Owner decision");
   qa.push({
     q: "When do you move up?",
     a: !d.readiness.next ? "I'm retired; my records stay on the Alumni wall."
-      : d.readiness.eligible ? `I meet every gate for ${d.readiness.next}. The decision is yours${d.stage === "PAPER" ? "; Graham can also propose it" : ""}.`
+      : d.readiness.eligible ? `I meet every gate for ${d.readiness.next}. The decision is yours${d.stage === "PAPER" && marketOf(d) === "forex" ? "; Graham can also propose it" : ""}.`
         : `Next for me is ${d.readiness.next}. Still to do: ${todo.map((c) => `${c.name.toLowerCase()} (${c.detail ?? "pending"})`).join("; ")}.${d.stage === "RESEARCH" ? " That move is automatic when I pass." : ""}`,
     source: "Readiness gates",
   });
@@ -670,7 +670,7 @@ function AcademySeat({ a, d, reload, state, onPanel }: { a: AcademySpaceAgent; d
             <Kpi label="Max drawdown" value={pct(d.max_drawdown, 1)} />
             <Kpi label="Trades here" value={d.paper_current_version.trades} sub={fmtR(d.paper_current_version.avg_r)} />
           </div>
-          <EquityLine points={d.equity_series} color={a.persona.color} empty="The curve starts with the first 15-minute equity mark." />
+          <EquityLine points={d.equity_series} color={a.persona.color} empty={MARKET[marketOf(d)].marks} />
         </div>
       ),
     }, {
@@ -723,14 +723,14 @@ function AcademySeat({ a, d, reload, state, onPanel }: { a: AcademySpaceAgent; d
             </li>
           ))}
         </ul>
-      ) : <Empty>{a.stage === "RESEARCH" ? "The first sprint runs tonight at 1:00 AM New York." : "Only Floor 1 agents are in the nightly sprints."}</Empty>,
+      ) : <Empty>{a.stage === "RESEARCH" ? `The first sprint runs tonight at ${MARKET[marketOf(a)].sprintAt} New York.` : "Only Floor 1 agents are in the nightly sprints."}</Empty>,
     },
     {
       key: "trades", label: "Trades", icon: "⇄", teaser: `${d.positions.length} open · ${d.trades.length} recent`,
       body: (
         <div className="space-y-4">
           {d.positions.length > 0 && (
-            <Table head={["Pair", "Side", "Units", "Entry", "Mark", "Stop", "Risk"]}>
+            <Table head={[MARKET[marketOf(d)].instrument, "Side", MARKET[marketOf(d)].units, "Entry", "Mark", "Stop", "Risk"]}>
               {d.positions.map((p) => (
                 <tr key={p.id} className="border-t border-ink-800">
                   <td className="py-1.5 font-semibold text-slate-200">{pair(p.instrument)}</td>
@@ -745,7 +745,7 @@ function AcademySeat({ a, d, reload, state, onPanel }: { a: AcademySpaceAgent; d
             </Table>
           )}
           {d.trades.length ? (
-            <Table head={["Closed", "Pair", "Side", "P&L", "R", "Exit"]}>
+            <Table head={["Closed", MARKET[marketOf(d)].instrument, "Side", "P&L", "R", "Exit"]}>
               {d.trades.slice(0, 40).map((t) => (
                 <tr key={t.id} className="border-t border-ink-800">
                   <td className="py-1.5 text-slate-400">{when(new Date(t.closed_at * 1000).toISOString())}</td>
@@ -850,9 +850,9 @@ export function AcademyOffice({ a, space, onClose, top = 57 }: { a: AcademySpace
   const { data: d, reload } = useResource<AgentDetail>(`/api/academy/agents/${a.id}`, { every: 30000, bump });
   const wide = useWide();
   const [panelOpen, setPanelOpen] = useState(false);
-  const state = traineeState(a, d, !!space.academy?.engine?.data_ready);
+  const state = traineeState(a, d, dataReadyFor(space, a));
   const mood: Mood = { kind: a.stage !== "RESEARCH" && a.return_pct <= -0.05 ? "stressed" : a.stage !== "RESEARCH" && a.return_pct >= 0.02 ? "pleased" : "calm", reason: null };
-  const who: Who = { look: traineeLook(a), name: a.name, title: `${a.style === "day" ? "Day trader" : "Swing trader"} · ${FLOOR_NAME[a.stage].split(" · ")[0]}`, wall: ["#22201c", "#141210", "#4a3b30"] };
+  const who: Who = { look: traineeLook(a), name: a.name, title: `${MARKET[marketOf(a)].trader(a.style)} · ${FLOOR_NAME[a.stage].split(" · ")[0]}`, wall: ["#22201c", "#141210", "#4a3b30"] };
   return (
     <div className="fixed inset-x-0 bottom-0 z-40 overflow-y-auto bg-ink-950 lg:overflow-hidden" style={{ top }} role="dialog" aria-label={`1-on-1 with ${a.name}`}>
       <div className="relative h-[46vh] lg:absolute lg:inset-0 lg:h-auto">

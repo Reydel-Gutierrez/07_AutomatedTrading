@@ -162,22 +162,40 @@ def test_engine_sprints_then_paper_replays_from_the_promotion_day(setup):
     assert all(row["opened"] >= promo_day for row in eng.db.q("SELECT opened FROM paper_trades WHERE agent_id = 'juniper'"))
 
 
-def test_owner_commands_and_hq_view(setup):
+def test_one_academy_serves_both_classes(setup, tmp_path, monkeypatch):
+    """Stock agents come through the Academy's own API in its shapes, tagged market=stocks."""
     eng, _ = setup
+    monkeypatch.setenv("FOREX_STATE_ROOT", str(tmp_path / "no-forex"))  # only the stock class exists here
     eng.start()
-    from firm.api import equity_academy
+    eng.load_data()
+    eng.run_sprint("juniper", "2026-10-17")
+    eng.db.set_stage("rook", "PAPER", by="test", reason="test")
+    eng.db.write("UPDATE agents SET stage_since = ? WHERE id = 'rook'", (f"{eng.panel.dates[-30]}T05:30:00+00:00",))
+    eng.paper("rook")
+    eng.heartbeat()
+    from firm.api import academy
 
-    equity_academy.send_command("talon", "pause", by="reydel", note="testing")
+    ov = academy.overview()
+    assert ov["available"] and [a["name"] for a in ov["agents"]] == ["Juniper", "Rook", "Meridian", "Talon"]
+    assert {a["market"] for a in ov["agents"]} == {"stocks"} and ov["stock_engine"]["online"]
+    juniper = academy.agent("juniper")
+    assert juniper["readiness"]["next"] == "Floor 2 · Paper trading" and juniper["validation"]["report"]["market"] == "stocks"
+    assert isinstance(juniper["validation"]["report"]["windows"]["holdout"][0], int)  # epochs, like forex
+    assert juniper["sprints"][0]["summary"]["verdict"]
+    rook = academy.agent("rook")
+    assert rook["stage"] == "PAPER" and rook["equity_series"] and rook["weekly"] and rook["readiness"]["next"].startswith("Live swing seat")
+    assert all(t["side"] == 1 for t in rook["trades"])
+    space = academy.space_block()
+    assert [a["id"] for a in space["agents"]] == ["juniper", "rook", "meridian", "talon"] and space["agents"][1]["stage"] == "PAPER"
+    assert academy.floor_analytics("PAPER")["agents"][0]["market"] == "stocks"
+    assert academy.report("2026-10-17")["agents"][0]["name"] == "Juniper"
+    assert academy.promotion_check("rook")["allowed"] is False
+    academy.send_command("talon", "pause", by="reydel", note="testing")
     with pytest.raises(ValueError):
-        equity_academy.send_command("talon", "go_live", by="reydel")
+        academy.send_command("talon", "to_demo", by="reydel")
     eng.commands()
     assert eng.db.agent("talon")["status"] == "PAUSED"
-    eng.heartbeat()
-    data = equity_academy.overview()
-    assert data["available"] and [a["name"] for a in data["agents"]] == ["Juniper", "Rook", "Meridian", "Talon"]
-    assert equity_academy.space_block()["agents"][3]["status"] == "PAUSED"
-    assert equity_academy.agent("nobody") is None
-
+    assert academy.agent("nobody") is None
 
 def test_a_sprint_that_waited_for_history_reruns_when_more_arrives(setup):
     eng, _ = setup

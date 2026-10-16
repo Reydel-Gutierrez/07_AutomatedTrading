@@ -1,4 +1,5 @@
-// Types for /api/academy (the Forex engine's records, read-only through HQ).
+// Types for /api/academy: both Academy classes, forex (the Forex engine's records) and stocks (the
+// Stock Swing Class engine's), in one shape. `market` tells them apart; read-only through HQ.
 
 export type Stats = { trades: number; win_rate: number | null; avg_r: number | null; r_stdev: number | null; profit_factor: number | null; net_usd: number };
 export type Check = { name: string; value?: unknown; rule?: string; passed: boolean; detail?: string; advisory?: boolean };
@@ -16,7 +17,7 @@ export type ValidationSummary = {
   checks?: Check[];
   unseen?: (Stats & { return_pct: number | null; max_drawdown: number; sharpe: number | null; years: number; trades_per_month: number | null }) | null;
   trial_adjusted_sharpe?: number | null;
-  report?: ValidationReport;
+  report?: ValidationReport & { market?: Market; dd_within_limit_share?: number | null; good_faith_violations?: number };
 };
 
 export type WindowMetrics = { trades: number; win_rate: number | null; avg_r: number | null; profit_factor: number | null; net_usd: number; return_pct: number | null; max_drawdown: number; sharpe: number | null; years: number; trades_per_month: number | null };
@@ -64,16 +65,20 @@ export type SprintRow = { id: number; agent_id: string; day: string; started_at:
 export type SprintReport = {
   day: string;
   generated_at?: number;
-  agents: { agent_id: string; name: string; outcome: string; passed: boolean; from_version: number; to_version: number | null; verdict: string; tested: number; unseen?: WindowMetrics | null; day1?: SprintSummary["day1"]; recommend_retire?: boolean }[];
+  agents: { agent_id: string; name: string; market?: Market; outcome: string; passed: boolean; from_version: number; to_version: number | null; verdict: string; tested: number; unseen?: WindowMetrics | null; day1?: SprintSummary["day1"]; recommend_retire?: boolean }[];
   passed: string[];
   improved: string[];
   floor2: string[];
   sprints?: SprintRow[];
 };
 
+export type Market = "forex" | "stocks";
+
 export type AgentCard = {
   id: string;
   name: string;
+  market?: Market;
+  desk_comparison?: { since: string | null; max_return: number | null; vs_max: number | null } | null;
   stage: Stage;
   floor: string;
   stage_since: string | null;
@@ -134,6 +139,7 @@ export type AcademyOverview = {
   events: AcademyEvent[];
   latest_report?: SprintReport | null;
   sprint_day?: string | null;
+  stock_engine?: (EngineStatus & { data?: { ready?: boolean; reason?: string; first_date?: string; last_date?: string; sessions?: number } }) | null;
 };
 
 export type PaperPosition = { id: string; instrument: string; side: number; units: number; entry: number; stop: number; target: number | null; opened_at: number; risk_usd: number; tag: string; version: number; financing_usd: number; mark: number | null };
@@ -156,14 +162,22 @@ export type AgentDetail = AgentCard & {
   strategy_info?: StrategyInfo | null;
 };
 
+/** A forex pair as EUR/USD; a stock symbol as itself. */
 export const pair = (i: string) => i.replace("_", "/");
 export const pips = (i: string) => (i.endsWith("JPY") ? 100 : 10000);
 export const fmtR = (r: number | null | undefined, d = 2) => (r === null || r === undefined ? "—" : `${r >= 0 ? "+" : ""}${r.toFixed(d)}R`);
-export const fmtPx = (i: string, v: number | null | undefined) => (v === null || v === undefined ? "—" : v.toFixed(i.endsWith("JPY") ? 3 : 5));
+export const fmtPx = (i: string, v: number | null | undefined) => (v === null || v === undefined ? "—" : v.toFixed(!i.includes("_") ? 2 : i.endsWith("JPY") ? 3 : 5));
+
+/** Wording that differs between the two classes; everything else is shared. */
+export const MARKET = {
+  forex: { label: "Forex", instrument: "Pair", units: "Units", sprintAt: "1:00 AM", history: "OANDA history", trader: (style: string) => (style === "day" ? "Day trader" : "Swing trader"), marks: "The curve starts with the first 15-minute equity mark.", baseline: "Random-direction baselines", stress: "+0.5 pip" },
+  stocks: { label: "Stocks", instrument: "Name", units: "Shares", sprintAt: "1:30 AM", history: "daily US stock history", trader: () => "Swing trader", marks: "The curve starts with the first daily close on paper.", baseline: "Random-name baselines", stress: "+10 bps" },
+} as const;
+export const marketOf = (a: { market?: Market } | null | undefined): Market => (a?.market === "stocks" ? "stocks" : "forex");
 export const epochIso = (t: number) => new Date(t * 1000).toISOString();
 
 export const FLOOR_ORDER: { stage: Stage; title: string; blurb: string }[] = [
   { stage: "DEMO", title: "Floor 3 · OANDA Demo Desk", blurb: "Two seats trading an OANDA practice account with real orders and fake money. 4+ weeks here, then Graham's memo and your decision on a live chair." },
-  { stage: "PAPER", title: "Floor 2 · Paper trading", blurb: "Passed research. Each trades a fresh $10,000 virtual account on live OANDA prices for at least 4 weeks. You choose who gets a Demo Desk seat." },
-  { stage: "RESEARCH", title: "Floor 1 · Research", blurb: "No trading. A research sprint every night at 1:00 AM NY polishes each strategy on OANDA history; an agent moves up automatically when it passes every gate." },
+  { stage: "PAPER", title: "Floor 2 · Paper trading", blurb: "Passed research. Each trades a fresh $10,000 virtual account for at least 4 weeks: forex on live OANDA prices, stocks on new daily bars beside Max's desk. Forex agents go on to the Demo Desk; stock agents to a live swing seat, by your decision." },
+  { stage: "RESEARCH", title: "Floor 1 · Research", blurb: "No trading. A research sprint every night (forex 1:00 AM, stocks 1:30 AM New York) polishes each strategy on years of history; an agent moves up automatically when it passes every gate." },
 ];

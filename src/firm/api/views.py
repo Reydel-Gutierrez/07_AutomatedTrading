@@ -8,7 +8,6 @@ from decimal import Decimal
 from typing import Any
 
 from firm.api.academy import space_block as academy_space_block
-from firm.api.equity_academy import space_block as equity_space_block
 from firm.broker.errors import BrokerUnavailable
 from firm.clock import CALENDAR, EASTERN, et, iso, parse, parse_hhmm
 from firm.core import Firm
@@ -288,7 +287,6 @@ def space(firm: Firm, health: dict[str, Any], jobs: dict[str, Any], cio=None, re
         },
         "agents": agents,
         "academy": academy_space_block(),
-        "equity_class": equity_space_block(),
         "treasury": _treasury_brief(firm),
         "today": _today(firm),
     }

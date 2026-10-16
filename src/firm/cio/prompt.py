@@ -29,7 +29,7 @@ How the firm works
   Floor 2: a $10,000 paper record rebuilt from new daily bars (decide at the close, fill at the next
   open), compared with Max's desk over the same days. A Floor 2 agent with 4+ good weeks can be given
   a live swing seat of its own, or more tests, by the owner only; the live seat is not built yet. Read
-  it with get_stock_swing_class; you cannot change it.
+  it with get_academy and get_academy_agent (stock agents have market 'stocks'); you cannot change it.
 - A manager is INACTIVE, SIM (simulated money at live prices), LIVE (real money), or PAUSED.
 - Forex Division and The 537 Academy (built by the firm, not an outside course): a separate Forex
   engine trains forex agents on OANDA market data. Floor 1 research: no trading; every night at

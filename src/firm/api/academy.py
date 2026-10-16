@@ -1,4 +1,6 @@
-"""HQ's read-only window into the 537 Academy (academy.db, written by the Forex engine).
+"""HQ's read-only window into the 537 Academy: the forex class (academy.db, written by the Forex
+engine) and the stock class (firm.api.equity_academy, the Stock Swing Class engine's records, in
+the same shapes). Every agent carries market "forex" or "stocks"; pages and the map treat both alike.
 
 The firm never imports the Forex engine: this module reads the Academy's SQLite file in
 read-only mode and drops owner commands into the engine's inbox as JSON files. Every
@@ -17,6 +19,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from firm.api import equity_academy as stocks
 from firm.paths import state_root
 
 ACTIONS = {"pause", "resume", "validate", "sprint", "auto_on", "auto_off", "to_demo", "to_research", "retire"}
@@ -180,7 +183,7 @@ def _card(conn: sqlite3.Connection, a: sqlite3.Row, engine: dict[str, Any]) -> d
     live = (engine.get("agents") or {}).get(a["id"], {})
     paper_all, paper_cur = _stats(all_trades), _stats(cur_trades)
     return {
-        "id": a["id"], "name": a["name"], "style": a["style"], "strategy": a["strategy"], "persona": json.loads(a["persona_json"]),
+        "id": a["id"], "name": a["name"], "market": "forex", "style": a["style"], "strategy": a["strategy"], "persona": json.loads(a["persona_json"]),
         "status": a["status"], "status_reason": a["status_reason"], "paused": acct["paused"] if acct else None,
         "stage": a["stage"], "floor": FLOORS.get(a["stage"], a["stage"]), "stage_since": a["stage_since"], "klass": a["klass"],
         "sprint": {k: v for k, v in (sprint or {}).items() if k != "summary"} | {"verdict": ((sprint or {}).get("summary") or {}).get("verdict")} if sprint else None,
@@ -215,29 +218,53 @@ def weekly(series: list[tuple[int, float]], trades: list[Any], since: int) -> li
 
 
 def overview() -> dict[str, Any]:
+    stock_cards = stocks.cards()
     conn = _connect()
-    if conn is None:
-        return {"available": False, "reason": "The Forex engine has not created the Academy yet.", "agents": [], "prices": [], "events": []}
-    with closing(conn):
-        eng = _engine(conn)
-        agents = [_card(conn, a, eng) for a in conn.execute("SELECT * FROM agents WHERE status != 'RETIRED' ORDER BY created_at, id")]
-        prices = [dict(r) for r in conn.execute("SELECT * FROM prices ORDER BY instrument")]
-        events = [dict(r) for r in conn.execute("SELECT id, ts, agent_id, type, summary FROM events ORDER BY id DESC LIMIT 40")]
-        report = _kv(conn, "sprint_report_latest")
-        sprint_day = _kv(conn, "sprint_day")
+    if conn is None and not stock_cards:
+        return {"available": False, "reason": "The Academy's engines have not started yet.", "agents": [], "prices": [], "events": []}
+    agents: list[dict[str, Any]] = []
+    prices: list[dict[str, Any]] = []
+    events: list[dict[str, Any]] = []
+    report, sprint_day, eng = None, None, {"online": False}
+    if conn is not None:
+        with closing(conn):
+            eng = _engine(conn)
+            agents = [_card(conn, a, eng) for a in conn.execute("SELECT * FROM agents WHERE status != 'RETIRED' ORDER BY created_at, id")]
+            prices = [dict(r) for r in conn.execute("SELECT * FROM prices ORDER BY instrument")]
+            events = [dict(r) for r in conn.execute("SELECT id, ts, agent_id, type, summary FROM events ORDER BY id DESC LIMIT 40")]
+            report = _kv(conn, "sprint_report_latest")
+            sprint_day = _kv(conn, "sprint_day")
+    agents += stock_cards
+    events = sorted(events + stocks.events(), key=lambda e: e["ts"], reverse=True)[:40]
+    report = _merged_report(report)
     ranked = sorted(agents, key=lambda c: (c["validation"] or {}).get("score") or -1e9, reverse=True)
-    return {"available": True, "engine": eng, "agents": agents, "leaderboard": [c["id"] for c in ranked], "prices": prices, "events": events, "start_capital": START_CAPITAL,
-            "latest_report": report, "sprint_day": sprint_day, "floors": FLOORS}
+    return {"available": True, "engine": eng, "stock_engine": stocks.engine(), "agents": agents, "leaderboard": [c["id"] for c in ranked], "prices": prices, "events": events,
+            "start_capital": START_CAPITAL, "latest_report": report, "sprint_day": sprint_day, "floors": FLOORS}
+
+
+def _merged_report(head: dict[str, Any] | None, day: str | None = None) -> dict[str, Any] | None:
+    """A night's report with the stock class's sprints added (forex runs at 01:00, stocks at 01:30)."""
+    day = day or (head or {}).get("day") or (stocks.report_days(1) or [None])[0]
+    part = stocks.report_part(day) if day else None
+    if not part:
+        return head
+    base = dict(head or {"day": day, "agents": [], "passed": [], "improved": [], "floor2": []})
+    base["agents"] = [{**x, "market": x.get("market", "forex")} for x in base.get("agents") or []] + part["agents"]
+    base["passed"] = list(base.get("passed") or []) + part["passed"]
+    base["improved"] = list(base.get("improved") or []) + part["improved"]
+    if "sprints" in base:
+        base["sprints"] = list(base["sprints"]) + part["sprints"]
+    return base
 
 
 def agent(agent_id: str) -> dict[str, Any] | None:
     conn = _connect()
     if conn is None:
-        return None
+        return stocks.detail(agent_id)
     with closing(conn):
         a = conn.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
         if a is None:
-            return None
+            return stocks.detail(agent_id)
         eng = _engine(conn)
         card = _card(conn, a, eng)
         series = _equity(conn, agent_id)
@@ -294,11 +321,15 @@ def diagnostics(trades) -> dict[str, Any]:
 
 
 def space_block() -> dict[str, Any]:
-    """Compact Academy and forex facts for the Firm Space (cheap; never raises)."""
+    """Compact Academy facts (both classes) and forex rates for the Firm Space (cheap; never raises)."""
     try:
+        stock_agents = stocks.space_agents()
+        stock_eng = stocks.engine() or {}
+        stock_part = {"stock_engine": {k: stock_eng.get(k) for k in ("online", "data_ready", "job", "last_error")},
+                      "validations_running": [{"agent_id": a["id"], "status": f"RUNNING: sprint · {a['sprinting']}"} for a in stock_agents if a.get("sprinting")]}
         conn = _connect()
         if conn is None:
-            return {"available": False}
+            return {"available": bool(stock_agents), "agents": stock_agents, "engine": {"online": False}, "prices": [], **stock_part}
         with closing(conn):
             eng = _engine(conn)
             agents = []
@@ -310,7 +341,7 @@ def space_block() -> dict[str, Any]:
                 val = conn.execute("SELECT status FROM validations WHERE agent_id = ? ORDER BY id DESC LIMIT 1", (a["id"],)).fetchone()
                 eq = last["equity"] if last else (acct["cash"] if acct else START_CAPITAL)
                 agents.append({
-                    "id": a["id"], "name": a["name"], "style": a["style"], "persona": json.loads(a["persona_json"]), "status": a["status"],
+                    "id": a["id"], "name": a["name"], "market": "forex", "style": a["style"], "persona": json.loads(a["persona_json"]), "status": a["status"],
                     "paused": acct["paused"] if acct else None, "equity": round(eq, 2), "return_pct": eq / START_CAPITAL - 1, "positions": n_pos,
                     "activity": ((eng.get("agents") or {}).get(a["id"]) or {}).get("activity"), "last_event": dict(ev) if ev else None,
                     "validation": val["status"] if val else None, "version": a["current_version"], "stage": a["stage"], "stage_since": a["stage_since"],
@@ -328,12 +359,16 @@ def space_block() -> dict[str, Any]:
             prices = [dict(r) for r in conn.execute("SELECT instrument, bid, ask, time, tradeable FROM prices ORDER BY instrument")]
             latest = _kv(conn, "sprint_report_latest") or {}
         report_brief = {k: latest.get(k) for k in ("day", "passed", "improved", "floor2")} if latest else None
-        return {"available": True, "latest_report": report_brief, "engine": {k: eng.get(k) for k in ("online", "heartbeat", "market_open", "data_ready", "job", "last_error", "demo")}, "agents": agents, "validations_running": running, "prices": prices}
+        return {"available": True, "latest_report": report_brief, "engine": {k: eng.get(k) for k in ("online", "heartbeat", "market_open", "data_ready", "job", "last_error", "demo")},
+                "agents": agents + stock_agents, "prices": prices, **stock_part, "validations_running": running + stock_part["validations_running"]}
     except sqlite3.Error as exc:
         return {"available": False, "error": str(exc)}
 
 
 def send_command(agent_id: str, action: str, *, by: str, note: str = "") -> None:
+    if stocks.has(agent_id):
+        stocks.send_command(agent_id, action, by=by, note=note)
+        return
     if action not in ACTIONS:
         raise ValueError(f"action must be one of {sorted(ACTIONS)}")
     conn = _connect()
@@ -352,24 +387,27 @@ def send_command(agent_id: str, action: str, *, by: str, note: str = "") -> None
 
 def reports(limit: int = 30) -> list[dict[str, Any]]:
     conn = _connect()
-    if conn is None:
-        return []
-    with closing(conn):
-        rows = conn.execute("SELECT key, value_json FROM kv WHERE key LIKE 'sprint_report:%' ORDER BY key DESC LIMIT ?", (limit,)).fetchall()
-    return [json.loads(r["value_json"]) for r in rows]
+    rows: list[Any] = []
+    if conn is not None:
+        with closing(conn):
+            rows = conn.execute("SELECT key, value_json FROM kv WHERE key LIKE 'sprint_report:%' ORDER BY key DESC LIMIT ?", (limit,)).fetchall()
+    by_day: dict[str, Any] = {r["key"].split(":", 1)[1]: json.loads(r["value_json"]) for r in rows}
+    for day in stocks.report_days(limit):
+        by_day.setdefault(day, None)
+    out = [_merged_report(by_day[d], d) for d in sorted(by_day, reverse=True)[:limit]]
+    return [r for r in out if r]
 
 
 def report(day: str) -> dict[str, Any] | None:
     conn = _connect()
     if conn is None:
-        return None
+        return _merged_report(None, day)
     with closing(conn):
         head = _kv(conn, f"sprint_report:{day}")
         rows = conn.execute("SELECT * FROM sprints WHERE day = ? ORDER BY id", (day,)).fetchall()
-    if head is None and not rows:
-        return None
     sprints = [{**{k: r[k] for k in r.keys() if k != "summary_json"}, "summary": json.loads(r["summary_json"] or "{}")} for r in rows]
-    return {**(head or {"day": day, "agents": []}), "sprints": sprints}
+    merged = _merged_report({**(head or {"day": day, "agents": []}), "sprints": sprints}, day)
+    return merged if (head is not None or rows or (merged or {}).get("agents")) else None
 
 
 def morning_message(day: str) -> str | None:
@@ -426,7 +464,7 @@ def cio_overview() -> dict[str, Any]:
     for a in ov["agents"]:
         sp = a.get("sprint") or {}
         agents.append({
-            "id": a["id"], "name": a["name"], "style": a["style"], "class": a["klass"], "floor": a["floor"], "stage": a["stage"], "since": a["stage_since"],
+            "id": a["id"], "name": a["name"], "market": a.get("market", "forex"), "style": a["style"], "class": a["klass"], "floor": a["floor"], "stage": a["stage"], "since": a["stage_since"],
             "strategy": a["strategy"], "version": a["version"], "version_note": a["version_note"], "variants_tried": a["trials"],
             "paused": a["paused"], "nightly_sprints": a["auto_revise"],
             "paper_account": {"equity": a["equity"], "return_pct": a["return_pct"], "max_drawdown": a["max_drawdown"], "open_positions": a["open_positions"], "this_floor": a["paper_current_version"]},
@@ -437,8 +475,9 @@ def cio_overview() -> dict[str, Any]:
     eng = ov.get("engine") or {}
     return {
         "available": True,
-        "how_it_works": "Floor 1 research (no trading; a sprint every night at 01:00 NY polishes each strategy on OANDA history; promotion to Floor 2 is automatic when validation and the day-1 test pass). Floor 2 paper trading ($10,000 virtual, 4+ weeks; the owner evaluates the weekly results and gives a Demo Desk seat when it is profitable; you may propose a seat with an academy_promotion proposal after 2+ profitable weeks). Floor 3 OANDA practice account (owner decides on a live chair after Graham's memo). No live forex trading exists.",
+        "how_it_works": "Two classes. Forex (market 'forex'): Floor 1 research (no trading; a sprint every night at 01:00 NY polishes each strategy on OANDA history; promotion to Floor 2 is automatic when validation and the day-1 test pass). Floor 2 paper trading ($10,000 virtual, 4+ weeks; the owner evaluates the weekly results and gives a Demo Desk seat when it is profitable; you may propose a seat with an academy_promotion proposal after 2+ profitable weeks). Floor 3 OANDA practice account (owner decides on a live chair after Graham's memo). No live forex trading exists. Stocks (market 'stocks', the Stock Swing Class): Floor 1 research at 01:30 NY on daily US stock history with the same kind of gates; Floor 2 a $10,000 paper record rebuilt from new daily bars and compared with Max's live desk; after about 4 good weeks the owner alone decides on a live swing seat on L3 or more tests (no proposal kind exists for it; the seat is not built yet).",
         "engine": {k: eng.get(k) for k in ("online", "market_open", "data_ready", "job", "queue", "last_error", "demo")},
+        "stock_engine": {k: (ov.get("stock_engine") or {}).get(k) for k in ("online", "data_ready", "job", "last_error", "data")},
         "agents": agents,
         "latest_report": ov.get("latest_report"),
         "recent_events": [{"academy_event_id": e["id"], "ts": e["ts"], "agent": e["agent_id"], "type": e["type"], "summary": e["summary"]} for e in ov.get("events", [])[:25]],
@@ -450,13 +489,11 @@ def cio_agent(agent_id: str) -> dict[str, Any] | None:
     a = agent(agent_id)
     if a is None:
         return None
-    conn = _connect()
-    with closing(conn):  # type: ignore[arg-type]
-        cat = _strategy_catalog(conn).get(a["strategy"], {})  # type: ignore[arg-type]
+    cat = a.get("strategy_info") or {}
     v = a.get("validation") or {}
     rep = v.get("report") or {}
     return {
-        "id": a["id"], "name": a["name"], "persona": a["persona"].get("about"), "floor": a["floor"], "stage": a["stage"], "since": a["stage_since"],
+        "id": a["id"], "name": a["name"], "market": a.get("market", "forex"), "persona": a["persona"].get("about"), "floor": a["floor"], "stage": a["stage"], "since": a["stage_since"],
         "strategy": {"key": a["strategy"], "title": cat.get("title"), "description": cat.get("description"), "tunable_settings": cat.get("tunables")},
         "current_version": a["version"],
         "versions": [{"version": x["version"], "note": x["note"], "created_at": x["created_at"], "by": x["created_by"], "validation": x["validation_status"], "params": x["params"], "risk_envelope": x["envelope"]} for x in a["versions"][:6]],
@@ -470,7 +507,8 @@ def cio_agent(agent_id: str) -> dict[str, Any] | None:
         "paper_account": {"equity": a["equity"], "return_pct": a["return_pct"], "max_drawdown": a["max_drawdown"], "all_time": a["paper"], "this_floor": a["paper_current_version"]},
         "open_positions": a["positions"], "recent_trades": a["trades"][:25], "diagnostics": a["diagnostics"],
         "floor_history": a["transitions"], "readiness": a["readiness"], "weeks_on_this_floor": a["weekly"],
-        "demo_desk_proposal": promotion_check(a["id"]),
+        "demo_desk_proposal": promotion_check(a["id"]) if a.get("market") != "stocks" else None,
+        "max_desk_comparison": a.get("desk_comparison"),
         "recent_events": [{"academy_event_id": e["id"], "ts": e["ts"], "type": e["type"], "summary": e["summary"]} for e in a["events"][:20]],
     }
 
@@ -490,6 +528,8 @@ def cio_report(day: str | None = None) -> dict[str, Any] | None:
 
 
 def event_label(event_id: int) -> str | None:
+    if event_id >= stocks.EVENT_OFFSET:
+        return stocks.event_label(event_id)
     conn = _connect()
     if conn is None:
         return None
@@ -508,7 +548,7 @@ def analytics_block() -> dict[str, Any]:
     for a in agents:
         unseen = ((a.get("validation") or {}).get("unseen")) or {}
         floors.setdefault(a["stage"], []).append({
-            "id": a["id"], "name": a["name"], "color": a["persona"]["color"], "version": a["version"], "style": a["style"],
+            "id": a["id"], "name": a["name"], "market": a.get("market", "forex"), "color": a["persona"]["color"], "version": a["version"], "style": a["style"],
             "equity": a["equity"], "return_pct": a["return_pct"], "trades": a["paper_current_version"]["trades"], "avg_r": a["paper_current_version"]["avg_r"],
             "validation": (a.get("validation") or {}).get("status"), "unseen_avg_r": unseen.get("avg_r"), "unseen_trades": unseen.get("trades"),
             "last_sprint": (a.get("sprint") or {}).get("outcome"), "readiness": a["readiness"]["label"],
@@ -518,6 +558,7 @@ def analytics_block() -> dict[str, Any]:
         hist = [dict(r) for r in conn.execute(  # type: ignore[union-attr]
             "SELECT day, count(*) AS tested, sum(passed) AS passed, sum(outcome = 'IMPROVED') AS improved FROM sprints WHERE finished_at IS NOT NULL GROUP BY day ORDER BY day DESC LIMIT 14"
         )]
+    hist = _merge_history(hist, stocks.sprint_history(14))
     paper = floors["PAPER"] + floors["DEMO"]
     return {
         "available": True, "engine_online": (ov.get("engine") or {}).get("online"), "floors": floors,
@@ -535,6 +576,8 @@ def promotion_check(agent_id: str) -> dict[str, Any]:
     a = next((x for x in ov["agents"] if x["id"] == agent_id), None)
     if a is None:
         return {"allowed": False, "reason": f"no Academy agent '{agent_id}'"}
+    if a.get("market") == "stocks":
+        return {"allowed": False, "reason": f"{a['name']} is a stock agent: the Demo Desk is forex only, and a live swing seat is the owner's decision alone"}
     if a["stage"] != "PAPER":
         return {"allowed": False, "reason": f"{a['name']} is on {a['floor']}; only Floor 2 agents can take a Demo Desk seat"}
     days = a["readiness"].get("days_on_floor", 0)
@@ -565,7 +608,7 @@ def floor_analytics(stage: str) -> dict[str, Any]:
     for a in agents:
         v = a.get("validation") or {}
         rows.append({
-            "id": a["id"], "name": a["name"], "color": a["persona"]["color"], "style": a["style"], "version": a["version"], "since": a["stage_since"],
+            "id": a["id"], "name": a["name"], "market": a.get("market", "forex"), "color": a["persona"]["color"], "style": a["style"], "version": a["version"], "since": a["stage_since"],
             "equity": a["equity"], "return_pct": a["return_pct"], "max_drawdown": a["max_drawdown"], "open_positions": a["open_positions"],
             "this_floor": a["paper_current_version"], "weekly": a.get("weekly", []), "readiness": a["readiness"],
             "validation": {"status": v.get("status"), "passed": v.get("passed"), "unseen": v.get("unseen"), "failing": [c["name"] for c in v.get("checks", []) if not c["passed"]]} if v else None,
@@ -578,5 +621,16 @@ def floor_analytics(stage: str) -> dict[str, Any]:
             out["sprint_history"] = [dict(r) for r in conn.execute(  # type: ignore[union-attr]
                 "SELECT day, count(*) AS tested, sum(passed) AS passed, sum(outcome = 'IMPROVED') AS improved, sum(outcome = 'PROMOTE') AS promoted"
                 " FROM sprints WHERE finished_at IS NOT NULL GROUP BY day ORDER BY day DESC LIMIT 30")]
+        out["sprint_history"] = _merge_history(out["sprint_history"], stocks.sprint_history(30))
         out["latest_report"] = ov.get("latest_report")
     return out
+
+
+def _merge_history(a: list[dict[str, Any]], b: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    days: dict[str, dict[str, Any]] = {}
+    for row in a + b:
+        d = days.setdefault(row["day"], {"day": row["day"]})
+        for k, v in row.items():
+            if k != "day":
+                d[k] = (d.get(k) or 0) + (v or 0)
+    return [days[k] for k in sorted(days, reverse=True)]

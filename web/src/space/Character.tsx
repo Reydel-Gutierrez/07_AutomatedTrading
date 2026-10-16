@@ -168,44 +168,6 @@ export function Body({ look, pose = "idle", working = false, feeling = "calm", g
   );
 }
 
-/** Standing and walking (cosmetic). Feet at the origin. */
-export function Walker({ look, walking = true, holding = false }: { look: Look; walking?: boolean; holding?: boolean }) {
-  const pants = "#1f2430";
-  return (
-    <g className={walking ? "fs-bob" : undefined}>
-      <ellipse cx={0} cy={1} rx={16} ry={4} fill="#000" opacity=".25" />
-      <rect x={-10} y={-42} width={8} height={42} rx={3} fill={pants} className={walking ? "fs-leg-a" : undefined} />
-      <rect x={2} y={-42} width={8} height={42} rx={3} fill={pants} className={walking ? "fs-leg-b" : undefined} />
-      <ellipse cx={-6} cy={-1} rx={6} ry={2.6} fill="#111" />
-      <ellipse cx={6} cy={-1} rx={6} ry={2.6} fill="#111" />
-      <g transform="translate(0 -38) scale(0.92)">
-        <Body look={look} chair={false} gaze="wander" />
-        <path d="M-30 -46 Q-33 -24 -27 -8 M30 -46 Q33 -24 27 -8" stroke={look.hairStyle === "buzz" ? look.inner : look.top} strokeWidth="8" strokeLinecap="round" fill="none" />
-        <circle cx={-27} cy={-6} r={4} fill={look.skin} />
-        <circle cx={27} cy={-6} r={4} fill={look.skin} />
-        {holding && (
-          <g transform="translate(31 -12)">
-            <rect x={-5} y={-9} width={10} height={11} rx={2} fill="#ece6da" />
-            <path d="M5 -6 q5 0 5 3.5 q0 3.5 -5 3.5" stroke="#ece6da" strokeWidth="2" fill="none" />
-            {!walking && <path className="fs-steam" d="M-1 -12 q-3 -4 0 -8 q3 -4 0 -8" stroke="#e2e8f0" strokeWidth="1.2" fill="none" opacity=".5" />}
-          </g>
-        )}
-      </g>
-    </g>
-  );
-}
-
-/** A small "…" speech bubble (people chatting). */
-export function ChatDots({ x, y }: { x: number; y: number }) {
-  return (
-    <g transform={`translate(${x} ${y})`}>
-      <rect x={-13} y={-9} width={26} height={16} rx={8} fill="#f8fafc" opacity=".92" />
-      <path d="M-4 7 l-3 5 l7 -5 Z" fill="#f8fafc" opacity=".92" />
-      {[-6, 0, 6].map((dx, i) => <circle key={dx} cx={dx} cy={-1} r={1.8} fill="#334155" className="fs-pulse" style={{ animationDelay: `${i * 0.2}s` }} />)}
-    </g>
-  );
-}
-
 export function Hands({ look, pose = "idle" }: { look: Look; pose?: Pose }) {
   const sleeve = look.hairStyle === "buzz" ? look.inner : look.top;
   if (pose === "reading") {

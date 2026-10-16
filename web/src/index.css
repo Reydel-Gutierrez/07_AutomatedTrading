@@ -24,7 +24,7 @@
 
 /* Firm Space. Transform/opacity-only animations so they stay on the compositor. */
 /* Rotations and scales around the element's own box; never on groups positioned with a transform attribute. */
-.fs-blink, .fs-headturn, .fs-read, .fs-ping, .fs-leg-a, .fs-leg-b { transform-box: fill-box; }
+.fs-blink, .fs-headturn, .fs-read, .fs-ping { transform-box: fill-box; }
 .fs-breathe { animation: fs-breathe 4.8s ease-in-out infinite; }
 .fs-blink { transform-origin: center; animation: fs-blink 5.5s infinite; }
 .fs-type-a { animation: fs-type .32s ease-in-out infinite; }
@@ -61,17 +61,12 @@
 .fs-flush { animation: fs-pulse 2.6s ease-in-out infinite; }
 .fs-sweat { opacity: 0; animation: fs-sweat 2.4s ease-in infinite; }
 .fs-zzz { opacity: 0; animation: fs-zzz 3s ease-out infinite; }
-.fs-bob { animation: fs-bob .5s ease-in-out infinite; }
-.fs-leg-a { transform-origin: top; animation: fs-step .5s ease-in-out infinite; }
-.fs-leg-b { transform-origin: top; animation: fs-step .5s ease-in-out infinite reverse; }
 .fs-stress { animation: fs-pulse 2.2s ease-in-out infinite; }
 
 @keyframes fs-glance { 0%, 30% { transform: translateX(0); } 35%, 50% { transform: translateX(-1.8px); } 55%, 75% { transform: translateX(1.8px); } 80%, 100% { transform: translateX(0); } }
 @keyframes fs-headturn { 0%, 30% { transform: rotate(0); } 35%, 50% { transform: rotate(-4deg); } 55%, 75% { transform: rotate(4deg); } 80%, 100% { transform: rotate(0); } }
 @keyframes fs-sweat { 0% { opacity: 0; transform: translateY(0); } 25% { opacity: .9; } 100% { opacity: 0; transform: translateY(9px); } }
 @keyframes fs-zzz { 0% { opacity: 0; transform: translate(0, 0); } 30% { opacity: .85; } 100% { opacity: 0; transform: translate(6px, -14px); } }
-@keyframes fs-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-2px); } }
-@keyframes fs-step { 0%, 100% { transform: rotate(8deg); } 50% { transform: rotate(-8deg); } }
 
 /* Nothing animates behind an open office, or for people who prefer less motion. */
 .fs-paused, .fs-paused * { animation-play-state: paused !important; }

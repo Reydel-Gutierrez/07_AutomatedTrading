@@ -13,8 +13,9 @@ import { useHeaderHeight, usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
 import { AcademyOffice, Office } from "../space/Office";
 import { type Camera, PanZoom } from "../space/PanZoom";
-import { ALLOC_COLORS, type AgentId, FirmMap, NAMES, type Selection, signedPctOf, traineeDoing, traineeLine, weekOnFloor } from "../space/FirmMap";
-import { ACADEMY, DEPTS, GROUND, type Dept, type DeptId, FLOORS, type Floor, type FloorId, type Folder, type Rect, TOWER, WORLD, deptById, deptOf, floorById, fxMarketOpen } from "../space/departments";
+import { ALLOC_COLORS, type AgentId, FirmMap, NAMES, type Selection, dataReadyFor, signedPctOf, traineeDoing, traineeLine, weekOnFloor } from "../space/FirmMap";
+import { MARKET, marketOf } from "../academy";
+import { ACADEMY, DEPTS, GROUND, type Dept, type DeptId, FLOORS, type Floor, type FloorId, type Folder, type Rect, TOWER, WORLD, deptById, deptOf, floorById, fxMarketOpen, seatsHere } from "../space/departments";
 import { type AcademySpaceAgent, type AgentState, CIO_TYPES, MOOD_LABEL, type Mood, type Space, STATE_META, cioState, etTime, managerState, moodOf } from "../space/state";
 
 const IDS: AgentId[] = ["cio", "tim", "alex", "max"];
@@ -92,8 +93,8 @@ export default function FirmSpace() {
       else if (s.kind === "floor") focus(floorById(s.id).rect);
       else if (s.kind === "person") focus(deptOf(s.id)!.rect);
       else {
-        const stage = space?.academy?.agents?.find((a) => a.id === s.id)?.stage;
-        focus(deptById(stage === "PAPER" ? "hall" : stage === "DEMO" ? "demo-desk" : stage === "RETIRED" ? "alumni" : "studio").rect);
+        const a = space?.academy?.agents?.find((x) => x.id === s.id);
+        focus((a && DEPTS.find((d) => seatsHere(d, a)))?.rect ?? deptById("studio").rect);
       }
     },
     [select, focus, space],
@@ -360,6 +361,7 @@ function PersonPanel({ id, state, mood, space, onFolder, onSit }: { id: AgentId;
 function TraineePanel({ a, space, onFolder, onSit }: { a: AcademySpaceAgent | undefined; space: Space; onFolder: (p: string) => void; onSit: () => void }) {
   if (!a) return <p className="text-sm text-slate-500">This agent is no longer in the Academy's records.</p>;
   const paused = !!a.paused || a.status === "PAUSED";
+  const room = DEPTS.find((d) => seatsHere(d, a));
   return (
     <div>
       <header className="flex items-start gap-3">
@@ -367,26 +369,26 @@ function TraineePanel({ a, space, onFolder, onSit }: { a: AcademySpaceAgent | un
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="font-display text-xl text-slate-50">{a.name}</span>
-            <span className="rounded-full bg-slate-500/10 px-2 py-0.5 text-[11px] text-slate-300">{a.style === "day" ? "Day trader" : "Swing trader"}</span>
+            <span className="rounded-full bg-slate-500/10 px-2 py-0.5 text-[11px] text-slate-300">{MARKET[marketOf(a)].trader(a.style)}</span>
           </div>
           <div className="text-xs text-slate-400">{a.persona.tagline}</div>
-          <div className="text-[11px] text-slate-500">{{ RESEARCH: "A1 · Research floor · no trading", PAPER: "A2 · Paper Trading Hall", DEMO: "A3 · Demo Desk · OANDA practice", RETIRED: "A3 · Alumni wall" }[a.stage] ?? ""} · v{a.version}</div>
+          <div className="text-[11px] text-slate-500">{room ? `${floorById(room.floor).level} · ${room.name}` : ""} · v{a.version}</div>
         </div>
       </header>
       <section className="mt-4 rounded-xl border border-ink-700 bg-ink-850 p-3">
         <div className="text-[11px] font-medium uppercase tracking-wider text-slate-400">Right now</div>
-        <p className="mt-1.5 text-sm font-medium text-slate-100">{paused ? `Paused${a.paused ? `: ${a.paused}` : ""}` : traineeDoing(a, !!space.academy?.engine?.data_ready).replace(/^\w/, (ch) => ch.toUpperCase())}</p>
+        <p className="mt-1.5 text-sm font-medium text-slate-100">{paused ? `Paused${a.paused ? `: ${a.paused}` : ""}` : traineeDoing(a, dataReadyFor(space, a)).replace(/^\w/, (ch) => ch.toUpperCase())}</p>
         {a.last_event && (
           <p className="mt-1 text-xs leading-relaxed text-slate-400">
             {a.last_event.summary} {tsIso(a.last_event.ts) && <span className="text-slate-500">· {ago(tsIso(a.last_event.ts))}</span>}
           </p>
         )}
-        <p className="mt-2 text-[10px] text-slate-500">source: Forex engine records</p>
+        <p className="mt-2 text-[10px] text-slate-500">source: {marketOf(a) === "stocks" ? "Stock class engine records" : "Forex engine records"}</p>
       </section>
       {a.stage === "RESEARCH" ? (
       <section className="mt-4 text-sm text-slate-300">
         <h3 className="label mb-2">Research</h3>
-        <p>{a.last_sprint ? `Last sprint ${a.last_sprint.day}: ${a.last_sprint.outcome.replace(/_/g, " ").toLowerCase()}.` : "First research sprint tonight at 1:00 AM New York."}</p>
+        <p>{a.last_sprint ? `Last sprint ${a.last_sprint.day}: ${a.last_sprint.outcome.replace(/_/g, " ").toLowerCase()}.` : `First research sprint tonight at ${MARKET[marketOf(a)].sprintAt} New York.`}</p>
         {a.validation && <p className="mt-1 text-xs text-slate-400">Latest validation: {a.validation.toLowerCase()}</p>}
       </section>
       ) : (
@@ -401,7 +403,7 @@ function TraineePanel({ a, space, onFolder, onSit }: { a: AcademySpaceAgent | un
       </section>
       )}
       {a.stage !== "RESEARCH" && a.stage !== "RETIRED" && a.stage_since && (
-        <p className="mt-2 text-xs text-slate-400">Week {weekOnFloor(a.stage_since)} on this floor · {a.floor_trades ?? 0} trades here{a.stage === "PAPER" ? " · you decide on a Demo Desk seat after 4 profitable weeks" : ""}</p>
+        <p className="mt-2 text-xs text-slate-400">Week {weekOnFloor(a.stage_since)} on this floor · {a.floor_trades ?? 0} trades here{a.stage === "PAPER" ? (marketOf(a) === "stocks" ? " · after about 4 good weeks you decide on a live swing seat" : " · you decide on a Demo Desk seat after 4 profitable weeks") : ""}</p>
       )}
       <button onClick={onSit} className="btn-primary mt-4 w-full">Sit down with {a.name} →</button>
       <FolderButtons folders={[{ label: `${a.name}'s record`, path: `/academy/${a.id}`, note: "Trades, validation evidence, revisions" }, { label: "The 537 Academy", path: "/academy", note: "Floors, journal, and rates" }, { label: "Sprint reports", path: "/academy/reports", note: "Every night's research results" }]} onFolder={onFolder} />
@@ -441,13 +443,6 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
     }
     case "research":
       return ["Unoccupied."];
-    case "stock-research": case "stock-hall": {
-      const eq = space.equity_class;
-      if (!eq?.available) return ["The Stock Swing Class engine is not running yet."];
-      const here = (eq.agents ?? []).filter((a) => a.stage === (d.id === "stock-hall" ? "PAPER" : "RESEARCH"));
-      if (!here.length) return [d.id === "stock-hall" ? "No stock agent has passed research yet." : "Nobody in research."];
-      return here.map((a) => `${a.name}: ${a.status !== "ACTIVE" ? a.status.toLowerCase() : a.sprinting ? `sprinting (${a.sprinting})` : a.stage === "PAPER" ? `paper ${signedPct(a.return_pct)}` : a.last_sprint ? `last sprint ${a.last_sprint.day}: ${a.last_sprint.outcome.toLowerCase().replace("_", " ")}` : "waiting for history"}`);
-    }
     case "core-board": case "trading-board":
       return overview ? overview.managers.filter((m) => (d.id === "trading-board" ? m.id === "max" : m.id !== "max")).map((m) => {
         const p = m.mode === "SIM" ? m.performance.SIM : m.performance.LIVE;
@@ -462,10 +457,10 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
       return t ? [`Today: ${t.runs} manager decisions, ${t.orders} orders (${t.fills} filled).`, `${t.events} events recorded · ${t.warnings + t.critical} warnings · ${t.cio} by Graham.`] : ["Loading…"];
     }
     case "demo-board": case "hall-board": case "research-board": {
-      if (!ac?.available) return ["The Forex engine is not running."];
+      if (!ac?.available) return ["The Academy's engines are not running."];
       const stage = d.id === "demo-board" ? "DEMO" : d.id === "hall-board" ? "PAPER" : "RESEARCH";
       const agents = (ac.agents ?? []).filter((a) => a.stage === stage);
-      if (stage === "RESEARCH") return [ac.latest_report ? `Last sprint ${ac.latest_report.day}: passed ${ac.latest_report.passed.join(", ") || "none"}; improved ${ac.latest_report.improved.join(", ") || "none"}.` : "No sprint yet.", `${agents.filter((a) => a.validation === "PASSED").length} of ${agents.length} pass validation. Next sprint 1:00 AM New York.`];
+      if (stage === "RESEARCH") return [ac.latest_report ? `Last sprint ${ac.latest_report.day}: passed ${ac.latest_report.passed.join(", ") || "none"}; improved ${ac.latest_report.improved.join(", ") || "none"}.` : "No sprint yet.", `${agents.filter((a) => a.validation === "PASSED").length} of ${agents.length} pass validation. Next sprints: forex 1:00 AM, stocks 1:30 AM New York.`];
       if (!agents.length) return [stage === "DEMO" ? `No agent on the Demo Desk. Practice account ${ac.engine?.demo?.configured ? "connected" : "not set up yet"}.` : "No agent is paper trading yet."];
       return agents.map((a) => `${a.name}: week ${weekOnFloor(a.stage_since) ?? 1}, ${signedPctOf(a.return_pct)}, ${a.floor_trades ?? 0} trades`);
     }
@@ -473,12 +468,15 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
       const retired = (ac?.agents ?? []).filter((a) => a.stage === "RETIRED");
       return retired.length ? [`${retired.map((a) => a.name).join(", ")} (records kept).`] : ["Empty. No agent has graduated or retired."];
     }
-    case "studio": case "hall": case "demo-desk": {
-      const stage = d.id === "studio" ? "RESEARCH" : d.id === "hall" ? "PAPER" : "DEMO";
-      const agents = (ac?.agents ?? []).filter((a) => a.stage === stage);
-      if (!ac?.available) return ["The Forex engine is not running."];
-      const head = d.id === "studio" ? `${agents.length} agents in research (no trading).` : d.id === "hall" ? (agents.length ? `${agents.length} agents paper trading $10,000 virtual accounts.` : "Empty: no agent has passed research yet.") : (agents.length ? `${agents.length} of 2 seats taken.` : "Both seats open.");
-      const extra = d.id === "demo-desk" ? (ac.engine?.demo?.configured ? "Practice account connected." : "The OANDA practice account is not set up yet.") : `Engine ${ac.engine?.online ? "online" : "offline"}${ac.engine?.market_open ? " · market open" : ""}.`;
+    case "studio": case "hall": case "demo-desk": case "stock-research": case "stock-hall": {
+      const stocks = d.trainees?.market === "stocks";
+      const agents = (ac?.agents ?? []).filter((a) => seatsHere(d, a));
+      const online = stocks ? ac?.stock_engine?.online : ac?.engine?.online;
+      if (!ac?.available) return ["The Academy's engines are not running."];
+      const stage = d.trainees?.stage;
+      const head = stage === "RESEARCH" ? `${agents.length} agents in research (no trading).` : stage === "PAPER" ? (agents.length ? `${agents.length} agents paper trading $10,000 virtual accounts.` : "Empty: no agent has passed research yet.") : (agents.length ? `${agents.length} of 2 seats taken.` : "Both seats open.");
+      const extra = d.id === "demo-desk" ? (ac.engine?.demo?.configured ? "Practice account connected." : "The OANDA practice account is not set up yet.")
+        : `${stocks ? "Stock class" : "Forex"} engine ${online ? "online" : "offline"}${!stocks && ac.engine?.market_open ? " · market open" : ""}.`;
       return [head, extra];
     }
   }
@@ -488,8 +486,7 @@ function DeptPanel({ d, space, states, events, now, onPick, onFolder }: { d: Dep
   const { overview } = useLive();
   const f = floorById(d.floor);
   const facts = deptFacts(d, space, states, events, now, overview);
-  const stage = d.id === "studio" ? "RESEARCH" : d.id === "hall" ? "PAPER" : d.id === "demo-desk" ? "DEMO" : d.id === "alumni" ? "RETIRED" : null;
-  const trainees = stage ? (space.academy?.agents ?? []).filter((a) => a.stage === stage) : [];
+  const trainees = (space.academy?.agents ?? []).filter((a) => seatsHere(d, a));
   return (
     <div>
       <div className="text-[11px] uppercase tracking-wider text-slate-500">{f.building} · {f.level} {f.name}</div>
@@ -512,7 +509,7 @@ function DeptPanel({ d, space, states, events, now, onPick, onFolder }: { d: Dep
             ))}
             {trainees.map((a) => (
               <li key={a.id}>
-                <PersonRow color={a.persona.color} name={a.name} line={traineeLine(a, !!space.academy?.engine?.data_ready)} onClick={() => onPick({ kind: "trainee", id: a.id })} />
+                <PersonRow color={a.persona.color} name={a.name} line={traineeLine(a, dataReadyFor(space, a))} onClick={() => onPick({ kind: "trainee", id: a.id })} />
               </li>
             ))}
           </ul>

@@ -78,7 +78,8 @@ def test_morning_message_and_reports(academy_db):
 
 def test_views_without_academy(tmp_path, monkeypatch):
     monkeypatch.setenv("FOREX_STATE_ROOT", str(tmp_path / "none"))
-    assert academy.overview()["available"] is False and academy.space_block() == {"available": False}
+    monkeypatch.setenv("EQUITY_STATE_ROOT", str(tmp_path / "none-stocks"))
+    assert academy.overview()["available"] is False and academy.space_block()["available"] is False and academy.space_block()["agents"] == []
 
 
 def test_commands_go_to_the_inbox_only(academy_db):

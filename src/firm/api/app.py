@@ -110,6 +110,7 @@ class MemoryBody(BaseModel):
 
 def create_app(host: Host) -> FastAPI:
     firm = host.firm
+    equity_academy.bind(firm)  # the stock class compares its paper records with Max's desk
     sessions = Sessions(firm.db, firm.settings)
     app = FastAPI(title="The 537 Firm · Investment HQ", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -258,34 +259,6 @@ def create_app(host: Host) -> FastAPI:
         except LookupError as exc:
             raise HTTPException(404, str(exc)) from None
         firm.events.emit("ACADEMY_COMMAND", f"Academy: {action} {agent_id} by {who}" + (f" ({body.note})" if body.note else ""), actor=who)
-        return {"ok": True, "queued": True}
-
-    @app.get("/api/equity-academy")
-    def equity_academy_overview(_: str = Depends(user)) -> dict[str, Any]:
-        try:
-            return equity_academy.overview(firm)
-        except sqlite3.Error as exc:
-            return {"available": False, "reason": f"Stock Swing Class data unavailable: {exc}", "agents": []}
-
-    @app.get("/api/equity-academy/agents/{agent_id}")
-    def equity_academy_agent(agent_id: str, _: str = Depends(user)) -> dict[str, Any]:
-        try:
-            data = equity_academy.agent(agent_id, firm)
-        except sqlite3.Error as exc:
-            raise HTTPException(503, f"Stock Swing Class data unavailable: {exc}") from None
-        if data is None:
-            raise HTTPException(404, "no such Stock Swing Class agent")
-        return data
-
-    @app.post("/api/equity-academy/agents/{agent_id}/{action}")
-    def equity_academy_command(agent_id: str, action: str, body: AcademyCommandBody, who: str = Depends(user)) -> dict[str, Any]:
-        try:
-            equity_academy.send_command(agent_id, action, by=who, note=body.note)
-        except ValueError as exc:
-            raise HTTPException(422, str(exc)) from None
-        except LookupError as exc:
-            raise HTTPException(404, str(exc)) from None
-        firm.events.emit("ACADEMY_COMMAND", f"Stock Swing Class: {action} {agent_id} by {who}" + (f" ({body.note})" if body.note else ""), actor=who)
         return {"ok": True, "queued": True}
 
     @app.get("/api/managers/{manager_id}/research")

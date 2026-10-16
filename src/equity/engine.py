@@ -28,6 +28,7 @@ from equity.agents import CLASS, default_params, wanted_symbols
 from equity.data import Panel, coverage, load_panel
 from equity.research import RETIRE_AFTER, evidence_from, sprint
 from equity.sim import Config, run
+from equity.strategies import STRATEGIES
 from forex.fxclock import NY
 
 log = logging.getLogger("equity.engine")
@@ -55,6 +56,8 @@ class Engine:
         if created:
             log.info("enrolled %s", created)
         self.db.put("wanted_symbols", wanted_symbols())
+        self.db.put("strategy_catalog", {k: {"title": s.title, "style": "swing", "description": s.description, "tunables": [{"name": t.name} for t in s.tunables]}
+                                         for k, s in STRATEGIES.items()})
 
     def ny_now(self) -> datetime:
         return datetime.fromtimestamp(self.clock(), tz=timezone.utc).astimezone(NY)

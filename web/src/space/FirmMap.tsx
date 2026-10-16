@@ -8,9 +8,10 @@ import type { FirmEvent, Overview } from "../api";
 import { AGENTS } from "../components/ui";
 import { money } from "../format";
 import { Body, Chair, Hands, LOOKS, type Look, type Pose, Zzz } from "./Character";
-import { ACADEMY, DEPTS, type Dept, type DeptId, FLOORS, type Floor, type FloorId, GROUND, type Rect, SESSIONS, SLAB, TOWER, WORLD, fxMarketOpen, localTime, sessionOpen } from "./departments";
+import { ACADEMY, DEPTS, type Dept, type DeptId, FLOORS, type Floor, type FloorId, GROUND, type Rect, SESSIONS, SLAB, TOWER, WORLD, fxMarketOpen, localTime, seatsHere, sessionOpen } from "./departments";
 import { poseFor } from "./pose";
-import { type AcademySpaceAgent, type AgentState, type EquityClassAgent, type Mood, PHASE, type Space, STATE_META } from "./state";
+import { type AcademySpaceAgent, type AgentState, type Mood, PHASE, type Space, STATE_META } from "./state";
+import { MARKET, marketOf } from "../academy";
 
 export type AgentId = "cio" | "tim" | "alex" | "max";
 export type Selection = { kind: "person"; id: AgentId } | { kind: "dept"; id: DeptId } | { kind: "trainee"; id: string } | { kind: "floor"; id: FloorId };
@@ -355,11 +356,14 @@ function Seat({ id, x, floorY, c, phase, pending = 0 }: { id: AgentId; x: number
 
 const TRAINEE_POSE: Record<string, Pose> = { trading: "typing", analyzing: "typing", watching: "reading", error: "alert" };
 
+/** Whether an agent's own class engine has its market history loaded. */
+export const dataReadyFor = (space: Space, a: AcademySpaceAgent) => !!(marketOf(a) === "stocks" ? space.academy?.stock_engine?.data_ready : space.academy?.engine?.data_ready);
+
 export function traineeDoing(a: AcademySpaceAgent, dataReady: boolean): string {
   if (a.stage === "RETIRED") return "retired";
   if (a.stage === "RESEARCH") {
     if (a.sprinting) return `sprinting: ${a.sprinting}`;
-    return a.last_sprint ? `in research · last sprint ${(a.last_sprint.outcome || "").replace(/_/g, " ").toLowerCase()}` : "in research · first sprint at 1:00 AM";
+    return a.last_sprint ? `in research · last sprint ${(a.last_sprint.outcome || "").replace(/_/g, " ").toLowerCase()}` : `in research · first sprint at ${MARKET[marketOf(a)].sprintAt}`;
   }
   if (a.paused || a.status === "PAUSED") return "paused";
   if (a.positions) return `${a.positions} open position${a.positions > 1 ? "s" : ""}`;
@@ -372,7 +376,7 @@ const OUTCOME_SHORT: Record<string, string> = { PROMOTE: "promoted", PROMOTE_CUR
 /** Which week on its floor an agent is in (week 1 starts the day it arrives). */
 export const weekOnFloor = (since: string | null | undefined, now = Date.now()) => (since ? Math.floor((now - Date.parse(since)) / (7 * 86400000)) + 1 : null);
 export const traineeLine = (a: AcademySpaceAgent, dataReady: boolean) => {
-  if (a.stage === "RESEARCH") return `v${a.version} · ${a.sprinting ? "sprinting now" : a.last_sprint ? OUTCOME_SHORT[a.last_sprint.outcome] ?? a.last_sprint.outcome.toLowerCase() : "first sprint 1 AM"}`;
+  if (a.stage === "RESEARCH") return `v${a.version} · ${a.sprinting ? "sprinting now" : a.last_sprint ? OUTCOME_SHORT[a.last_sprint.outcome] ?? a.last_sprint.outcome.toLowerCase() : `first sprint ${MARKET[marketOf(a)].sprintAt}`}`;
   const wk = weekOnFloor(a.stage_since);
   return `${signedPctOf(a.return_pct)}${wk ? ` · week ${wk}` : ""} · ${traineeDoing(a, dataReady)}`;
 };
@@ -389,7 +393,7 @@ function Trainee({ a, x, floorY, c }: { a: AcademySpaceAgent; x: number; floorY:
   const selected = c.sel?.kind === "trainee" && c.sel.id === a.id;
   const select = () => c.onSelect({ kind: "trainee", id: a.id });
   return (
-    <g role="button" tabIndex={0} data-fm-hit aria-label={`${a.name}, Academy ${a.style} trader: ${traineeDoing(a, !!c.space.academy?.engine?.data_ready)}. Open details.`} className="fm-person outline-none" onClick={(e) => (e.stopPropagation(), select())} onDoubleClick={(e) => (e.stopPropagation(), c.onSit?.(a.id))} onKeyDown={activate(select)}>
+    <g role="button" tabIndex={0} data-fm-hit aria-label={`${a.name}, Academy ${MARKET[marketOf(a)].trader(a.style).toLowerCase()}: ${traineeDoing(a, dataReadyFor(c.space, a))}. Open details.`} className="fm-person outline-none" onClick={(e) => (e.stopPropagation(), select())} onDoubleClick={(e) => (e.stopPropagation(), c.onSit?.(a.id))} onKeyDown={activate(select)}>
       <rect x={x - 62} y={floorY - 170} width={124} height={170} fill="transparent" />
       <ellipse cx={x} cy={floorY - 3} rx={62} ry={7} fill="none" stroke={selected ? a.persona.color : "transparent"} strokeWidth="2.5" strokeDasharray="6 5" className={selected ? "fs-flow" : "fm-ring"} />
       {busy && <ellipse cx={x} cy={top} rx={80} ry={50} fill="url(#fm-warm)" className="fs-pulse" pointerEvents="none" />}
@@ -409,7 +413,7 @@ function Trainee({ a, x, floorY, c }: { a: AcademySpaceAgent; x: number; floorY:
           <text x={x} y={top + 26} textAnchor="middle" fontSize="8" fontWeight="700" letterSpacing="1.2" fill={a.persona.color}>{a.name.toUpperCase()}</text>
         </g>
       </g>
-      <Chip x={x} y={floorY - 140} name={a.name} line={traineeLine(a, !!c.space.academy?.engine?.data_ready)} dot={a.persona.color} pulse={busy} alert={a.stage !== "RESEARCH" && feeling === "stressed"} selected={selected} />
+      <Chip x={x} y={floorY - 140} name={a.name} line={traineeLine(a, dataReadyFor(c.space, a))} dot={a.persona.color} pulse={busy} alert={a.stage !== "RESEARCH" && feeling === "stressed"} selected={selected} />
     </g>
   );
 }
@@ -785,7 +789,7 @@ function HallBoard({ d, c }: { d: Dept; c: Ctx }) {
             return (
               <g key={a.id}>
                 <circle cx={bx + 18} cy={yy - 3.5} r={3.5} fill={a.persona.color} />
-                <text x={bx + 27} y={yy} fontSize="10.5" fontWeight="600" fill="#e2e8f0">{a.name}</text>
+                <text x={bx + 27} y={yy} fontSize="10.5" fontWeight="600" fill="#e2e8f0">{a.name}<tspan fontSize="8" fontWeight="400" fill="#64748b"> {MARKET[marketOf(a)].label.toLowerCase()}</tspan></text>
                 <rect x={barX} y={yy - 8} width={barW} height={7} rx={3.5} fill="#1e2533" />
                 <rect x={barX} y={yy - 8} width={Math.min(1, days / 28) * barW} height={7} rx={3.5} fill={days >= 28 ? (a.return_pct > 0 ? "#34d399" : "#fb7185") : "#cdb27a"} />
                 <text x={barX + barW + 8} y={yy} fontSize="9" fill="#94a3b8">{days >= 28 ? `week ${wk} · review` : `week ${wk} of 4`}</text>
@@ -794,8 +798,8 @@ function HallBoard({ d, c }: { d: Dept; c: Ctx }) {
               </g>
             );
           }) : <text x={bx + 14} y={by + 46} fontSize="10" fill="#64748b">No agent on paper yet</text>}
-          <text x={bx + 14} y={by + BOARD_H - 26} fontSize="8.5" fill="#64748b">After 4 profitable weeks you decide on a Demo Desk seat.</text>
-          <text x={bx + 14} y={by + BOARD_H - 12} fontSize="8.5" fill="#64748b">Graham may propose one after 2 profitable weeks.</text>
+          <text x={bx + 14} y={by + BOARD_H - 26} fontSize="8.5" fill="#64748b">After 4 good weeks you decide: forex to the Demo Desk,</text>
+          <text x={bx + 14} y={by + BOARD_H - 12} fontSize="8.5" fill="#64748b">stocks to a live swing seat (or more tests).</text>
         </>
       )}
     </Boardroom>
@@ -809,12 +813,12 @@ function ResearchBoard({ d, c }: { d: Dept; c: Ctx }) {
   const sprinting = agents.some((a) => a.sprinting);
   const passing = agents.filter((a) => a.validation === "PASSED").length;
   return (
-    <Boardroom d={d} c={c} title="FLOOR 1 · RESEARCH" sub={sprinting ? "Sprint running now" : "Next sprint 1:00 AM · click for analytics"}>
+    <Boardroom d={d} c={c} title="FLOOR 1 · RESEARCH" sub={sprinting ? "Sprint running now" : "Next sprints 1:00 / 1:30 AM · click for analytics"}>
       {(bx, by, bw) => {
         const L = bx + 14, W = bw / 2 - 26, R = bx + bw / 2 + 12;
         return (
           <>
-            <Line x={L} y={by + 42} w={W} k="Next sprint" v={sprinting ? "running now" : "1:00 AM NY"} col={sprinting ? "#34d399" : "#e2e8f0"} />
+            <Line x={L} y={by + 42} w={W} k="Next sprints" v={sprinting ? "running now" : "1:00 · 1:30 AM"} col={sprinting ? "#34d399" : "#e2e8f0"} />
             <Line x={L} y={by + 62} w={W} k="Validation passing" v={`${passing} of ${agents.length}`} />
             <Line x={L} y={by + 82} w={W} k="Last sprint" v={rep ? rep.day.slice(5) : "none yet"} />
             {rep && (
@@ -825,8 +829,8 @@ function ResearchBoard({ d, c }: { d: Dept; c: Ctx }) {
             )}
             <line x1={bx + bw / 2} x2={bx + bw / 2} y1={by + 30} y2={by + BOARD_H - 14} stroke="#283044" />
             <text x={R} y={by + 19} fontSize="9" fontWeight="700" letterSpacing="1.4" fill="#cdb27a">AGENTS</text>
-            {agents.slice(0, 7).map((a, i) => (
-              <Line key={a.id} x={R} y={by + 40 + i * 17} w={W} k={`${a.name} v${a.version}`} size={9.5} dot={a.persona.color}
+            {agents.slice(0, 11).map((a, i) => (
+              <Line key={a.id} x={R} y={by + 36 + i * (agents.length > 7 ? 11.5 : 17)} w={W} k={`${a.name} v${a.version}`} size={agents.length > 7 ? 8.5 : 9.5} dot={a.persona.color}
                 v={a.sprinting ? "sprinting" : a.last_sprint ? OUTCOME_SHORT[a.last_sprint.outcome] ?? a.last_sprint.outcome.toLowerCase() : "—"}
                 col={a.last_sprint?.outcome === "IMPROVED" ? "#38bdf8" : a.last_sprint?.outcome?.startsWith("PROMOTE") ? "#34d399" : "#94a3b8"} />
             ))}
@@ -1080,55 +1084,6 @@ function Research({ d, c }: { d: Dept; c: Ctx }) {
   );
 }
 
-/** A Stock Swing Class agent at its desk (the room opens the class page; figures are not separate buttons). */
-function EquityFigure({ a, x, floorY }: { a: EquityClassAgent; x: number; floorY: number }) {
-  const look = { chair: "#1f2633", skin: "#d9a67c", hair: "#2b2523", hairStyle: "neat", top: "#334155", inner: "#e2e8f0", accent: a.persona.color, ...(a.persona.look ?? {}) } as Look;
-  const paused = a.status !== "ACTIVE";
-  const busy = !paused && !!a.sprinting;
-  const pose: Pose = busy ? "typing" : "idle";
-  const feeling = a.return_pct <= -0.05 ? "stressed" : a.return_pct >= 0.02 ? "pleased" : "calm";
-  const s = 0.72;
-  const top = floorY - 54;
-  const line = paused ? a.status.toLowerCase() : a.sprinting ? `sprint: ${a.sprinting}` : a.stage === "PAPER" ? `paper ${a.return_pct >= 0 ? "+" : ""}${(a.return_pct * 100).toFixed(1)}%` : a.last_sprint ? `researching · v${a.version}` : "waiting for history";
-  return (
-    <g pointerEvents="none">
-      {busy && <ellipse cx={x} cy={top} rx={80} ry={50} fill="url(#fm-warm)" className="fs-pulse" />}
-      <g className={paused ? "fs-off" : undefined}>
-        <g transform={`translate(${x} ${top}) scale(${s})`}>
-          <Chair look={look} />
-          <Body look={look} pose={pose} working={busy} feeling={feeling} gaze={busy ? "monitor" : "wander"} chair={false} />
-        </g>
-        <rect x={x - 56} y={top} width={112} height={floorY - top} fill="#33281f" />
-        <rect x={x - 59} y={top - 5} width={118} height={8} rx={2} fill="#4a3b30" />
-        <Monitor x={x + 38} y={top - 5} color={busy ? a.persona.color : "#13243c"} off={false} pulse={busy} chart={busy ? undefined : a.persona.color} />
-        <g transform={`translate(${x} ${top}) scale(${s})`}>
-          <Hands look={look} pose={pose} />
-        </g>
-        <rect x={x - Math.max(64, textW(a.name.toUpperCase(), 8, 700, 1.2) + 14) / 2} y={top + 16} width={Math.max(64, textW(a.name.toUpperCase(), 8, 700, 1.2) + 14)} height={14} rx={2} fill="#14110f" stroke={a.persona.color} strokeOpacity=".7" />
-        <text x={x} y={top + 26} textAnchor="middle" fontSize="8" fontWeight="700" letterSpacing="1.2" fill={a.persona.color}>{a.name.toUpperCase()}</text>
-      </g>
-      <Chip x={x} y={floorY - 140} name={a.name} line={line} dot={a.persona.color} pulse={busy} alert={a.stage === "PAPER" && feeling === "stressed"} selected={false} />
-    </g>
-  );
-}
-
-/** The Stock Swing Class on one Academy floor (research or paper); the room opens the class page. */
-function StockClass({ d, c, stage, seats, plate }: { d: Dept; c: Ctx; stage: EquityClassAgent["stage"]; seats: number; plate: string }) {
-  const [x, , w] = d.rect;
-  const f = fy(d.rect);
-  const eq = c.space.equity_class;
-  const agents = (eq?.agents ?? []).filter((a) => a.stage === stage);
-  const n = Math.max(agents.length, seats);
-  const step = (w - 20) / n;
-  const sub = !eq?.available ? "Engine not running" : stage === "PAPER" ? `${agents.length} paper trading on new daily bars` : `${agents.length} agents in research`;
-  return (
-    <Room d={d} c={c} sub={sub} muted={!eq?.available}>
-      {agents.map((a, i) => <EquityFigure key={a.id} a={a} x={x + 10 + step * (i + 0.5)} floorY={f} />)}
-      {Array.from({ length: n - agents.length }, (_, i) => <EmptyDesk key={i} x={x + 10 + step * (agents.length + i + 0.5)} y={f} w={96} plate={plate} tone="#4a3b30" />)}
-    </Room>
-  );
-}
-
 /** L3: the live swing desk, an open trading floor. Max holds seat 1; the rest wait for Stock Swing Class graduates. */
 function SwingDesk({ d, c }: { d: Dept; c: Ctx }) {
   const [x, y, w] = d.rect;
@@ -1180,26 +1135,21 @@ function Alumni({ d, c }: { d: Dept; c: Ctx }) {
 }
 
 /** A floor of Academy desks for the agents at one stage (open seats fill the rest). */
-function Desks({ d, c, stage, seats, sub, plate }: { d: Dept; c: Ctx; stage: AcademySpaceAgent["stage"]; seats: number; sub: string; plate: string }) {
+/** Any Academy room with desks: its agents (by floor and class) at their desks, then open desks. */
+function Desks({ d, c, seats, sub, plate }: { d: Dept; c: Ctx; seats: number; sub: string; plate: string }) {
   const [x, , w] = d.rect;
   const f = fy(d.rect);
-  const agents = (c.space.academy?.agents ?? []).filter((a) => a.stage === stage);
+  const agents = (c.space.academy?.agents ?? []).filter((a) => seatsHere(d, a));
   const n = Math.max(agents.length, seats);
   const step = (w - 20) / n;
+  const stocks = d.trainees?.market === "stocks";
+  const online = stocks ? c.space.academy?.stock_engine?.online : c.space.academy?.available;
   return (
-    <Room d={d} c={c} sub={c.space.academy?.available ? sub.replace("{n}", String(agents.length)) : "Forex engine not running"}>
+    <Room d={d} c={c} sub={online ? sub.replace("{n}", String(agents.length)) : stocks ? "Stock class engine not running" : "Forex engine not running"}>
       {agents.map((a, i) => <Trainee key={a.id} a={a} x={x + 10 + step * (i + 0.5)} floorY={f} c={c} />)}
       {Array.from({ length: n - agents.length }, (_, i) => <EmptyDesk key={i} x={x + 10 + step * (agents.length + i + 0.5)} y={f} w={100} plate={plate} tone="#4a3b30" />)}
     </Room>
   );
-}
-
-function Hall({ d, c }: { d: Dept; c: Ctx }) {
-  return <Desks d={d} c={c} stage="PAPER" seats={6} sub="{n} paper trading on live prices" plate="OPEN SEAT" />;
-}
-
-function Studio({ d, c }: { d: Dept; c: Ctx }) {
-  return <Desks d={d} c={c} stage="RESEARCH" seats={7} sub="{n} agents in research" plate="OPEN DESK" />;
 }
 
 function DemoDesk({ d, c }: { d: Dept; c: Ctx }) {
@@ -1207,7 +1157,7 @@ function DemoDesk({ d, c }: { d: Dept; c: Ctx }) {
   const demo = c.space.academy?.engine?.demo;
   return (
     <g>
-      <Desks d={d} c={c} stage="DEMO" seats={2} sub="{n} of 2 seats taken" plate="DEMO SEAT" />
+      <Desks d={d} c={c} seats={2} sub="{n} of 2 seats taken" plate="DEMO SEAT" />
       <Board x={x + 150} y={y + 40} w={200} h={46}>
         <text x={x + 160} y={y + 58} fontSize="8.5" fontWeight="700" letterSpacing="1.6" fill="#f59e0b" opacity=".85">OANDA PRACTICE</text>
         <text x={x + 160} y={y + 74} fontSize="8" fill={demo?.configured ? "#34d399" : "#94a3b8"}>{demo?.configured ? `${demo.seats} seat account${demo.seats === 1 ? "" : "s"} connected` : "Practice account not set up yet"}</text>
@@ -1222,8 +1172,10 @@ function DeptRoom({ d, c }: { d: Dept; c: Ctx }) {
     case "treasury": return <Treasury d={d} c={c} />;
     case "core-board": return <CoreBoard d={d} c={c} ids={["tim", "alex"]} title="CORE INVESTMENTS" />;
     case "trading-board": return <CoreBoard d={d} c={c} ids={["max"]} title="EQUITY TRADING" />;
-    case "stock-research": return <StockClass d={d} c={c} stage="RESEARCH" seats={4} plate="OPEN DESK" />;
-    case "stock-hall": return <StockClass d={d} c={c} stage="PAPER" seats={4} plate="OPEN SEAT" />;
+    case "studio": return <Desks d={d} c={c} seats={7} sub="{n} agents in research" plate="OPEN DESK" />;
+    case "hall": return <Desks d={d} c={c} seats={6} sub="{n} paper trading on live OANDA prices" plate="OPEN SEAT" />;
+    case "stock-research": return <Desks d={d} c={c} seats={4} sub="{n} agents in research" plate="OPEN DESK" />;
+    case "stock-hall": return <Desks d={d} c={c} seats={4} sub="{n} paper trading on new daily bars" plate="OPEN SEAT" />;
     case "forex-board": return <ForexBoard d={d} c={c} />;
     case "ops-board": return <OpsBoard d={d} c={c} />;
     case "demo-board": return <DemoBoard d={d} c={c} />;
@@ -1237,11 +1189,9 @@ function DeptRoom({ d, c }: { d: Dept; c: Ctx }) {
     case "records": return <Records d={d} c={c} />;
     case "operations": return <Operations d={d} c={c} />;
     case "lab": return <Lab d={d} c={c} />;
-    case "studio": return <Studio d={d} c={c} />;
     case "demo-desk": return <DemoDesk d={d} c={c} />;
     case "research": return <Research d={d} c={c} />;
     case "alumni": return <Alumni d={d} c={c} />;
-    case "hall": return <Hall d={d} c={c} />;
   }
 }
 

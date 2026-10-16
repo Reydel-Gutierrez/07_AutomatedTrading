@@ -1,16 +1,14 @@
-// The 537 Academy, floor by floor: Floor 1 research (nightly sprints on OANDA history),
-// Floor 2 paper trading on live prices, Floor 3 the OANDA Demo Desk. Every number is read
-// from the Forex engine's records; nothing here can place a live broker order.
+// The 537 Academy, floor by floor, both classes: forex (OANDA history, paper on live prices, the
+// OANDA Demo Desk) and stocks (the Stock Swing Class: daily US history, paper beside Max's desk).
+// Every number is read from the two engines' records; nothing here can place a live broker order.
 
 import { type ReactNode, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
-import { type AcademyOverview, type AgentCard, type AgentDetail, type Check, FLOOR_ORDER, type FxPrice, type SprintReport, type Stats, type ValidationReport, epochIso, fmtPx, fmtR, pair, pips } from "../academy";
+import { type AcademyOverview, type AgentCard, type AgentDetail, type Check, FLOOR_ORDER, type FxPrice, type SprintReport, type Stats, MARKET, epochIso, fmtPx, fmtR, marketOf, pair, pips } from "../academy";
 import { Card, Empty, ErrorLine, Modal, useAction } from "../components/ui";
 import { usePageVisible, useResource } from "../hooks";
 import { ago, money, pct, signedPct, tone, when } from "../format";
-
-const STYLE_LABEL = { day: "Day trader", swing: "Swing trader" } as const;
 
 export default function Academy() {
   const { id, day } = useParams();
@@ -43,16 +41,17 @@ function AcademyHome() {
         <div>
           <h1 className="font-display text-2xl text-slate-50">The 537 Academy</h1>
           <p className="mt-1 max-w-2xl text-sm text-slate-400">
-            Forex agents climb three floors on evidence: research on OANDA history (polished by a sprint every night), paper trading on live
-            prices, then real orders on an OANDA practice account. Live capital needs Graham's memo and your authorization.
-          </p>
-          <p className="mt-1 text-sm text-slate-400">
-            Stock agents have their own class on Floors 1 and 2: <Link to="/equity-academy" className="text-gold-400 hover:underline">Stock Swing Class →</Link>
+            Two classes climb the floors on evidence. Forex agents: research on OANDA history, paper trading on live prices, then real
+            orders on an OANDA practice account; a live chair needs Graham's memo and your authorization. Stock agents (the Stock Swing
+            Class): research on daily US stock history, then paper trading beside Max's desk; a live swing seat is your decision.
           </p>
         </div>
-        <EngineBadge engine={data.engine} />
+        <div className="flex flex-col items-end gap-1.5">
+          <EngineBadge label="Forex engine" online={!!data.engine?.online} />
+          <EngineBadge label="Stock class engine" online={!!data.stock_engine?.online} />
+        </div>
       </header>
-      <EngineBar engine={data.engine} />
+      <EngineBar engine={data.engine} stocks={data.stock_engine} />
       <ReportCard report={data.latest_report ?? null} />
       {FLOOR_ORDER.map((f) => {
         const here = agents.filter((a) => a.stage === f.stage);
@@ -104,7 +103,7 @@ function ReportCard({ report }: { report: SprintReport | null }) {
   if (!report) {
     return (
       <Card title="Research sprint report">
-        <p className="text-sm text-slate-400">The first nightly sprint runs at 1:00 AM New York. Its report appears here, with a short message to you at 8:00 AM.</p>
+        <p className="text-sm text-slate-400">The nightly sprints run at 1:00 AM (forex) and 1:30 AM (stocks) New York. Their report appears here, with a short message to you at 8:00 AM.</p>
       </Card>
     );
   }
@@ -135,11 +134,11 @@ function ReportsPage({ day }: { day?: string }) {
           ))}
         </div>
       </header>
-      {!chosen && <Empty>No sprint has run yet. The first runs tonight at 1:00 AM New York.</Empty>}
+      {!chosen && <Empty>No sprint has run yet. The first run tonight (forex 1:00 AM, stocks 1:30 AM New York).</Empty>}
       {r && (
         <>
           <p className="text-sm text-slate-400">
-            Each Floor 1 agent was polished on OANDA history (candidates scored on everything before the locked final year), then its best
+            Each Floor 1 agent was polished on its own history (forex on OANDA, stocks on daily US bars; candidates scored on everything before the locked final year), then its best
             version went through the gates: the Examiner's validation and the day-1 test (fresh $10,000 accounts started on random dates).
           </p>
           {(r.sprints ?? []).map((sp) => {
@@ -188,35 +187,37 @@ function ReportsPage({ day }: { day?: string }) {
   );
 }
 
-function EngineBadge({ engine }: { engine?: AcademyOverview["engine"] }) {
-  const on = !!engine?.online;
+function EngineBadge({ label, online: on }: { label: string; online: boolean }) {
   return (
     <span className={`inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs ring-1 ring-inset ${on ? "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30" : "bg-amber-500/10 text-amber-300 ring-amber-500/30"}`}>
       <span className={`h-2 w-2 rounded-full ${on ? "bg-emerald-400" : "bg-amber-400"}`} />
-      Forex engine {on ? "online" : "offline"}
+      {label} {on ? "online" : "offline"}
     </span>
   );
 }
 
-function EngineBar({ engine }: { engine?: AcademyOverview["engine"] }) {
+function EngineBar({ engine, stocks }: { engine?: AcademyOverview["engine"]; stocks?: AcademyOverview["stock_engine"] }) {
   if (!engine) return null;
   const data = engine.data ?? {};
+  const sd = stocks?.data ?? {};
   const items: [string, ReactNode][] = [
     ["FX market", engine.market_open ? "Open" : "Closed"],
-    ["Market history", data.ready ? "Loaded" : data.progress ? `Loading ${data.progress}` : "Not loaded"],
+    ["Forex history", data.ready ? "Loaded" : data.progress ? `Loading ${data.progress}` : "Not loaded"],
+    ["Stock history", sd.ready ? `${sd.sessions} sessions to ${sd.last_date}` : sd.reason ?? "Not loaded"],
     ["Background work", engine.job ? `${engine.job.name.replace(":", " · ")} (${ago(epochIso(engine.job.since))})` : engine.queue?.length ? `${engine.queue.length} queued` : "Idle"],
     ["Demo Desk", engine.demo?.configured ? `${engine.demo.seats} practice seat${engine.demo.seats === 1 ? "" : "s"} ready` : "Practice account not set up"],
     ["Heartbeat", engine.heartbeat ? ago(epochIso(engine.heartbeat)) : "—"],
   ];
   return (
-    <section className="grid grid-cols-2 gap-3 rounded-xl border border-ink-800 bg-ink-900/60 p-3 text-xs sm:grid-cols-5">
+    <section className="grid grid-cols-2 gap-3 rounded-xl border border-ink-800 bg-ink-900/60 p-3 text-xs sm:grid-cols-6">
       {items.map(([k, v]) => (
         <div key={k} className="min-w-0">
           <div className="text-slate-500">{k}</div>
           <div className="mt-0.5 truncate text-slate-200">{v}</div>
         </div>
       ))}
-      {engine.last_error && <p className="col-span-full text-amber-300/90">Last engine issue: {engine.last_error}</p>}
+      {engine.last_error && <p className="col-span-full text-amber-300/90">Last forex engine issue: {engine.last_error}</p>}
+      {stocks?.last_error && <p className="col-span-full text-amber-300/90">Last stock class engine issue: {stocks.last_error}</p>}
     </section>
   );
 }
@@ -240,7 +241,7 @@ function AgentTile({ a, rank }: { a: AgentCard; rank: number }) {
             <ValidationBadge v={v} />
             {a.paused && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">Paused</span>}
           </div>
-          <div className="text-xs text-slate-400">{a.persona.tagline} · {STYLE_LABEL[a.style]} · v{a.version}{a.klass > 1 ? ` · class ${a.klass}` : ""}</div>
+          <div className="text-xs text-slate-400">{a.persona.tagline} · {MARKET[marketOf(a)].label} · {MARKET[marketOf(a)].trader(a.style)} · v{a.version}{a.klass > 1 ? ` · class ${a.klass}` : ""}</div>
         </div>
         {a.stage === "PAPER" || a.stage === "DEMO" ? (
           <div className="text-right">
@@ -259,7 +260,7 @@ function AgentTile({ a, rank }: { a: AgentCard; rank: number }) {
           <Mini label="Max DD" value={pct(a.max_drawdown, 1)} />
         </dl>
       ) : (
-        <p className="mt-3 line-clamp-3 text-xs text-slate-300">{a.sprint?.verdict ?? "Waiting for its first research sprint (01:00 NY)."}</p>
+        <p className="mt-3 line-clamp-3 text-xs text-slate-300">{a.sprint?.verdict ?? `Waiting for its first research sprint (${MARKET[marketOf(a)].sprintAt} NY).`}</p>
       )}
       <div className="mt-3 flex items-center justify-between gap-2 text-xs">
         <span className="text-slate-400">
@@ -316,6 +317,7 @@ function AgentPage({ id }: { id: string }) {
   if (!a) return <div className="p-6 text-slate-500">Loading…</div>;
   const v = a.validation;
   const report = v?.report;
+  const mk = marketOf(a);
   return (
     <div className="mx-auto max-w-7xl space-y-5 p-4 sm:p-6">
       <Link to="/academy" className="text-xs text-slate-500 hover:text-slate-300">← The 537 Academy</Link>
@@ -328,7 +330,7 @@ function AgentPage({ id }: { id: string }) {
             <ValidationBadge v={v} />
             {a.paused && <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] text-amber-300">Paused: {a.paused}</span>}
           </div>
-          <p className="text-sm text-slate-400">{a.persona.tagline} · {STYLE_LABEL[a.style]} · strategy v{a.version}{a.version_note ? ` (${a.version_note})` : ""}</p>
+          <p className="text-sm text-slate-400">{a.persona.tagline} · {MARKET[mk].label} · {MARKET[mk].trader(a.style)} · strategy v{a.version}{a.version_note ? ` (${a.version_note})` : ""}</p>
           <p className="mt-2 max-w-3xl text-sm text-slate-300">{a.persona.about}</p>
         </div>
         <div className="flex flex-col items-end gap-2">
@@ -347,8 +349,8 @@ function AgentPage({ id }: { id: string }) {
       </section>
 
       <div className="grid gap-5 lg:grid-cols-2">
-        <Card title="Paper equity ($10,000 start)"><EquityLine points={a.equity_series} color={a.persona.color} empty="The curve starts with the first 15-minute equity mark." /></Card>
-        <Card title="Backtest equity on OANDA history">
+        <Card title="Paper equity ($10,000 start)"><EquityLine points={a.equity_series} color={a.persona.color} empty={MARKET[mk].marks} /></Card>
+        <Card title={`Backtest equity on ${MARKET[mk].history}`}>
           {report?.equity?.length ? <EquityLine points={report.equity} color="#94a3b8" windows={report.windows} /> : <p className="text-sm text-slate-500">{v?.running ? `Validation running: ${v.running.status.replace("RUNNING: ", "")}` : "Appears after the first validation."}</p>}
         </Card>
       </div>
@@ -359,15 +361,15 @@ function AgentPage({ id }: { id: string }) {
           <CheckList checks={a.readiness.checks} />
           <p className="mt-3 text-xs text-slate-500">
             {a.readiness.automatic
-              ? "Floor 1 → 2 is automatic when every gate passes. After that, every move is your decision; live capital also needs Graham's memo."
-              : "You decide every move above Floor 2. Live capital always needs Graham's memo and your explicit authorization."}
+              ? "Floor 1 → 2 is automatic when every gate passes. After that, every move is your decision."
+              : mk === "stocks" ? "You decide: a live swing seat on L3, or more tests. Nothing moves automatically." : "You decide every move above Floor 2. Live capital always needs Graham's memo and your explicit authorization."}
           </p>
         </Card>
       </div>
 
       <Card title={`Open positions (${a.positions.length})`}>
         {a.positions.length ? (
-          <Table head={["Pair", "Side", "Units", "Entry", "Mark", "Stop", "Target", "Risk", "Opened", "Why"]}>
+          <Table head={[MARKET[mk].instrument, "Side", MARKET[mk].units, "Entry", "Mark", "Stop", "Target", "Risk", "Opened", "Why"]}>
             {a.positions.map((p) => (
               <tr key={p.id} className="border-t border-ink-800">
                 <td className="py-1.5 font-semibold text-slate-200">{pair(p.instrument)}</td>
@@ -388,7 +390,7 @@ function AgentPage({ id }: { id: string }) {
 
       <Card title="Recent paper trades">
         {a.trades.length ? (
-          <Table head={["Closed", "Pair", "Side", "Units", "Entry", "Exit", "P&L", "R", "Exit", "v"]}>
+          <Table head={["Closed", MARKET[mk].instrument, "Side", MARKET[mk].units, "Entry", "Exit", "P&L", "R", "Exit", "v"]}>
             {a.trades.map((t) => (
               <tr key={t.id} className="border-t border-ink-800">
                 <td className="py-1.5 text-slate-400">{when(epochIso(t.closed_at))}</td>
@@ -409,7 +411,7 @@ function AgentPage({ id }: { id: string }) {
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="What the paper record says">
-          <Diagnostics d={a.diagnostics} />
+          <Diagnostics d={a.diagnostics} market={mk} />
         </Card>
         <Card title={`Strategy v${a.version}`}>
           <Params version={a.versions[0]} />
@@ -430,7 +432,7 @@ function AgentPage({ id }: { id: string }) {
                 </li>
               ))}
             </ul>
-          ) : <p className="text-sm text-slate-500">{a.stage === "RESEARCH" ? "The first sprint runs tonight at 1:00 AM New York." : "Agents above Floor 1 are not modified; a strategy that needs changes goes back to research."}</p>}
+          ) : <p className="text-sm text-slate-500">{a.stage === "RESEARCH" ? `The first sprint runs tonight at ${MARKET[mk].sprintAt} New York.` : "Agents above Floor 1 are not modified; a strategy that needs changes goes back to research."}</p>}
         </Card>
         <Card title="Versions and revisions">
           <ul className="space-y-3 text-sm">
@@ -468,19 +470,23 @@ function AgentPage({ id }: { id: string }) {
 
 export function AcademyControls({ a, onDone }: { a: AgentDetail; onDone: () => void }) {
   const [confirm, setConfirm] = useState<string | null>(null);
+  const stocks = marketOf(a) === "stocks";
   const act = useAction((action: string) => api.post(`/api/academy/agents/${a.id}/${action}`, { note: "" }), onDone);
   const LABELS: Record<string, [string, string]> = {
-    pause: ["Pause", "Stop new paper entries. Open paper positions keep their stops and targets."],
-    resume: ["Resume", "Allow new paper entries again (the drawdown peak resets to today's equity)."],
-    validate: ["Re-validate", "Run the full validation on the latest OANDA history. Takes a few minutes on the Pi."],
+    pause: ["Pause", stocks ? "Skip this agent in sprints and paper updates until you resume it." : "Stop new paper entries. Open paper positions keep their stops and targets."],
+    resume: ["Resume", stocks ? "Include this agent again." : "Allow new paper entries again (the drawdown peak resets to today's equity)."],
+    validate: ["Re-validate", "Run the full validation on the latest history. Takes a few minutes on the Pi."],
     sprint: ["Sprint now", "Run tonight's research sprint now (a few minutes on the Pi). It adopts a better version, and promotes to Floor 2 only if every gate passes."],
-    auto_on: ["Nightly sprints on", "Include this agent in the 1:00 AM research sprints."],
+    auto_on: ["Nightly sprints on", "Include this agent in the nightly research sprints."],
     auto_off: ["Nightly sprints off", "Skip this agent in the nightly sprints; it keeps its current version."],
     to_demo: ["Give a Demo Desk seat", "Move to Floor 3: real orders on its own OANDA practice sub-account (fake money). Its paper positions close first."],
-    to_research: ["Send back to research", "Return to Floor 1. Any open paper positions close at the market; nightly sprints resume."],
+    to_research: ["Send back to research", stocks ? "Return to Floor 1 for more tests; its paper record is cleared and nightly sprints resume." : "Return to Floor 1. Any open paper positions close at the market; nightly sprints resume."],
     retire: ["Retire", "Retire this agent to the Alumni wall. Its records are kept; it stops trading and researching."],
   };
-  const buttons = a.stage === "RESEARCH"
+  const paused = !!a.paused || a.status === "PAUSED";
+  const buttons = stocks
+    ? a.stage === "RESEARCH" ? ["sprint", paused ? "resume" : "pause", "retire"] : a.stage === "PAPER" ? [paused ? "resume" : "pause", "to_research", "retire"] : []
+    : a.stage === "RESEARCH"
     ? ["sprint", a.auto_revise ? "auto_off" : "auto_on", "validate", "retire"]
     : a.stage === "PAPER"
       ? [a.paused ? "resume" : "pause", "to_demo", "to_research", "retire"]
@@ -496,7 +502,7 @@ export function AcademyControls({ a, onDone }: { a: AgentDetail; onDone: () => v
         {confirm && (
           <div className="space-y-3 text-sm">
             <p className="text-slate-300">{LABELS[confirm][1]}</p>
-            <p className="text-xs text-slate-500">{confirm === "to_demo" ? "Practice account only: fake money, real OANDA orders. Your live account is never touched." : "This never touches your live OANDA account."}</p>
+            <p className="text-xs text-slate-500">{confirm === "to_demo" ? "Practice account only: fake money, real OANDA orders. Your live account is never touched." : stocks ? "Paper only: this never places an order." : "This never touches your live OANDA account."}</p>
             <ErrorLine error={act.error} />
             <div className="flex justify-end gap-2">
               <button className="btn-ghost" onClick={() => setConfirm(null)}>Cancel</button>
@@ -525,10 +531,11 @@ export function CheckList({ checks }: { checks: Check[] }) {
   );
 }
 
-export function ValidationCard({ report, summary }: { report?: ValidationReport; summary: AgentDetail["validation"] }) {
+export function ValidationCard({ report, summary }: { report?: NonNullable<AgentDetail["validation"]>["report"]; summary: AgentDetail["validation"] }) {
   if (!report) {
     return <Card title="Validation (the Examiner)"><p className="text-sm text-slate-500">{summary?.running ? `Running: ${summary.running.status.replace("RUNNING: ", "")}` : "Pending: runs once market history is loaded."}</p></Card>;
   }
+  const mk = report.market === "stocks" ? "stocks" : "forex";
   const W: [string, string][] = [["in_sample", "In-sample"], ["out_of_sample", "Out-of-sample"], ["holdout", "Locked final year"]];
   const yr = (k: string) => {
     const w = report.windows[k];
@@ -555,19 +562,20 @@ export function ValidationCard({ report, summary }: { report?: ValidationReport;
         })}
       </Table>
       <p className="mt-3 text-xs text-slate-500">
-        Random-direction baselines (same entries, stops, and exits): p = {report.baseline.p_value.toFixed(2)} · Cost stress (+0.5 pip): {money(report.stress.net_usd)} · 95th pct resampled drawdown: {pct(report.monte_carlo_dd95, 1)} · Trial-adjusted Sharpe: {report.trial_adjusted_sharpe === null ? "—" : report.trial_adjusted_sharpe.toFixed(2)} ({report.trials} variants tried)
+        {MARKET[mk].baseline} (same entries, stops, and exits): p = {report.baseline.p_value.toFixed(2)} · Cost stress ({MARKET[mk].stress}): {money(report.stress.net_usd)} · {mk === "stocks" ? `1-year windows within a 10% drawdown: ${pct(report.dd_within_limit_share, 0)}` : `95th pct resampled drawdown: ${pct(report.monte_carlo_dd95, 1)}`} · Trial-adjusted Sharpe: {report.trial_adjusted_sharpe === null ? "—" : report.trial_adjusted_sharpe.toFixed(2)} ({report.trials} variants tried)
       </p>
       {Object.keys(report.by_instrument).length > 0 && (
         <p className="mt-2 text-xs text-slate-500">
-          Unseen-data results by pair: {Object.entries(report.by_instrument).map(([k, s]) => `${pair(k)} ${fmtR(s.avg_r)} (${s.trades})`).join(" · ")}
+          Unseen-data results by {MARKET[mk].instrument.toLowerCase()}: {Object.entries(report.by_instrument).map(([k, s]) => `${pair(k)} ${fmtR(s.avg_r)} (${s.trades})`).join(" · ")}
         </p>
       )}
     </Card>
   );
 }
 
-function Diagnostics({ d }: { d: AgentDetail["diagnostics"] }) {
-  const blocks: [keyof AgentDetail["diagnostics"], string][] = [["by_instrument", "By pair"], ["by_session", "By session opened"], ["by_exit", "By exit"], ["by_side", "By direction"]];
+function Diagnostics({ d, market }: { d: AgentDetail["diagnostics"]; market: "forex" | "stocks" }) {
+  const blocks = ([["by_instrument", `By ${MARKET[market].instrument.toLowerCase()}`], ["by_session", "By session opened"], ["by_exit", "By exit"], ["by_side", "By direction"]] as [keyof AgentDetail["diagnostics"], string][])
+    .filter(([k]) => Object.keys(d[k] ?? {}).length);
   if (!Object.keys(d.by_instrument).length) return <p className="text-sm text-slate-500">Breakdowns appear after the first closed paper trades. The weekly review uses them.</p>;
   return (
     <div className="space-y-4">

@@ -14,7 +14,6 @@ import HQ from "./pages/HQ";
 import Login from "./pages/Login";
 import ManagerPage from "./pages/Manager";
 import SystemPage from "./pages/System";
-import StockSwing from "./pages/StockSwing";
 
 type Live = { events: FirmEvent[]; bump: number; connected: boolean; overview: Overview | null; reloadOverview: () => void };
 const LiveContext = createContext<Live>({ events: [], bump: 0, connected: false, overview: null, reloadOverview: () => {} });
@@ -119,8 +118,6 @@ function pageRoutes() {
     <Route key="ac" path="/academy" element={<Academy />} />,
     <Route key="acid" path="/academy/:id" element={<Academy />} />,
     <Route key="acday" path="/academy/:id/:day" element={<Academy />} />,
-    <Route key="eq" path="/equity-academy" element={<StockSwing />} />,
-    <Route key="eqid" path="/equity-academy/:id" element={<StockSwing />} />,
     <Route key="an" path="/analytics" element={<Analytics />} />,
     <Route key="anscope" path="/analytics/:scope" element={<FloorAnalytics />} />,
     <Route key="cio" path="/cio" element={<Navigate to="/firm/cio" replace />} />,

@@ -38,6 +38,7 @@ export type SpaceAgent = {
 export type AcademySpaceAgent = {
   id: string;
   name: string;
+  market?: "forex" | "stocks";
   style: "day" | "swing";
   persona: { tagline: string; color: string; look?: Record<string, unknown> };
   status: string;
@@ -56,26 +57,11 @@ export type AcademySpaceAgent = {
   floor_trades?: number;
 };
 
-export type EquityClassAgent = {
-  id: string;
-  name: string;
-  persona: { tagline: string; color: string; look?: Record<string, unknown> };
-  stage: "RESEARCH" | "PAPER" | "RETIRED";
-  status: string;
-  version: number;
-  equity: number;
-  return_pct: number;
-  sprinting: string | null;
-  last_sprint: { day: string; outcome: string } | null;
-  activity: string | null;
-};
-
-export type EquityClassSpace = { available: boolean; online?: boolean; data_ready?: boolean; agents?: EquityClassAgent[] };
-
 export type AcademySpace = {
   available: boolean;
   engine?: { online: boolean; heartbeat?: number; market_open?: boolean; data_ready?: boolean; job?: { name: string; since: number } | null; last_error?: string | null; demo?: { configured: boolean; problem: string | null; seats: number } };
   agents?: AcademySpaceAgent[];
+  stock_engine?: { online?: boolean; data_ready?: boolean; job?: { name: string; since: number } | null; last_error?: string | null };
   validations_running?: { agent_id: string; status: string }[];
   prices?: { instrument: string; bid: number; ask: number; time: number; tradeable: number }[];
   latest_report?: { day: string; passed: string[]; improved: string[]; floor2: string[] } | null;
@@ -94,7 +80,6 @@ export type TreasuryBrief = {
 
 export type Space = {
   academy?: AcademySpace;
-  equity_class?: EquityClassSpace;
   treasury?: TreasuryBrief;
   today?: { events: number; runs: number; warnings: number; critical: number; cio: number; orders: number; fills: number };
   as_of: string;
