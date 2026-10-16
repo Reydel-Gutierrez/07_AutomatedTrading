@@ -1,5 +1,5 @@
 /**
- * One floor's boardroom, in depth: Core Investments (L3), the Forex Division (L2), Operations (L1),
+ * One floor's boardroom, in depth: Core Investments (L4), Equity Trading (L3), the Forex Division (L2), Operations (L1),
  * and each Academy floor. Opened over the map by clicking that floor's boardroom.
  */
 import { Link, useParams } from "react-router-dom";
@@ -28,7 +28,8 @@ type FloorData = {
 };
 
 const TITLES: Record<string, [string, string]> = {
-  core: ["Core Investments", "L3 · each manager's record, day by day, against the S&P 500"],
+  core: ["Core Investments", "L4 · Tim's and Alex's records, day by day, against the S&P 500"],
+  trading: ["Equity Trading", "L3 · the swing desk's record, day by day, against the S&P 500"],
   forex: ["Forex Division", "L2 · live chairs and the Academy pipeline that fills them"],
   operations: ["Operations", "L1 · what the firm recorded over the last two weeks"],
   "academy-demo": ["Floor 3 · Demo Desk", "Real orders on an OANDA practice account (fake money)"],
@@ -45,7 +46,7 @@ export default function FloorAnalytics() {
         <h1 className="text-xl font-semibold text-slate-50">{title}</h1>
         <p className="text-sm text-slate-400">{sub}</p>
       </div>
-      {scope === "core" ? <Core /> : scope === "operations" ? <Operations /> : scope === "forex" ? <Forex /> : scope.startsWith("academy-") ? <AcademyFloor scope={scope} /> : <Empty>Unknown floor.</Empty>}
+      {scope === "core" ? <Core ids={["tim", "alex"]} /> : scope === "trading" ? <Core ids={["max"]} /> : scope === "operations" ? <Operations /> : scope === "forex" ? <Forex /> : scope.startsWith("academy-") ? <AcademyFloor scope={scope} /> : <Empty>Unknown floor.</Empty>}
     </div>
   );
 }
@@ -59,14 +60,14 @@ function Loading({ error }: { error: { message: string } | null }) {
   return error ? <div className="text-rose-400">Could not load: {error.message}</div> : <div className="text-slate-500">Loading…</div>;
 }
 
-// -- L3 -------------------------------------------------------------------------------------------
-function Core() {
+// -- L4 and L3 (both read the managers' records) -------------------------------------------------
+function Core({ ids }: { ids: string[] }) {
   const { overview: o } = useLive();
   const { data, error } = useScope<{ managers: CoreManager[] }>("core");
   if (!data || !o) return <Loading error={error} />;
   return (
     <div className="space-y-6">
-      {data.managers.map((m) => {
+      {data.managers.filter((m) => ids.includes(m.id)).map((m) => {
         const card = o.managers.find((c) => c.id === m.id);
         const sim = m.mode === "SIM";
         const perf = card ? (sim ? card.performance.SIM : card.performance.LIVE) : null;

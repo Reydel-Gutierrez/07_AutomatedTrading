@@ -441,8 +441,10 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
     }
     case "research":
       return ["Unoccupied."];
-    case "core-board":
-      return overview ? overview.managers.map((m) => {
+    case "stock-swing":
+      return ["Not open yet. Designed in docs/firm/EQUITY_ACADEMY.md; opens when you approve the build."];
+    case "core-board": case "trading-board":
+      return overview ? overview.managers.filter((m) => (d.id === "trading-board" ? m.id === "max" : m.id !== "max")).map((m) => {
         const p = m.mode === "SIM" ? m.performance.SIM : m.performance.LIVE;
         return `${m.name} (${m.mode.toLowerCase()}): ${m.mode === "INACTIVE" ? "not trading" : `${money(m.mode === "SIM" ? m.sim.nav : m.live.nav)}, ${signedPct(p.twr)} vs S&P ${signedPct(p.benchmark)}`}`;
       }) : ["Loading…"];

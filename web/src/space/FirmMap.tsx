@@ -642,16 +642,17 @@ function Line({ x, y, w, k, v, col = "#e2e8f0", dot, size = 10 }: { x: number; y
   );
 }
 
-function CoreBoard({ d, c }: { d: Dept; c: Ctx }) {
+/** A floor of managers: Core Investments (Tim, Alex) or Equity Trading (Max). */
+function CoreBoard({ d, c, ids, title }: { d: Dept; c: Ctx; ids: string[]; title: string }) {
   const o = c.overview;
-  const ms = o?.managers ?? [];
+  const ms = (o?.managers ?? []).filter((m) => ids.includes(m.id));
   const real = ms.reduce((s, m) => s + m.live.nav, 0);
   return (
-    <Boardroom d={d} c={c} title="CORE INVESTMENTS" sub={`${ms.filter((m) => m.mode === "LIVE").length} live · click for analytics`}>
+    <Boardroom d={d} c={c} title={title} sub={`${ms.filter((m) => m.mode === "LIVE").length} live · click for analytics`}>
       {(bx, by, bw) => (
         <>
           <text x={bx + 14} y={by + 47} fontSize="21" fontWeight="700" fill="#f8fafc">{o ? money(real) : "…"}</text>
-          <text x={bx + bw - 14} y={by + 46} textAnchor="end" fontSize="9.5" fill="#94a3b8">real money with the managers</text>
+          <text x={bx + bw - 14} y={by + 46} textAnchor="end" fontSize="9.5" fill="#94a3b8">{ms.length === 1 ? "real money on this desk" : "real money with the managers"}</text>
           {["Value", "Return", "S&P"].map((h, i) => <text key={h} x={bx + bw - 14 - (2 - i) * 70} y={by + 72} textAnchor="end" fontSize="8.5" fontWeight="700" letterSpacing="1" fill="#64748b">{h.toUpperCase()}</text>)}
           {ms.map((m, i) => {
             const sim = m.mode === "SIM";
@@ -1090,6 +1091,22 @@ function Research({ d, c }: { d: Dept; c: Ctx }) {
   );
 }
 
+function StockSwing({ d, c }: { d: Dept; c: Ctx }) {
+  const [x, y, w] = d.rect;
+  const f = fy(d.rect);
+  return (
+    <Room d={d} c={c} sub="Not open yet" muted>
+      <Board x={x + 20} y={y + 58} w={180} h={72}>
+        <text x={x + 30} y={y + 76} fontSize="8.5" fontWeight="700" letterSpacing="1.6" fill="#f59e0b">CHALLENGERS FOR THE DESK</text>
+        <text x={x + 30} y={y + 96} fontSize="8.5" fill="#94a3b8">Research on daily history,</text>
+        <text x={x + 30} y={y + 110} fontSize="8.5" fill="#94a3b8">then paper beside Max.</text>
+      </Board>
+      <EmptyDesk x={x + w / 2 + 40} y={f} w={96} plate="SEAT 1" tone="#6b4430" />
+      <EmptyDesk x={x + w / 2 + 170} y={f} w={96} plate="SEAT 2" tone="#6b4430" />
+    </Room>
+  );
+}
+
 function Alumni({ d, c }: { d: Dept; c: Ctx }) {
   const [x, y] = d.rect;
   const f = fy(d.rect);
@@ -1155,7 +1172,9 @@ function DeptRoom({ d, c }: { d: Dept; c: Ctx }) {
   switch (d.id) {
     case "cio": return <CioRoom d={d} c={c} />;
     case "treasury": return <Treasury d={d} c={c} />;
-    case "core-board": return <CoreBoard d={d} c={c} />;
+    case "core-board": return <CoreBoard d={d} c={c} ids={["tim", "alex"]} title="CORE INVESTMENTS" />;
+    case "trading-board": return <CoreBoard d={d} c={c} ids={["max"]} title="EQUITY TRADING" />;
+    case "stock-swing": return <StockSwing d={d} c={c} />;
     case "forex-board": return <ForexBoard d={d} c={c} />;
     case "ops-board": return <OpsBoard d={d} c={c} />;
     case "demo-board": return <DemoBoard d={d} c={c} />;
