@@ -21,6 +21,23 @@ Rollout: built and deployed INACTIVE. The owner allocates capital and switches M
 Validation before LIVE: at least 20 trading days in SIM (a few dozen trades), zero reconcile
 breaks, and the owner's review of his trade log.
 
+### Entry guards (owner-approved 2026-10-16)
+
+Graham's first-week review showed two weaknesses: Max bought SMH back the same afternoon it
+hit its stop, and all four positions (NVDA, QQQ, SMH, XLK) were one tech bet. Two guards now
+apply to new entries only (exits are unchanged):
+
+* **Cooldown after a stop.** No re-entry in a name stopped out within the last
+  `stop_cooldown_sessions` sessions (default 3; a stop earlier the same day is session 0). Read
+  from the desk's filled sell orders whose reason starts with "stop hit".
+* **Group cap.** At most `max_per_group` positions (default 2) in names that move together:
+  tech (QQQ, XLK, SMH, NVDA, AVGO, AAPL, MSFT, META, GOOGL), broad market (SPY, DIA, IWM),
+  consumer (XLY, AMZN), financials (XLF, JPM); any other name is its own group. The mandate's
+  `groups` map overrides or extends this.
+
+Both use code defaults, so mandates written before them pick them up without a new version.
+Skipped names show in the run detail as `cooling_off` and `group_full`.
+
 ## Graham's capital pool
 
 Code: `src/firm/capital_pool.py`, tests: `tests/firm_suite/test_pool.py`.

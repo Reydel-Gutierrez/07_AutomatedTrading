@@ -13,7 +13,11 @@ anything else). Two runs per trading day:
             entries - close above the 200-day average AND RSI(2) below the entry threshold
                       (an oversold dip in an uptrend), most oversold first, up to
                       max_positions, each position_pct of the sleeve, never below the
-                      minimum trade.
+                      minimum trade. Two guards keep the book from becoming one bet:
+                      - cooldown: no re-entry in a name stopped out within the last
+                        stop_cooldown_sessions sessions (the same-day stop is session 0)
+                      - groups: at most max_per_group positions per group of names that
+                        move together (tech, financials, ...; `groups` in the mandate)
 The desk adds the owner-approved sleeve stops (new buys pause at −10% from the
 sleeve's peak or −3% in a day), the spread limit, and the daily order limit.
 """
@@ -51,6 +55,16 @@ DEFAULT_MANDATE: dict[str, Any] = {
     "rsi_entry_below": 10,
     "stop_pct": 0.06,
     "max_hold_days": 10,
+    "stop_cooldown_sessions": 3,
+    "max_per_group": 2,
+}
+
+# Names that move together. A symbol not listed is its own group.
+GROUPS: dict[str, str] = {
+    **dict.fromkeys(["SPY", "DIA", "IWM"], "broad market"),
+    **dict.fromkeys(["QQQ", "XLK", "SMH", "NVDA", "AVGO", "AAPL", "MSFT", "META", "GOOGL"], "tech"),
+    **dict.fromkeys(["XLY", "AMZN"], "consumer"),
+    **dict.fromkeys(["XLF", "JPM"], "financials"),
 }
 
 
@@ -66,12 +80,16 @@ def validate_mandate(m: Mapping[str, Any]) -> list[str]:
         ("max_orders_per_day", 1, 40), ("trend_sma_days", 50, 300), ("exit_sma_days", 2, 20), ("rsi_days", 2, 14),
         ("rsi_entry_below", 1, 40), ("stop_pct", 0.01, 0.2), ("max_hold_days", 2, 40),
         ("sleeve_drawdown_pause", 0.03, 0.5), ("daily_loss_pause", 0.01, 0.2),
+        ("stop_cooldown_sessions", 0, 20), ("max_per_group", 1, 10),
     )
     for key, lo, hi in checks:
         if key in m and m[key] is not None and not (lo <= float(m[key]) <= hi):
             problems.append(f"{key} must be between {lo} and {hi}")
     if float(m.get("position_pct", 0.25)) * int(m.get("max_positions", 4)) > 1.0001:
         problems.append("max_positions × position_pct cannot exceed 100% of the sleeve")
+    groups = m.get("groups")
+    if groups is not None and not (isinstance(groups, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in groups.items())):
+        problems.append("groups must map ticker symbols to group names")
     try:
         for t in [*(m.get("run_times_et") or []), m.get("entry_time_et", "15:15")]:
             parse_hhmm(str(t))
@@ -151,8 +169,17 @@ class Max:
             # First run (or new names): fetch daily history once rather than trade on a partial picture.
             firm.market.refresh_bars(universe)
             closes = firm.market.recent_closes(universe, sessions=need)
+        since = (firm.clock() - timedelta(days=30)).isoformat()
+        stopped: dict[str, str] = {}
+        for r in firm.db.query(
+            "SELECT symbol, created_at FROM orders WHERE manager_id = ? AND book = ? AND side = 'sell' AND status = 'FILLED'"
+            " AND reason LIKE 'stop hit%' AND created_at >= ? ORDER BY created_at",
+            (ID, book, since),
+        ):
+            stopped[r["symbol"]] = r["created_at"]
         return {
             "closes": closes,
+            "stopped_out": stopped,
             "last_bar_dates": {s: d for s, d in ((s, firm.market.last_bar_date(s)) for s in self.symbols(mandate)) if d},
             "positions": {s: {"avg_cost": float(p["cost"] / p["qty"]) if p["qty"] > 0 else 0.0, "opened_at": p["opened_at"]} for s, p in positions.items()},
         }
@@ -214,9 +241,15 @@ class Max:
 
         nav = view.cash + sum((q * view.price(s) for s, q in held.items()), ZERO)  # type: ignore[operator]
         slots = int(m.get("max_positions", 4)) - len(held)
+        cooldown = int(m.get("stop_cooldown_sessions", 3))
+        stopped: Mapping[str, str] = ctx.extras.get("stopped_out") or {}
+        cooling = {
+            s: n for s, n in ((s, sessions_since(datetime.fromisoformat(ts).astimezone(local.tzinfo).date(), today)) for s, ts in stopped.items())
+            if n < cooldown
+        }
         candidates = []
         for sym in m.get("universe") or []:
-            if sym in held or not view.price(sym):
+            if sym in held or not view.price(sym) or sym in cooling:
                 continue
             xs = series(sym)
             slow = sma(xs, int(m.get("trend_sma_days", 200)))
@@ -226,18 +259,40 @@ class Max:
             if xs[-1] > slow and r < float(m.get("rsi_entry_below", 10)):
                 candidates.append((r, sym, xs[-1], slow))
         candidates.sort()
+        group_of = {**GROUPS, **(m.get("groups") or {})}
+        per_group = int(m.get("max_per_group", 2))
+        in_group: dict[str, int] = {}
+        for s in held:
+            in_group[group_of.get(s, s)] = in_group.get(group_of.get(s, s), 0) + 1
+        allowed, crowded = [], {}
+        for c in candidates:
+            g = group_of.get(c[1], c[1])
+            if in_group.get(g, 0) >= per_group:
+                crowded[c[1]] = g
+                continue
+            allowed.append(c)
+            if len(allowed) <= max(slots, 0):
+                in_group[g] = in_group.get(g, 0) + 1
+        if cooling:
+            detail["cooling_off"] = {s: f"stopped out {n} session(s) ago" for s, n in sorted(cooling.items())}
+        if crowded:
+            detail["group_full"] = crowded
         lacking = sorted(s for s in (m.get("universe") or []) if len(stored.get(s) or []) < int(m.get("trend_sma_days", 200)))
         detail["missing_history"] = lacking
         detail["candidates"] = [{"symbol": s, "rsi": round(r, 1), "price": round(p, 2), "sma200": round(sl, 2)} for r, s, p, sl in candidates[:8]]
-        if slots <= 0 or not candidates:
-            why = "all position slots are in use" if slots <= 0 else "no oversold dips in uptrends today"
+        if slots <= 0 or not allowed:
+            why = (
+                "all position slots are in use" if slots <= 0
+                else f"today's dips are all in full groups ({', '.join(f'{s}: {g}' for s, g in crowded.items())})" if crowded
+                else "no oversold dips in uptrends today"
+            )
             if lacking:
                 why += f" (no price history yet for {', '.join(lacking[:6])}{'…' if len(lacking) > 6 else ''})"
             return RunResult(f"Holding {', '.join(sorted(held)) or 'cash'}: {why}.", detail=detail, activity="holding")
         size = cents(nav * D(m.get("position_pct", 0.25)))
         cash = view.cash
         intents = []
-        for r, sym, px, _ in candidates[:slots]:
+        for r, sym, px, _ in allowed[:slots]:
             amt = cents(min(size, cash))
             if amt < min_trade:
                 break
@@ -245,6 +300,6 @@ class Max:
             intents.append(OrderIntent(ctx.manager_id, ctx.book, sym, "buy", notional=amt, reason=f"pullback entry: RSI(2) {r:.1f} in an uptrend; stop {stop:.2f} ({stop_pct:.0%}), target the 5-day average"))
             cash -= amt
         if not intents:
-            return RunResult(f"Signals on {', '.join(s for _, s, _, _ in candidates[:slots])}, but free cash is below the ${min_trade} minimum trade.", detail=detail, activity="holding")
+            return RunResult(f"Signals on {', '.join(s for _, s, _, _ in allowed[:slots])}, but free cash is below the ${min_trade} minimum trade.", detail=detail, activity="holding")
         names = ", ".join(f"${i.notional} {i.symbol}" for i in intents)
         return RunResult(f"Entering pullbacks: {names}; each with a {stop_pct:.0%} stop.", intents=intents, detail=detail, activity="entering")

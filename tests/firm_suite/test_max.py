@@ -123,3 +123,40 @@ def test_first_run_fetches_missing_history(firm):
     assert calls == [sorted(SMALL["universe"])]
     r = Max().run(ctx(CLOSE_ET, closes={"UPFLAT": UPFLAT}))
     assert not r.intents and r.detail["missing_history"] == ["DOWN", "UPDIP"] and "no price history yet" in r.summary
+
+
+def test_no_reentry_right_after_a_stop():
+    # Stopped out this morning (session 0): the 15:15 run must not buy it back.
+    c = ctx(CLOSE_ET)
+    c.extras["stopped_out"] = {"UPDIP": "2026-10-13T14:35:00+00:00"}
+    r = Max().run(c)
+    assert not r.intents and "UPDIP" in r.detail["cooling_off"]
+    # Three sessions later it is fair game again.
+    c.extras["stopped_out"] = {"UPDIP": "2026-10-08T14:35:00+00:00"}
+    assert [i.symbol for i in Max().run(c).intents] == ["UPDIP"]
+
+
+def test_at_most_max_per_group_names_that_move_together():
+    m = {**SMALL, "universe": ["UPDIP", "DIP2", "DIP3", "UPFLAT"], "groups": {"UPDIP": "chips", "DIP2": "chips", "DIP3": "chips"}, "max_per_group": 2}
+    closes = {**CLOSES, "DIP2": [x * 1.5 for x in UPDIP], "DIP3": [x * 2 for x in UPDIP]}
+    c = ctx(CLOSE_ET, closes=closes)
+    c = ManagerContext(**{**c.__dict__, "mandate": m})
+    r = Max().run(c)
+    assert len(r.intents) == 2 and r.detail["group_full"] == {next(s for s in ("UPDIP", "DIP2", "DIP3") if s not in {i.symbol for i in r.intents}): "chips"}
+    # Already holding two chips names: the third is refused even with free slots.
+    pos = {s: {"avg_cost": closes[s][-1], "opened_at": "2026-10-12T19:20:00+00:00"} for s in ("DIP2", "DIP3")}
+    held = ManagerContext(**{**ctx(CLOSE_ET, closes=closes, holdings={"DIP2": "1", "DIP3": "1"}, positions=pos).__dict__, "mandate": m})
+    r2 = Max().run(held)
+    assert not any(i.side == "buy" for i in r2.intents)
+
+
+def test_stop_outs_are_read_from_filled_stop_orders(firm):
+    _, m = firm.registry.mandate("max")
+    with firm.db.tx() as conn:
+        conn.execute(
+            "INSERT INTO orders (client_ref, book, manager_id, symbol, side, quantity, status, reason, created_at, updated_at)"
+            " VALUES ('t1', 'SIM', 'max', 'SMH', 'sell', '1', 'FILLED', 'stop hit: 1 ≤ 2', ?, ?)",
+            ("2026-10-13T14:35:00+00:00", "2026-10-13T14:35:00+00:00"),
+        )
+    firm.market.refresh_bars = lambda syms, days=400: 0
+    assert Max().inputs(firm, m)["stopped_out"] == {"SMH": "2026-10-13T14:35:00+00:00"}
