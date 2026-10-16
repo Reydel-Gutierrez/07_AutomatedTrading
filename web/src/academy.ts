@@ -95,6 +95,7 @@ export type AgentCard = {
   version_note: string | null;
   auto_revise: boolean;
   trials: number;
+  risk_pct?: number | null;
   equity: number;
   cash: number | null;
   return_pct: number;

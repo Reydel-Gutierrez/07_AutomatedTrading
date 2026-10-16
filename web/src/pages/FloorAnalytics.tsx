@@ -9,6 +9,7 @@ import { Card, Empty, Stat } from "../components/ui";
 import { useResource } from "../hooks";
 import { money, pct, signedPct, tone } from "../format";
 import { CheckList } from "./Academy";
+import ForexPlanner from "./ForexPlanner";
 
 type Daily = { date: string; nav: number; flow: number; return: number; spy: number | null };
 type BookStats = { daily: Daily[]; days_tracked: number; max_drawdown: number; current_drawdown: number; best_day: Daily | null; worst_day: Daily | null; up_days: number; down_days: number };
@@ -168,12 +169,13 @@ function Operations() {
 }
 
 // -- L2 -------------------------------------------------------------------------------------------
-type Pipeline = { available: boolean; engine_online?: boolean; counts?: Record<string, number>; floors?: Record<string, { id: string; name: string; color: string; version: number; style: string; return_pct: number; trades: number; validation: string | null; unseen_avg_r: number | null; readiness: string }[]> };
+type Pipeline = { available: boolean; engine_online?: boolean; counts?: Record<string, number>; floors?: Record<string, { id: string; market?: "forex" | "stocks"; name: string; color: string; version: number; style: string; return_pct: number; trades: number; validation: string | null; unseen_avg_r: number | null; readiness: string }[]> };
 
 function Forex() {
   const { data, error } = useScope<{ academy: Pipeline; chairs: number; live_chairs_filled: number }>("forex");
   if (!data) return <Loading error={error} />;
   const ac = data.academy;
+  const fx = (st: string) => (ac.floors?.[st] ?? []).filter((x) => x.market !== "stocks").length;
   const chairs = [["Day Chair 1", "Intraday, flat by Friday"], ["Day Chair 2", "Intraday, flat by Friday"], ["Swing Chair 1", "Multi-day, weekend rules"], ["Swing Chair 2", "Multi-day, weekend rules"]];
   return (
     <div className="space-y-6">
@@ -181,7 +183,7 @@ function Forex() {
         <Card><Stat label="Live chairs filled" value={`${data.live_chairs_filled} of ${data.chairs}`} /></Card>
         <Card><Stat label="Live forex trading" value={<span className="text-amber-300">Not authorized</span>} sub="Only you can authorize it" /></Card>
         <Card><Stat label="Academy engine" value={ac.engine_online ? "Online" : "Offline"} /></Card>
-        <Card><Stat label="Candidates past research" value={(ac.counts?.PAPER ?? 0) + (ac.counts?.DEMO ?? 0)} sub={`${ac.counts?.RESEARCH ?? 0} still in research`} /></Card>
+        <Card><Stat label="Candidates past research" value={fx("PAPER") + fx("DEMO")} sub={`${fx("RESEARCH")} still in research`} /></Card>
       </div>
       <Card title="The chairs">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -195,16 +197,17 @@ function Forex() {
         </div>
         <p className="mt-3 text-xs text-slate-500">A chair is filled only after an agent clears the Demo Desk, Graham writes a memo, and you authorize the agent and its capital.</p>
       </Card>
-      <Card title="Academy pipeline" action={<Link className="text-xs text-gold-400 hover:underline" to="/academy">Open the Academy →</Link>}>
+      <ForexPlanner />
+      <Card title="Academy pipeline (forex)" action={<Link className="text-xs text-gold-400 hover:underline" to="/academy">Open the Academy →</Link>}>
         {!ac.available || !ac.floors ? <Empty>The Forex engine has not created the Academy yet.</Empty> : (
           <div className="space-y-4">
             {(["DEMO", "PAPER", "RESEARCH"] as const).map((st) => (
               <div key={st}>
-                <div className="label mb-1">{{ DEMO: "Floor 3 · Demo Desk", PAPER: "Floor 2 · Paper trading", RESEARCH: "Floor 1 · Research" }[st]} ({ac.floors![st]?.length ?? 0})</div>
-                {(ac.floors![st] ?? []).length ? (
+                <div className="label mb-1">{{ DEMO: "Floor 3 · Demo Desk", PAPER: "Floor 2 · Paper trading", RESEARCH: "Floor 1 · Research" }[st]} ({(ac.floors![st] ?? []).filter((x) => x.market !== "stocks").length})</div>
+                {(ac.floors![st] ?? []).filter((x) => x.market !== "stocks").length ? (
                   <table className="w-full text-sm">
                     <tbody>
-                      {ac.floors![st].map((a) => (
+                      {ac.floors![st].filter((x) => x.market !== "stocks").map((a) => (
                         <tr key={a.id} className="border-t border-ink-800">
                           <td className="py-1.5"><span className="mr-2 inline-block h-2 w-2 rounded-full" style={{ background: a.color }} /><Link to={`/firm/${a.id}`} className="text-gold-400 hover:underline">{a.name}</Link> <span className="text-xs text-slate-500">v{a.version} · {a.style}</span></td>
                           <td className="text-right text-xs">{st === "RESEARCH" ? <span className={tone(a.unseen_avg_r)}>{fmtR(a.unseen_avg_r, 3)} unseen</span> : <span className={tone(a.return_pct)}>{signedPct(a.return_pct)}</span>}</td>

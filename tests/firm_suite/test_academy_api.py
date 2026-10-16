@@ -47,6 +47,7 @@ def test_views_read_the_engine_records(academy_db):
     assert ov["available"] and {a["id"] for a in ov["agents"]} == {"atlas", "kestrel", "mira", "orion", "sable", "halcyon", "vega"}
     k = next(a for a in ov["agents"] if a["id"] == "kestrel")
     assert k["equity"] == 10_050 and k["return_pct"] == pytest.approx(0.005) and k["paper"]["trades"] == 1
+    assert k["market"] == "forex" and k["risk_pct"] == 0.005  # the planner sizes from each agent's own risk per trade
     assert k["stage"] == "RESEARCH" and k["readiness"]["eligible"] is False and k["readiness"]["automatic"] is True
     # above Floor 1, the owner's decision is a gate that never passes by itself
     academy_db.set_stage("mira", "PAPER", by="test", reason="test")

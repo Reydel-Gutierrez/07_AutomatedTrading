@@ -189,6 +189,7 @@ def _card(conn: sqlite3.Connection, a: sqlite3.Row, engine: dict[str, Any]) -> d
         "sprint": {k: v for k, v in (sprint or {}).items() if k != "summary"} | {"verdict": ((sprint or {}).get("summary") or {}).get("verdict")} if sprint else None,
         "sprinting": sprinting if sprinting.get("running") else None,
         "version": a["current_version"], "version_note": ver["note"] if ver else None, "auto_revise": bool(a["auto_revise"]), "trials": a["trials"],
+        "risk_pct": (json.loads(ver["envelope_json"]) or {}).get("risk_pct") if ver else None,
         "equity": round(equity, 2), "cash": round(acct["cash"], 2) if acct else None, "return_pct": equity / START_CAPITAL - 1, "max_drawdown": dd,
         "open_positions": len(positions), "paper": paper_all, "paper_current_version": paper_cur,
         "validation": val, "activity": live.get("activity"), "last_event": dict(last) if last else None,
