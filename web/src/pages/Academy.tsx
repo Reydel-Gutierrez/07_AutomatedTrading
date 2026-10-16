@@ -46,6 +46,9 @@ function AcademyHome() {
             Forex agents climb three floors on evidence: research on OANDA history (polished by a sprint every night), paper trading on live
             prices, then real orders on an OANDA practice account. Live capital needs Graham's memo and your authorization.
           </p>
+          <p className="mt-1 text-sm text-slate-400">
+            Stock agents have their own class on Floors 1 and 2: <Link to="/equity-academy" className="text-gold-400 hover:underline">Stock Swing Class →</Link>
+          </p>
         </div>
         <EngineBadge engine={data.engine} />
       </header>

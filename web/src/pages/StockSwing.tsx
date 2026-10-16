@@ -51,14 +51,14 @@ function Home() {
   if (error) return <div className="p-6"><Empty>{error.message}</Empty></div>;
   if (!data) return <div className="p-6 text-slate-500">Opening the Stock Swing Class…</div>;
   if (!data.available) {
-    return <div className="mx-auto max-w-3xl p-6"><Card title="Stock Swing Class"><p className="text-sm text-slate-300">{data.reason}</p></Card></div>;
+    return <div className="mx-auto max-w-3xl p-6"><Card title="The 537 Academy · Stock Swing Class"><p className="text-sm text-slate-300">{data.reason}</p></Card></div>;
   }
   const e = data.engine;
   return (
     <div className="mx-auto max-w-7xl space-y-6 p-4 md:p-6">
-      <Card title="Stock Swing Class" action={<span className={`text-xs ${e?.online ? "text-emerald-400" : "text-amber-400"}`}>{e?.online ? "engine online" : "engine offline"}</span>}>
+      <Card title="The 537 Academy · Stock Swing Class" action={<span className={`text-xs ${e?.online ? "text-emerald-400" : "text-amber-400"}`}>{e?.online ? "engine online" : "engine offline"}</span>}>
         <p className="text-sm text-slate-300">
-          Four challengers for a live swing seat on the Equity Trading floor. Floor 1: every night at 1:30 AM New York each one tries
+          The Academy's stock class: four agents developing swing strategies for a live seat on the Equity Trading floor's swing desk. Floor 1: every night at 1:30 AM New York each one tries
           variants of its strategy on years of daily US stock history and must pass every gate. Floor 2: a $10,000 paper record on new
           daily bars, compared with Max's desk over the same days. After about four good weeks you decide: a live seat, or more tests.
         </p>
@@ -142,7 +142,7 @@ function Controls({ a, onDone }: { a: Agent; onDone: () => void }) {
   if (!buttons.length) return null;
   return (
     <div className="mt-3 flex flex-wrap items-center gap-2">
-      {buttons.map(([action, label]) => <button key={action} className="btn-secondary text-xs" disabled={act.pending} onClick={() => act.run(action)}>{label}</button>)}
+      {buttons.map(([action, label]) => <button key={action} className="btn-ghost text-xs" disabled={act.pending} onClick={() => act.run(action)}>{label}</button>)}
       {msg && <span className="text-xs text-slate-400">{msg}</span>}
       <ErrorLine error={act.error} />
     </div>

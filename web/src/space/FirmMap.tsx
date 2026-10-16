@@ -837,11 +837,11 @@ function ResearchBoard({ d, c }: { d: Dept; c: Ctx }) {
   );
 }
 
-function ManagerRoom({ d, c, id }: { d: Dept; c: Ctx; id: "tim" | "alex" | "max" }) {
+function ManagerRoom({ d, c, id }: { d: Dept; c: Ctx; id: "tim" | "alex" }) {
   const [x, y, w] = d.rect;
   const f = fy(d.rect);
   const unbuilt = c.space.agents.find((a) => a.id === id)?.implemented ? undefined : PHASE[id];
-  const sub = { tim: "Core ETF portfolio", alex: "Strategic growth stocks", max: "Short-term swing trades" }[id];
+  const sub = { tim: "Core ETF portfolio", alex: "Strategic growth stocks" }[id];
   return (
     <Room d={d} c={c} sub={sub}>
       {id === "tim" && (
@@ -861,17 +861,6 @@ function ManagerRoom({ d, c, id }: { d: Dept; c: Ctx; id: "tim" | "alex" | "max"
           </g>
           <CityWindow x={x + w - 110} y={y + 58} w={90} h={90} />
           <Plant x={x + 24} y={f} s={1} />
-        </>
-      )}
-      {id === "max" && (
-        <>
-          <Board x={x + 150} y={y + 14} w={w - 170} h={18}>
-            <text x={x + 150 + (w - 170) / 2} y={y + 27} textAnchor="middle" fontSize="8.5" fill="#f59e0b" letterSpacing="2.2" opacity={c.states.max.key === "inactive" ? 0.35 : 0.85}>
-              {c.states.max.key === "inactive" ? "MARKET TAPE OFFLINE" : c.states.max.symbols.length ? c.states.max.symbols.map((s) => `${s.side ? `${s.side.toUpperCase()} ` : ""}${s.symbol}`).join(" · ") : "SWING DESK"}
-            </text>
-          </Board>
-          <CityWindow x={x + 20} y={y + 90} w={80} h={80} />
-          <Plant x={x + w - 22} y={f} s={1.1} />
         </>
       )}
       <Seat id={id} x={x + w / 2 + 10} floorY={f} c={c} phase={unbuilt} />
@@ -1123,30 +1112,45 @@ function EquityFigure({ a, x, floorY }: { a: EquityClassAgent; x: number; floorY
   );
 }
 
-function StockSwing({ d, c }: { d: Dept; c: Ctx }) {
+/** The Stock Swing Class on one Academy floor (research or paper); the room opens the class page. */
+function StockClass({ d, c, stage, seats, plate }: { d: Dept; c: Ctx; stage: EquityClassAgent["stage"]; seats: number; plate: string }) {
   const [x, , w] = d.rect;
   const f = fy(d.rect);
   const eq = c.space.equity_class;
-  const agents = (eq?.agents ?? []).filter((a) => a.stage !== "RETIRED");
-  const n = Math.max(agents.length, 4);
+  const agents = (eq?.agents ?? []).filter((a) => a.stage === stage);
+  const n = Math.max(agents.length, seats);
   const step = (w - 20) / n;
-  const paper = agents.filter((a) => a.stage === "PAPER").length;
-  const sub = !eq?.available ? "Engine not running" : `${agents.length - paper} in research · ${paper} on paper`;
+  const sub = !eq?.available ? "Engine not running" : stage === "PAPER" ? `${agents.length} paper trading on new daily bars` : `${agents.length} agents in research`;
   return (
     <Room d={d} c={c} sub={sub} muted={!eq?.available}>
       {agents.map((a, i) => <EquityFigure key={a.id} a={a} x={x + 10 + step * (i + 0.5)} floorY={f} />)}
-      {Array.from({ length: n - agents.length }, (_, i) => <EmptyDesk key={i} x={x + 10 + step * (agents.length + i + 0.5)} y={f} w={96} plate="OPEN DESK" tone="#4a3b30" />)}
+      {Array.from({ length: n - agents.length }, (_, i) => <EmptyDesk key={i} x={x + 10 + step * (agents.length + i + 0.5)} y={f} w={96} plate={plate} tone="#4a3b30" />)}
     </Room>
   );
 }
 
-function LiveSeats({ d, c }: { d: Dept; c: Ctx }) {
-  const [x, , w] = d.rect;
+/** L3: the live swing desk, an open trading floor. Max holds seat 1; the rest wait for Stock Swing Class graduates. */
+function SwingDesk({ d, c }: { d: Dept; c: Ctx }) {
+  const [x, y, w] = d.rect;
   const f = fy(d.rect);
+  const seats = 4;
+  const step = (w - 40) / seats;
+  const tape = c.states.max.key === "inactive" ? "MARKET TAPE OFFLINE" : c.states.max.symbols.length ? c.states.max.symbols.map((s) => `${s.side ? `${s.side.toUpperCase()} ` : ""}${s.symbol}`).join(" · ") : "SWING DESK · LIVE";
+  const unbuilt = c.space.agents.find((a) => a.id === "max")?.implemented ? undefined : PHASE.max;
   return (
-    <Room d={d} c={c} sub="0 of 2 taken" muted>
-      <EmptyDesk x={x + w / 4 + 4} y={f} w={70} plate="SEAT 1" tone="#6b4430" />
-      <EmptyDesk x={x + (3 * w) / 4 - 4} y={f} w={70} plate="SEAT 2" tone="#6b4430" />
+    <Room d={d} c={c} sub={`1 of ${seats} live seats taken`}>
+      <Board x={x + 20} y={y + 14} w={w - 40} h={18}>
+        <text x={x + w / 2} y={y + 27} textAnchor="middle" fontSize="8.5" fill="#f59e0b" letterSpacing="2.2" opacity={c.states.max.key === "inactive" ? 0.35 : 0.85}>{tape}</text>
+      </Board>
+      {Array.from({ length: seats - 1 }, (_, i) => (
+        <g key={i}>
+          <EmptyDesk x={x + 20 + step * (i + 1.5)} y={f} w={150} screens={2} plate={`LIVE SEAT ${i + 2}`} tone="#4a3b30" />
+        </g>
+      ))}
+      <Seat id="max" x={x + 20 + step * 0.5} floorY={f} c={c} phase={unbuilt} />
+      <g fontFamily="Inter, sans-serif" pointerEvents="none">
+        <text x={x + 20 + step * 0.5} y={f - 4} textAnchor="middle" fontSize="7.5" fontWeight="700" letterSpacing="1.4" fill="#cdb27a" opacity=".8">LIVE SEAT 1</text>
+      </g>
     </Room>
   );
 }
@@ -1218,14 +1222,15 @@ function DeptRoom({ d, c }: { d: Dept; c: Ctx }) {
     case "treasury": return <Treasury d={d} c={c} />;
     case "core-board": return <CoreBoard d={d} c={c} ids={["tim", "alex"]} title="CORE INVESTMENTS" />;
     case "trading-board": return <CoreBoard d={d} c={c} ids={["max"]} title="EQUITY TRADING" />;
-    case "stock-swing": return <StockSwing d={d} c={c} />;
-    case "live-seats": return <LiveSeats d={d} c={c} />;
+    case "stock-research": return <StockClass d={d} c={c} stage="RESEARCH" seats={4} plate="OPEN DESK" />;
+    case "stock-hall": return <StockClass d={d} c={c} stage="PAPER" seats={4} plate="OPEN SEAT" />;
     case "forex-board": return <ForexBoard d={d} c={c} />;
     case "ops-board": return <OpsBoard d={d} c={c} />;
     case "demo-board": return <DemoBoard d={d} c={c} />;
     case "hall-board": return <HallBoard d={d} c={c} />;
     case "research-board": return <ResearchBoard d={d} c={c} />;
-    case "tim": case "alex": case "max": return <ManagerRoom d={d} c={c} id={d.id} />;
+    case "tim": case "alex": return <ManagerRoom d={d} c={c} id={d.id} />;
+    case "max": return <SwingDesk d={d} c={c} />;
     case "market-room": return <MarketRoom d={d} c={c} />;
     case "day-1": case "day-2": case "swing-1": case "swing-2": return <ChairRoom d={d} c={c} />;
     case "lobby": return <Lobby d={d} c={c} />;

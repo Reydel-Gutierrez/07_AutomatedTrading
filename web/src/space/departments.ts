@@ -8,10 +8,10 @@ export type FloorId = "exec" | "core" | "trading" | "forex" | "lobby" | "academy
 export type DeptId =
   | "cio" | "treasury"
   | "tim" | "alex" | "core-board"
-  | "max" | "stock-swing" | "live-seats" | "trading-board"
+  | "max" | "trading-board"
   | "market-room" | "day-1" | "day-2" | "swing-1" | "swing-2" | "forex-board"
   | "lobby" | "records" | "operations" | "ops-board"
-  | "lab" | "studio" | "research-board" | "research" | "alumni" | "demo-desk" | "demo-board" | "hall" | "hall-board";
+  | "lab" | "studio" | "stock-research" | "stock-hall" | "research-board" | "research" | "alumni" | "demo-desk" | "demo-board" | "hall" | "hall-board";
 
 /** Each floor's boardroom opens that floor's analytics. */
 export type AnalyticsScope = "core" | "trading" | "forex" | "operations" | "academy-demo" | "academy-hall" | "academy-research";
@@ -37,26 +37,27 @@ export type Dept = {
 export type Floor = { id: FloorId; building: "HQ Tower" | "The 537 Academy"; level: string; name: string; division: string; rect: Rect };
 
 // -- geometry --------------------------------------------------------------------------------
-export const WORLD = { w: 3720, h: 1750 };
+export const WORLD = { w: 4360, h: 1750 };
 export const GROUND = 1650;
 export const SLAB = 12;
 export const TOWER = { x0: 120, x1: 1620, top: 200 };
-export const ACADEMY = { x0: 1760, x1: 3500, top: 780 };
+export const ACADEMY = { x0: 1760, x1: 4140, top: 780 };
 const TW = TOWER.x1 - TOWER.x0;
 const AW = ACADEMY.x1 - ACADEMY.x0;
-const BOARD_X = { hq: 1200, academy: 3080 }; // every floor's boardroom sits at the east end
+const BOARD_X = { hq: 1200, academy: 3720 }; // every floor's boardroom sits at the east end
+const STOCK_X = 3080; // the Stock Swing Class's column in the Academy (Floors 1 and 2)
 const BOARD_W = 420;
 const FH = 290; // floor height (including its slab)
 
 export const FLOORS: Floor[] = [
   { id: "exec", building: "HQ Tower", level: "L5", name: "Executive", division: "Executive level", rect: [TOWER.x0, 200, TW, FH] },
   { id: "core", building: "HQ Tower", level: "L4", name: "Core Investments", division: "Core Investments Division · Robinhood · long-term US stocks & ETFs", rect: [TOWER.x0, 490, TW, FH] },
-  { id: "trading", building: "HQ Tower", level: "L3", name: "Equity Trading", division: "Equity Trading Desk · Robinhood · short-term US stock & ETF swing trades", rect: [TOWER.x0, 780, TW, FH] },
+  { id: "trading", building: "HQ Tower", level: "L3", name: "Equity Trading", division: "Equity Trading · Robinhood · live swing traders only (real money)", rect: [TOWER.x0, 780, TW, FH] },
   { id: "forex", building: "HQ Tower", level: "L2", name: "Forex Division", division: "Forex Division · OANDA · four live chairs", rect: [TOWER.x0, 1070, TW, FH] },
   { id: "lobby", building: "HQ Tower", level: "L1", name: "Lobby & Operations", division: "Ground floor · headquarters, records, operations", rect: [TOWER.x0, 1360, TW, FH] },
   { id: "academy-demo", building: "The 537 Academy", level: "A3", name: "Demo Desk", division: "Academy Floor 3 · real orders on an OANDA practice account", rect: [ACADEMY.x0, 780, AW, FH] },
-  { id: "academy-hall", building: "The 537 Academy", level: "A2", name: "Paper Trading", division: "Academy Floor 2 · paper trading on live OANDA prices", rect: [ACADEMY.x0, 1070, AW, FH] },
-  { id: "academy-research", building: "The 537 Academy", level: "A1", name: "Research", division: "Academy Floor 1 · nightly research sprints on OANDA history", rect: [ACADEMY.x0, 1360, AW, FH] },
+  { id: "academy-hall", building: "The 537 Academy", level: "A2", name: "Paper Trading", division: "Academy Floor 2 · paper trading: forex on live OANDA prices, stocks on new daily bars", rect: [ACADEMY.x0, 1070, AW, FH] },
+  { id: "academy-research", building: "The 537 Academy", level: "A1", name: "Research", division: "Academy Floor 1 · nightly research sprints: forex on OANDA history, stocks on daily US history", rect: [ACADEMY.x0, 1360, AW, FH] },
 ];
 
 export const floorById = (id: FloorId) => FLOORS.find((f) => f.id === id)!;
@@ -108,9 +109,7 @@ export const DEPTS: Dept[] = [
   manager("alex", "Alex", "Strategic Growth Manager: systematic momentum stock selection, each candidate checked by an AI research desk.", 660, "core", 540),
   boardroom("core-board", "Core Boardroom", "core", BOARD_X.hq, "core", "Core Investments at a glance: Tim's and Alex's value, return against the S&P 500 over the same days, and mode."),
   // L3 Equity Trading: short-term money
-  manager("max", "Max", "Swing Desk: Max runs the firm's stock swing-trading seat (a trend-pullback strategy with per-trade stops, a cooldown after a stop, and at most two names per correlated group).", 120, "trading", 380),
-  { id: "stock-swing", name: "Stock Swing Class", floor: "trading", rect: row("trading", 500, 520), open: "/equity-academy", purpose: "Four equity Academy challengers (Juniper, Rook, Meridian, Talon), each on its own list of US names. Floor 1: a research sprint every night at 1:30 AM New York on years of daily history, with the same kind of gates as the forex Academy. Floor 2: a $10,000 paper record on new daily bars, compared with Max's desk over the same days. Click the room for the class.", folders: [{ label: "Stock Swing Class", path: "/equity-academy", note: "Agents, gates, sprints, and paper records" }] },
-  { id: "live-seats", name: "Live swing seats", floor: "trading", rect: row("trading", 1020, 180), purpose: "Two seats for challengers that prove themselves on paper. A seat trades real money with its own allocation, beside Max's desk.", later: "You give a seat (or more tests) after about four good weeks on Floor 2. The seat itself is built when the first challenger gets there.", folders: [{ label: "Stock Swing Class", path: "/equity-academy", note: "Who is closest to a seat" }] },
+  { ...manager("max", "Max", "The live swing desk: real-money swing traders only. Max holds seat 1 (trend-pullback swing trades with per-trade stops, a cooldown after a stop, and at most two names per correlated group). The other seats are for Stock Swing Class graduates, given only by you.", 120, "trading", 1080), name: "Live swing desk" },
   boardroom("trading-board", "Trading Boardroom", "trading", BOARD_X.hq, "trading", "Equity Trading at a glance: the swing desk's value, return against the S&P 500 over the same days, and mode."),
   // L2 Forex
   { id: "market-room", name: "Market room", floor: "forex", rect: row("forex", 120, 360), purpose: "Live OANDA rates, the Tokyo, London, and New York sessions, and the desk heads' workstations for the day and swing desks.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Rates, agents, and validation evidence" }] },
@@ -127,14 +126,16 @@ export const DEPTS: Dept[] = [
   // Academy A3: Floor 3 (OANDA Demo Desk), the Research Lead, the Alumni wall
   { id: "demo-desk", name: "Demo Desk", floor: "academy-demo", rect: row("academy-demo", ACADEMY.x0, 700), purpose: "Floor 3: two seats trading real orders on an OANDA practice account (fake money), each in its own sub-account. After 4+ good weeks here, Graham writes a memo and you decide on a live chair.", later: "Opens once the OANDA practice account is set up. You give a Floor 2 agent a seat from its office, or approve Graham's proposal.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Floors, agents, and evidence" }] },
   { id: "research", name: "Research Lead", floor: "academy-demo", rect: row("academy-demo", ACADEMY.x0 + 700, 220), purpose: "The AI research assistant that helps draft strategies and cites research. It helps write strategies but never grades or promotes them.", later: "You name the Research Lead when this role opens.", folders: [] },
-  { id: "alumni", name: "Alumni wall", floor: "academy-demo", rect: row("academy-demo", ACADEMY.x0 + 920, 400), purpose: "Portraits of agents that graduated to a live chair, and of retired agents, whose records are kept.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Agents and their records" }] },
+  { id: "alumni", name: "Alumni wall", floor: "academy-demo", rect: row("academy-demo", ACADEMY.x0 + 920, BOARD_X.academy - ACADEMY.x0 - 920), purpose: "Portraits of agents that graduated to a live chair, and of retired agents, whose records are kept.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Agents and their records" }] },
   boardroom("demo-board", "Demo Desk Boardroom", "academy-demo", BOARD_X.academy, "academy-demo", "Floor 3 at a glance: seats taken, the practice account, and who on Floor 2 is next in line."),
   // Academy A2: Floor 2
-  { id: "hall", name: "Paper Trading Hall", floor: "academy-hall", rect: row("academy-hall", ACADEMY.x0, 1320), purpose: "Floor 2: agents that passed research, each trading a fresh $10,000 virtual account on live OANDA prices. You evaluate their weekly results; after 4 profitable weeks you can give a Demo Desk seat, and Graham may propose one after 2. No broker orders are placed.", later: "Agents arrive here automatically when they pass every research gate.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Floors, journal, and rates" }] },
+  { id: "hall", name: "Forex · Paper trading hall", floor: "academy-hall", rect: row("academy-hall", ACADEMY.x0, STOCK_X - ACADEMY.x0), purpose: "Floor 2: agents that passed research, each trading a fresh $10,000 virtual account on live OANDA prices. You evaluate their weekly results; after 4 profitable weeks you can give a Demo Desk seat, and Graham may propose one after 2. No broker orders are placed.", later: "Agents arrive here automatically when they pass every research gate.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Floors, journal, and rates" }] },
+  { id: "stock-hall", name: "Stock Swing Class · Paper", floor: "academy-hall", rect: row("academy-hall", STOCK_X, BOARD_X.academy - STOCK_X), open: "/equity-academy", purpose: "Floor 2 for stocks: Stock Swing Class agents that passed research, each with a $10,000 paper record rebuilt from new daily bars (decide at the close, fill at the next open) and compared with Max's live desk over the same days. After about four good weeks you decide: a live swing seat, or more tests.", later: "Agents arrive here automatically when they pass every research gate.", folders: [{ label: "Stock Swing Class", path: "/equity-academy", note: "Agents, gates, sprints, and paper records" }] },
   boardroom("hall-board", "Paper Trading Boardroom", "academy-hall", BOARD_X.academy, "academy-hall", "Floor 2 week by week: each agent's weeks on paper, return, trades, and readiness for the Demo Desk."),
   // Academy A1: Floor 1
   { id: "lab", name: "Strategy Lab", floor: "academy-research", rect: row("academy-research", ACADEMY.x0, 220), purpose: "Where the nightly research sprints run: candidate strategies scored on OANDA history, then the gates (validation with a locked final year, random-direction baselines, cost stress, and the day-1 test).", folders: [{ label: "Sprint reports", path: "/academy/reports", note: "Every night's results" }] },
-  { id: "studio", name: "Research floor", floor: "academy-research", rect: row("academy-research", ACADEMY.x0 + 220, 1100), purpose: "Floor 1: agents in research. They do not trade; each night at 1:00 AM New York a sprint polishes their strategy on OANDA history, and an agent moves up automatically when it passes every gate.", later: "New agents start here.", folders: [{ label: "Sprint reports", path: "/academy/reports", note: "Every night's results" }, { label: "The 537 Academy", path: "/academy", note: "Agents and evidence" }] },
+  { id: "studio", name: "Forex · Research floor", floor: "academy-research", rect: row("academy-research", ACADEMY.x0 + 220, STOCK_X - ACADEMY.x0 - 220), purpose: "Floor 1: agents in research. They do not trade; each night at 1:00 AM New York a sprint polishes their strategy on OANDA history, and an agent moves up automatically when it passes every gate.", later: "New agents start here.", folders: [{ label: "Sprint reports", path: "/academy/reports", note: "Every night's results" }, { label: "The 537 Academy", path: "/academy", note: "Agents and evidence" }] },
+  { id: "stock-research", name: "Stock Swing Class · Research", floor: "academy-research", rect: row("academy-research", STOCK_X, BOARD_X.academy - STOCK_X), open: "/equity-academy", purpose: "Floor 1 for stocks: Juniper, Rook, Meridian, and Talon, each on its own list of US names. Every night at 1:30 AM New York a sprint polishes each strategy on years of daily history; an agent moves to paper trading only when it passes every gate.", folders: [{ label: "Stock Swing Class", path: "/equity-academy", note: "Agents, gates, and sprint results" }] },
   boardroom("research-board", "Research Boardroom", "academy-research", BOARD_X.academy, "academy-research", "Floor 1 at a glance: the next sprint, last night's results, and each agent's validation."),
 ];
 
