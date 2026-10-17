@@ -14,7 +14,7 @@ import { ago, money, pct, signedPct, tone, until, when } from "../format";
 import { ChatThread, MemoryPanel, ProposalCard, useCioChat } from "../pages/CIO";
 import { DecisionLog, MandateCard, ModeControl, Orders, Positions, ResearchDesk, RunNow } from "../pages/Manager";
 import { type AgentDetail, fmtR, pair, MARKET, marketOf } from "../academy";
-import { AcademyControls, CheckList, EquityLine, Params, Table, ValidationCard } from "../pages/Academy";
+import { AcademyControls, CheckList, Diagnostics, EquityLine, Params, Table, ValidationCard, Versions } from "../pages/Academy";
 import { ForexRiskCard } from "../components/risk";
 import { Body, Chair, Hands, LOOKS, type Look, Zzz } from "./Character";
 import { traineeDoing, weekOnFloor, dataReadyFor } from "./FirmMap";
@@ -410,7 +410,7 @@ function ManagerOffice({ id, state, mood, onPanel }: { id: string; state: AgentS
   return (
     <>
       {/* left: speech + questions */}
-      <div className="relative z-10 flex flex-col gap-3 p-4 lg:absolute lg:left-6 lg:top-20 lg:w-[min(24rem,28vw)] lg:p-0">
+      <div className="relative z-10 flex flex-col gap-3 p-4 lg:absolute lg:bottom-28 lg:left-6 lg:top-20 lg:w-[min(24rem,28vw)] lg:overflow-y-auto lg:p-0">
         {answer ? (
           <Speech id={id} state={state} title={`${NAMES[id]} · ${answer.q}`}>
             <p className="mt-1.5 text-[15px] leading-relaxed text-slate-100">“{answer.a}”</p>
@@ -703,6 +703,18 @@ function AcademySeat({ a, d, reload, state, onPanel }: { a: AcademySpaceAgent; d
       ),
     },
     {
+      key: "backtest", label: "Backtest on history", icon: "∿",
+      teaser: v?.report?.equity?.length ? `${MARKET[marketOf(d)].history}` : v?.running ? "validation running" : "after the first validation",
+      body: v?.report?.equity?.length ? (
+        <div className="space-y-2">
+          <EquityLine points={v.report.equity} color="#94a3b8" windows={v.report.windows} />
+          <p className="text-xs text-slate-500">The strategy replayed on {MARKET[marketOf(d)].history}. A backtest is the best case: real fills, costs and a market that changes are why paper trading comes next.</p>
+        </div>
+      ) : <Empty>{v?.running ? `Validation running: ${v.running.status.replace("RUNNING: ", "")}` : "Appears after the first validation."}</Empty>,
+    },
+    ...(trading ? [{ key: "record", label: "What the paper record says", icon: "◎", teaser: `${d.paper.trades} trades`, body: <Diagnostics d={d.diagnostics} market={marketOf(d)} /> }] : []),
+    { key: "versions", label: "Versions", icon: "⎇", teaser: `v${d.version} · ${d.versions.length} version${d.versions.length === 1 ? "" : "s"}`, body: <Versions a={d} /> },
+    {
       key: "risk", label: "Risk", icon: "⚖",
       teaser: marketOf(d) === "stocks" ? "fixed while training" : `${pct((d as any).envelope?.risk_pct, 2)} per trade`,
       body: marketOf(d) === "stocks" ? (
@@ -789,7 +801,7 @@ function AcademySeat({ a, d, reload, state, onPanel }: { a: AcademySpaceAgent; d
   const wk = weekOnFloor(d?.stage_since ?? a.stage_since);
   return (
     <>
-      <div className="relative z-10 flex flex-col gap-3 p-4 lg:absolute lg:left-6 lg:top-20 lg:w-[min(24rem,28vw)] lg:p-0">
+      <div className="relative z-10 flex flex-col gap-3 p-4 lg:absolute lg:bottom-28 lg:left-6 lg:top-20 lg:w-[min(24rem,28vw)] lg:overflow-y-auto lg:p-0">
         {answer ? (
           <Speech id={a.id} state={state} title={`${a.name} · ${answer.q}`}>
             <p className="mt-1.5 text-[15px] leading-relaxed text-slate-100">“{answer.a}”</p>
@@ -800,6 +812,12 @@ function AcademySeat({ a, d, reload, state, onPanel }: { a: AcademySpaceAgent; d
           </Speech>
         ) : (
           <Speech id={a.id} state={state} title={`${a.name} · right now`} />
+        )}
+        {d && (
+          <div className={`${glass} p-3`}>
+            <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Your controls · {FLOOR_NAME[d.stage].split(" · ")[0]}</div>
+            <AcademyControls a={d} onDone={reload} />
+          </div>
         )}
         <div className={`${glass} p-3`}>
           <div className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-slate-500">Ask {a.name}</div>

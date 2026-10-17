@@ -437,25 +437,7 @@ function AgentPage({ id }: { id: string }) {
             </ul>
           ) : <p className="text-sm text-slate-500">{a.stage === "RESEARCH" ? `The first sprint runs tonight at ${MARKET[mk].sprintAt} New York.` : "Agents above Floor 1 are not modified; a strategy that needs changes goes back to research."}</p>}
         </Card>
-        <Card title="Versions and revisions">
-          <ul className="space-y-3 text-sm">
-            {a.revisions.map((r) => (
-              <li key={`r${r.id}`}>
-                <p className="text-slate-200">Weekly review: <span className={r.outcome === "ADOPTED" ? "text-emerald-300" : "text-slate-300"}>{r.outcome.toLowerCase()}</span>{r.chosen ? ` · ${r.chosen}` : ""}</p>
-                <p className="text-xs text-slate-500">{r.reason} · {r.report.trials ?? 0} candidates · {ago(r.ts)}</p>
-              </li>
-            ))}
-            {a.versions.map((ver) => (
-              <li key={`v${ver.version}`}>
-                <p className="text-slate-200">v{ver.version} · {ver.note}</p>
-                <p className="text-xs text-slate-500">{ver.validation_status.toLowerCase()} · by {ver.created_by} · {ago(ver.created_at)}</p>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-3 text-xs text-slate-500">
-            Auto-revision is {a.auto_revise ? "on" : "off"}. Weekly reviews test one-step parameter changes (and dropping a losing pair) on older data; a change is adopted only if it passes the full validation. {a.trials} strategy variants tried so far.
-          </p>
-        </Card>
+        <Card title="Versions and revisions"><Versions a={a} /></Card>
         <Card title="Journal">
           <ul className="space-y-2 text-sm">
             {a.events.map((e) => (
@@ -473,8 +455,17 @@ function AgentPage({ id }: { id: string }) {
 
 export function AcademyControls({ a, onDone }: { a: AgentDetail; onDone: () => void }) {
   const [confirm, setConfirm] = useState<string | null>(null);
+  const [sent, setSent] = useState<string | null>(null);
   const stocks = marketOf(a) === "stocks";
-  const act = useAction((action: string) => api.post(`/api/academy/agents/${a.id}/${action}`, { note: "" }), onDone);
+  const act = useAction(
+    (action: string) => api.post(`/api/academy/agents/${a.id}/${action}`, { note: "" }).then(() => setSent(action)),
+    () => {
+      onDone();
+      // the engine reads its inbox within a minute; look again so the result shows up here
+      [10_000, 30_000, 75_000].forEach((ms) => setTimeout(onDone, ms));
+    },
+  );
+  const failing = a.readiness.checks.filter((c) => !c.passed && !c.advisory).map((c) => c.name);
   const LABELS: Record<string, [string, string]> = {
     pause: ["Pause", stocks ? "Skip this agent in sprints and paper updates until you resume it." : "Stop new paper entries. Open paper positions keep their stops and targets."],
     resume: ["Resume", stocks ? "Include this agent again." : "Allow new paper entries again (the drawdown peak resets to today's equity)."],
@@ -482,25 +473,31 @@ export function AcademyControls({ a, onDone }: { a: AgentDetail; onDone: () => v
     sprint: ["Sprint now", "Run tonight's research sprint now (a few minutes on the Pi). It adopts a better version, and promotes to Floor 2 only if every gate passes."],
     auto_on: ["Nightly sprints on", "Include this agent in the nightly research sprints."],
     auto_off: ["Nightly sprints off", "Skip this agent in the nightly sprints; it keeps its current version."],
+    to_paper: ["Move to paper trading", `Move to Floor 2 now, on your decision, ${failing.length ? `before these gates are met: ${failing.join("; ")}` : "ahead of tonight's sprint"}. ${stocks ? "It starts a fresh $10,000 paper record: each day it decides at the close and fills at the next session's open on real daily bars, compared with Max's live desk." : "It starts a fresh $10,000 paper account trading live OANDA prices."} Nightly sprints stop changing it; you can send it back to research any time.`],
     to_demo: ["Give a Demo Desk seat", "Move to Floor 3: real orders on its own OANDA practice sub-account (fake money). Its paper positions close first."],
     to_research: ["Send back to research", stocks ? "Return to Floor 1 for more tests; its paper record is cleared and nightly sprints resume." : "Return to Floor 1. Any open paper positions close at the market; nightly sprints resume."],
     retire: ["Retire", "Retire this agent to the Alumni wall. Its records are kept; it stops trading and researching."],
   };
   const paused = !!a.paused || a.status === "PAUSED";
   const buttons = stocks
-    ? a.stage === "RESEARCH" ? ["sprint", paused ? "resume" : "pause", "retire"] : a.stage === "PAPER" ? [paused ? "resume" : "pause", "to_research", "retire"] : []
+    ? a.stage === "RESEARCH" ? ["sprint", "to_paper", paused ? "resume" : "pause", "retire"] : a.stage === "PAPER" ? [paused ? "resume" : "pause", "to_research", "retire"] : []
     : a.stage === "RESEARCH"
-    ? ["sprint", a.auto_revise ? "auto_off" : "auto_on", "validate", "retire"]
+    ? ["sprint", "to_paper", a.auto_revise ? "auto_off" : "auto_on", "validate", paused ? "resume" : "pause", "retire"]
     : a.stage === "PAPER"
       ? [a.paused ? "resume" : "pause", "to_demo", "to_research", "retire"]
       : a.stage === "DEMO"
         ? [a.paused ? "resume" : "pause", "to_research", "retire"]
         : [];
+  const last = a.sprinting?.running ? `Sprint running${a.sprinting.step ? `: ${a.sprinting.step}` : ""}…` : a.sprint ? `Last sprint ${ago(a.sprint.finished_at)}: ${a.sprint.verdict ?? a.sprint.outcome.toLowerCase().replace(/_/g, " ")}` : null;
   return (
+    <div className="space-y-2">
     <div className="flex flex-wrap gap-2">
       {buttons.map((b) => (
         <button key={b} className="btn-ghost text-xs" onClick={() => setConfirm(b)}>{LABELS[b][0]}</button>
       ))}
+    </div>
+    {sent && <p className="text-xs text-emerald-400">{LABELS[sent]?.[0] ?? sent}: sent. The engine picks it up within a minute{sent === "sprint" ? " and the result shows below." : "."}</p>}
+    {a.stage === "RESEARCH" && last && <p className="max-w-xl text-xs text-slate-400">{last}</p>}
       <Modal open={!!confirm} title={confirm ? `${LABELS[confirm][0]} ${a.name}?` : ""} onClose={() => setConfirm(null)}>
         {confirm && (
           <div className="space-y-3 text-sm">
@@ -576,7 +573,7 @@ export function ValidationCard({ report, summary }: { report?: NonNullable<Agent
   );
 }
 
-function Diagnostics({ d, market }: { d: AgentDetail["diagnostics"]; market: "forex" | "stocks" }) {
+export function Diagnostics({ d, market }: { d: AgentDetail["diagnostics"]; market: "forex" | "stocks" }) {
   const blocks = ([["by_instrument", `By ${MARKET[market].instrument.toLowerCase()}`], ["by_session", "By session opened"], ["by_exit", "By exit"], ["by_side", "By direction"]] as [keyof AgentDetail["diagnostics"], string][])
     .filter(([k]) => Object.keys(d[k] ?? {}).length);
   if (!Object.keys(d.by_instrument).length) return <p className="text-sm text-slate-500">Breakdowns appear after the first closed paper trades. The weekly review uses them.</p>;
@@ -666,5 +663,29 @@ export function EquityLine({ points, color, empty = "No data yet.", windows }: {
       </svg>
       {windows && <p className="mt-1 text-[11px] text-slate-500">Shaded: blue = out-of-sample, gold = locked final year.</p>}
     </div>
+  );
+}
+
+export function Versions({ a }: { a: AgentDetail }) {
+  return (
+    <>
+    <ul className="space-y-3 text-sm">
+      {a.revisions.map((r) => (
+        <li key={`r${r.id}`}>
+          <p className="text-slate-200">Weekly review: <span className={r.outcome === "ADOPTED" ? "text-emerald-300" : "text-slate-300"}>{r.outcome.toLowerCase()}</span>{r.chosen ? ` · ${r.chosen}` : ""}</p>
+          <p className="text-xs text-slate-500">{r.reason} · {r.report.trials ?? 0} candidates · {ago(r.ts)}</p>
+        </li>
+      ))}
+      {a.versions.map((ver) => (
+        <li key={`v${ver.version}`}>
+          <p className="text-slate-200">v{ver.version} · {ver.note}</p>
+          <p className="text-xs text-slate-500">{ver.validation_status.toLowerCase()} · by {ver.created_by} · {ago(ver.created_at)}</p>
+        </li>
+      ))}
+    </ul>
+    <p className="mt-3 text-xs text-slate-500">
+      Auto-revision is {a.auto_revise ? "on" : "off"}. Weekly reviews test one-step parameter changes (and dropping a losing pair) on older data; a change is adopted only if it passes the full validation. {a.trials} strategy variants tried so far.
+    </p>
+    </>
   );
 }

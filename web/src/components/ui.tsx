@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useState } from "react";
+import { createPortal } from "react-dom";
 import { Portrait } from "../space/Character";
 
 export const AGENTS: Record<string, { name: string; title: string; color: string; initial: string; blurb: string }> = {
@@ -63,13 +64,15 @@ export function Modal({ open, title, children, onClose }: { open: boolean; title
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
   if (!open) return null;
-  return (
+  // On the page body, so a panel with a backdrop blur or scrolling never clips the dialog.
+  return createPortal(
     <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={onClose}>
       <div className="card w-full max-w-md" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
         <h3 className="mb-4 font-display text-lg text-slate-50">{title}</h3>
         {children}
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
 

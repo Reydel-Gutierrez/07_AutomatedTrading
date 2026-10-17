@@ -262,6 +262,13 @@ class Engine:
             if a["stage"] != "RESEARCH":
                 raise ValueError("only Floor 1 agents run research sprints")
             self.enqueue(f"sprint:{aid}", lambda: self.run_sprint(aid, self.ny_now().date().isoformat()))
+        elif action == "to_paper":
+            if a["stage"] != "RESEARCH":
+                raise ValueError("only Floor 1 agents can move to paper trading")
+            self.db.set_stage(aid, "PAPER", by=by, reason=note or "moved up by the owner before passing every gate")
+            self.db.event(aid, "PROMOTED", f"{a['name']} moved to Floor 2 by {by} (owner's decision; the gates had not all passed). Paper record starts from the next session's open.")
+            if self.panel is not None:
+                self.enqueue(f"paper:{aid}", lambda: self.paper(aid))
         elif action == "pause":
             self.db.set_status(aid, "PAUSED", note or f"paused by {by}")
         elif action == "resume":

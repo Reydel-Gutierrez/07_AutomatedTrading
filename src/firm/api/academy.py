@@ -22,7 +22,7 @@ from typing import Any
 from firm.api import equity_academy as stocks
 from firm.paths import state_root
 
-ACTIONS = {"pause", "resume", "validate", "sprint", "auto_on", "auto_off", "to_demo", "to_research", "retire", "set_risk"}
+ACTIONS = {"pause", "resume", "validate", "sprint", "auto_on", "auto_off", "to_demo", "to_paper", "to_research", "retire", "set_risk"}
 START_CAPITAL = 10_000.0
 # Floor 2 (paper) and Floor 3 (OANDA demo): at least four weeks and enough trades for the result to mean something
 QUALIFY = {"PAPER": {"days": 28, "trades": {"day": 40, "swing": 15}}, "DEMO": {"days": 28, "trades": {"day": 30, "swing": 10}}}

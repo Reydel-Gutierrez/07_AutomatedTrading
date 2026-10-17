@@ -21,7 +21,7 @@ from typing import Any
 
 from firm.paths import state_root
 
-ACTIONS = {"sprint", "pause", "resume", "to_research", "retire"}
+ACTIONS = {"sprint", "pause", "resume", "to_paper", "to_research", "retire"}
 START_CAPITAL = 10_000.0
 STALE_SECONDS = 180
 QUALIFY = {"sessions": 20, "trades": 10}  # Floor 2: about four weeks and enough trades for the owner to judge

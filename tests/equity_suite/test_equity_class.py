@@ -213,3 +213,16 @@ def test_a_sprint_that_waited_for_history_reruns_when_more_arrives(setup):
     assert eng.untested("rook")  # the backfill arrived: run a real sprint
     eng.run_sprint("rook", "2026-10-17")
     assert not eng.untested("rook")
+
+
+def test_owner_moves_a_stock_agent_to_paper_on_their_own_decision(setup):
+    eng, _ = setup
+    eng.start()
+    eng.load_data()
+    eng.apply({"agent_id": "meridian", "action": "to_paper", "by": "reydel"})
+    a = eng.db.agent("meridian")
+    assert a["stage"] == "PAPER"
+    assert "owner" in eng.db.q("SELECT reason FROM stage_transitions WHERE agent_id = 'meridian'")[-1]["reason"]
+    assert any(n == "paper:meridian" for n, _ in eng.queue)  # its record starts right away
+    with pytest.raises(ValueError):
+        eng.apply({"agent_id": "meridian", "action": "to_paper", "by": "reydel"})  # already on Floor 2

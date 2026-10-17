@@ -293,3 +293,17 @@ def test_owner_risk_sizes_trades_without_a_new_version(world, monkeypatch):
     eng.tick()
     assert eng.agents["kestrel"].cfg.envelope.risk_pct == 0.01 and eng.agents["kestrel"].cfg.envelope.style == "day"
     assert eng.db.q("SELECT count(*) AS n FROM events WHERE type = 'COMMAND_REJECTED'")[0]["n"] == 2
+
+
+def test_owner_moves_a_research_agent_to_paper(world, monkeypatch):
+    eng, clock, client, inbox = world
+    monkeypatch.setattr("forex.engine.validate", lambda *a, **k: {"status": "FAILED", "passed": False, "score": 0.0, "checks": []})
+    eng.start()
+    (inbox / "1.json").write_text(json.dumps({"agent_id": "orion", "action": "to_paper", "by": "reydel"}))
+    eng.tick()
+    assert eng.db.agent("orion")["stage"] == "PAPER" and eng.agents["orion"].stage == "PAPER" and eng.agents["orion"].book.cash == 10_000
+    t = eng.db.q("SELECT * FROM stage_transitions WHERE agent_id = 'orion'")[-1]
+    assert t["by"] == "reydel" and "owner" in t["reason"]
+    (inbox / "2.json").write_text(json.dumps({"agent_id": "orion", "action": "to_paper", "by": "reydel"}))  # already there
+    eng.tick()
+    assert eng.db.q("SELECT count(*) AS n FROM events WHERE type = 'COMMAND_REJECTED'")[0]["n"] == 1

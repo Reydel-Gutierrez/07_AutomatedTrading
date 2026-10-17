@@ -453,6 +453,12 @@ class Engine:
             self._leave_paper(rt, "moved to the Demo Desk")
             self.db.set_stage(agent_id, "DEMO", by=by, reason=str(cmd.get("note") or "owner approved a Demo Desk seat"))
             self.reload_stage(agent_id)
+        elif action == "to_paper":
+            if rt.stage != "RESEARCH":
+                raise ValueError("only Floor 1 agents can move to paper trading")
+            self.db.set_stage(agent_id, "PAPER", by=by, reason=str(cmd.get("note") or "moved up by the owner before passing every gate"))
+            self.reload_stage(agent_id)
+            self.db.event(agent_id, "PROMOTED", f"{rt.name} moved to Floor 2 by {by} (owner's decision; the gates had not all passed): paper trading with a fresh $10,000.")
         elif action == "to_research":
             self._leave_paper(rt, "sent back to research")
             self.db.set_stage(agent_id, "RESEARCH", by=by, reason=str(cmd.get("note") or "sent back to research"))
