@@ -1084,6 +1084,43 @@ function Research({ d, c }: { d: Dept; c: Ctx }) {
   );
 }
 
+/** L4: the options desk, designed but not open. Empty live seats with chain-and-greeks screens. */
+function OptionsDesk({ d, c }: { d: Dept; c: Ctx }) {
+  const [x, y, w] = d.rect;
+  const f = fy(d.rect);
+  const seats = 4;
+  const step = (w - 40) / seats;
+  return (
+    <Room d={d} c={c} sub="Design only · not open" muted>
+      <Board x={x + 20} y={y + 14} w={w - 40} h={18}>
+        <text x={x + w / 2} y={y + 27} textAnchor="middle" fontSize="8.5" fill="#a78bfa" letterSpacing="2.2" opacity={0.45}>OPTIONS DESK · NOT OPEN · NO AGENTS YET</text>
+      </Board>
+      {Array.from({ length: seats }, (_, i) => (
+        <EmptyDesk key={i} x={x + 20 + step * (i + 0.5)} y={f} w={170} screens={3} plate={`OPTIONS SEAT ${i + 1}`} tone="#3f3550" />
+      ))}
+    </Room>
+  );
+}
+
+function OptionsBoard({ d, c }: { d: Dept; c: Ctx }) {
+  return (
+    <Boardroom d={d} c={c} title="OPTIONS TRADING" sub="Design only · click for the plan">
+      {(bx, by, bw) => {
+        const L = bx + 14, W = bw - 28;
+        return (
+          <>
+            <Line x={L} y={by + 42} w={W} k="Seats filled" v="0 of 4" />
+            <Line x={L} y={by + 62} w={W} k="Option agents" v="none yet" col="#94a3b8" />
+            <Line x={L} y={by + 82} w={W} k="Options trading" v="not built · not authorized" col="#fbbf24" />
+            <text x={L} y={by + 112} fontSize="8.5" fill="#64748b">Agents would prove themselves in the Academy first,</text>
+            <text x={L} y={by + 125} fontSize="8.5" fill="#64748b">then take a seat only on your approval.</text>
+          </>
+        );
+      }}
+    </Boardroom>
+  );
+}
+
 /** L3: the live swing desk, an open trading floor. Max holds seat 1; the rest wait for Stock Swing Class graduates. */
 function SwingDesk({ d, c }: { d: Dept; c: Ctx }) {
   const [x, y, w] = d.rect;
@@ -1172,6 +1209,8 @@ function DeptRoom({ d, c }: { d: Dept; c: Ctx }) {
     case "treasury": return <Treasury d={d} c={c} />;
     case "core-board": return <CoreBoard d={d} c={c} ids={["tim", "alex"]} title="CORE INVESTMENTS" />;
     case "trading-board": return <CoreBoard d={d} c={c} ids={["max"]} title="EQUITY TRADING" />;
+    case "options-desk": return <OptionsDesk d={d} c={c} />;
+    case "options-board": return <OptionsBoard d={d} c={c} />;
     case "studio": return <Desks d={d} c={c} seats={7} sub="{n} agents in research" plate="OPEN DESK" />;
     case "hall": return <Desks d={d} c={c} seats={6} sub="{n} paper trading on live OANDA prices" plate="OPEN SEAT" />;
     case "stock-research": return <Desks d={d} c={c} seats={4} sub="{n} agents in research" plate="OPEN DESK" />;

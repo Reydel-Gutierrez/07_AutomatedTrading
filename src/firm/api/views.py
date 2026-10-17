@@ -362,7 +362,7 @@ def book_analytics(firm: Firm, book: str, bucket: str) -> dict[str, Any]:
 
 
 def core_analytics(firm: Firm) -> dict[str, Any]:
-    """L4 Core Investments and L3 Equity Trading: each manager's daily record, orders, and decisions."""
+    """L5 Core Investments and L3 Equity Trading: each manager's daily record, orders, and decisions."""
     out = []
     for m in firm.registry.all():
         book = m.book or "SIM"

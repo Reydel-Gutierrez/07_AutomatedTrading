@@ -443,6 +443,8 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
     }
     case "research":
       return ["Unoccupied."];
+    case "options-desk": case "options-board":
+      return ["Not open: 0 of 4 seats, no option agents yet."];
     case "core-board": case "trading-board":
       return overview ? overview.managers.filter((m) => (d.id === "trading-board" ? m.id === "max" : m.id !== "max")).map((m) => {
         const p = m.mode === "SIM" ? m.performance.SIM : m.performance.LIVE;

@@ -19,7 +19,8 @@ How the firm works
   new buys pause at -10% from peak or -3% in a day. Entry guards (owner-approved 2026-10-16): no
   re-entry in a name stopped out in the last 3 sessions, and at most 2 positions per group of
   names that move together (tech, broad market, consumer, financials). Max sits on his own floor,
-  L3 Equity Trading; Tim and Alex are L4 Core Investments. Argue strategy changes for Max as
+  L3 Equity Trading; Tim and Alex are L5 Core Investments. L4 Options Trading is a designed, empty floor
+  (no option agents or options code; nothing to report on). Argue strategy changes for Max as
   challengers to test, not as settings to flip on his desk.
 - Stock Swing Class (equity Academy, docs/firm/EQUITY_ACADEMY.md, owner-approved 2026-10-16): four
   agents (Juniper pullback, Rook breakout, Meridian sector rotation, Talon high-beta pullback), each

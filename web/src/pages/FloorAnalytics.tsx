@@ -1,5 +1,5 @@
 /**
- * One floor's boardroom, in depth: Core Investments (L4), Equity Trading (L3), the Forex Division (L2), Operations (L1),
+ * One floor's boardroom, in depth: Core Investments (L5), Options Trading (L4, design only), Equity Trading (L3), the Forex Division (L2), Operations (L1),
  * and each Academy floor. Opened over the map by clicking that floor's boardroom.
  */
 import { Link, useParams } from "react-router-dom";
@@ -30,7 +30,8 @@ type FloorData = {
 };
 
 const TITLES: Record<string, [string, string]> = {
-  core: ["Core Investments", "L4 · Tim's and Alex's records, day by day, against the S&P 500"],
+  core: ["Core Investments", "L5 · Tim's and Alex's records, day by day, against the S&P 500"],
+  options: ["Options Trading", "L4 · designed, not open"],
   trading: ["Equity Trading", "L3 · the swing desk's record, day by day, against the S&P 500"],
   forex: ["Forex Division", "L2 · live chairs and the Academy pipeline that fills them"],
   operations: ["Operations", "L1 · what the firm recorded over the last two weeks"],
@@ -48,7 +49,7 @@ export default function FloorAnalytics() {
         <h1 className="text-xl font-semibold text-slate-50">{title}</h1>
         <p className="text-sm text-slate-400">{sub}</p>
       </div>
-      {scope === "core" ? <Core ids={["tim", "alex"]} /> : scope === "trading" ? <Core ids={["max"]} /> : scope === "operations" ? <Operations /> : scope === "forex" ? <Forex /> : scope.startsWith("academy-") ? <AcademyFloor scope={scope} /> : <Empty>Unknown floor.</Empty>}
+      {scope === "core" ? <Core ids={["tim", "alex"]} /> : scope === "options" ? <OptionsPlan /> : scope === "trading" ? <Core ids={["max"]} /> : scope === "operations" ? <Operations /> : scope === "forex" ? <Forex /> : scope.startsWith("academy-") ? <AcademyFloor scope={scope} /> : <Empty>Unknown floor.</Empty>}
     </div>
   );
 }
@@ -62,7 +63,24 @@ function Loading({ error }: { error: { message: string } | null }) {
   return error ? <div className="text-rose-400">Could not load: {error.message}</div> : <div className="text-slate-500">Loading…</div>;
 }
 
-// -- L4 and L3 (both read the managers' records) -------------------------------------------------
+// -- L4 Options Trading (design only) ----------------------------------------------------------------
+function OptionsPlan() {
+  return (
+    <Card title="The floor, as designed">
+      <ul className="list-disc space-y-1.5 pl-5 text-sm text-slate-300">
+        <li>Four live seats for option-trading agents, real money only, like the swing desk on L3.</li>
+        <li>Agents would be developed in the Academy first (research on history, then paper trading) and take a seat only on your approval.</li>
+        <li>This boardroom would show seats filled, each agent's value and return against the S&amp;P 500, and the risk each one carries.</li>
+      </ul>
+      <p className="mt-4 text-xs text-slate-500">
+        Nothing is built yet: no option agents, no options data or pricing, no option orders in the code, and no options trading set up on the
+        Robinhood account. The floor opens when you decide to build it.
+      </p>
+    </Card>
+  );
+}
+
+// -- L5 and L3 (both read the managers' records) -------------------------------------------------
 function Core({ ids }: { ids: string[] }) {
   const { overview: o } = useLive();
   const { data, error } = useScope<{ managers: CoreManager[] }>("core");

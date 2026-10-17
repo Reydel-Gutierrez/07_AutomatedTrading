@@ -219,7 +219,7 @@ def create_app(host: Host) -> FastAPI:
 
     @app.get("/api/analytics/{scope}")
     def floor_analytics(scope: str, _: str = Depends(user)) -> dict[str, Any]:
-        """One floor's boardroom: core (L4; the trading floor L3 reads the same records), forex (L2), operations (L1), or an Academy floor."""
+        """One floor's boardroom: core (L5; the trading floor L3 reads the same records), forex (L2), operations (L1), or an Academy floor."""
         try:
             if scope == "core":
                 return views.core_analytics(firm)
