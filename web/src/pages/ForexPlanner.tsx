@@ -20,11 +20,19 @@ function stored(key: string, fallback: number): number {
     return fallback;
   }
 }
-function remember(key: string, v: number) {
+function remember(key: string, v: unknown) {
   try {
-    localStorage.setItem(key, String(v));
+    localStorage.setItem(key, typeof v === "string" ? v : JSON.stringify(v));
   } catch {
     /* the planner works without storage */
+  }
+}
+function storedRisks(): Record<string, number> {
+  try {
+    const v = JSON.parse(localStorage.getItem("planner.risk") ?? "{}");
+    return v && typeof v === "object" ? v : {};
+  } catch {
+    return {};
   }
 }
 
@@ -32,10 +40,20 @@ export default function ForexPlanner() {
   const { data, error } = useResource<AcademyOverview>("/api/academy", { every: 60000 });
   const [goal, setGoal] = useState(() => stored("planner.goal", 200));
   const [capital, setCapital] = useState(() => stored("planner.capital", 10_000));
+  // What-if risk per trade, per agent (a fraction). Only this page uses it; the agents keep their own settings.
+  const [risks, setRisks] = useState<Record<string, number>>(storedRisks);
+  const setRisk = (id: string, v: number | null) => {
+    const next = { ...risks };
+    if (v === null) delete next[id];
+    else next[id] = v;
+    setRisks(next);
+    remember("planner.risk", next);
+  };
   if (error) return <Card title="Planner"><Empty>{error.message}</Empty></Card>;
   if (!data) return <Card title="Planner"><p className="text-sm text-slate-500">Loading…</p></Card>;
   const agents = data.agents.filter((a) => a.market !== "stocks" && a.stage !== "RETIRED");
   const rows = agents.map((a) => ({ a, e: edgeOf(a) }));
+  const riskOf = (a: AgentCard) => risks[a.id] ?? a.risk_pct ?? 0;
   const proven = rows.filter((r) => r.e && r.e.trades >= MIN_EVIDENCE && (r.a.stage === "PAPER" || r.a.stage === "DEMO"));
   const team = combined(proven.map((r) => r.e!), goal);
   const num = (set: (n: number) => void, key: string) => (ev: React.ChangeEvent<HTMLInputElement>) => {
@@ -65,22 +83,33 @@ export default function ForexPlanner() {
         </p>
       </div>
 
-      <h3 className="label mb-2 mt-5">At each agent's current risk, with {money(capital)}</h3>
+      <div className="mb-2 mt-5 flex items-center gap-3">
+        <h3 className="label">Each agent with {money(capital)} · risk per trade is a what-if you can change</h3>
+        {Object.keys(risks).length > 0 && <button className="btn-ghost text-xs" onClick={() => { setRisks({}); remember("planner.risk", {}); }}>Reset to the agents' own risk</button>}
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] text-sm">
           <thead className="text-left text-xs text-slate-500">
-            <tr><th className="pb-1">Agent</th><th>Edge</th><th className="text-right">Risk / trade</th><th className="text-right">Expected / week</th><th className="text-right">Typical week</th><th className="text-right">Losing weeks</th><th className="text-right">Paper / week</th><th className="text-right">Worst drawdown</th></tr>
+            <tr><th className="pb-1">Agent</th><th>Edge</th><th className="text-right">Risk / trade (what-if)</th><th className="text-right">Expected / week</th><th className="text-right">Typical week</th><th className="text-right">Losing weeks</th><th className="text-right">Paper / week</th><th className="text-right">Worst drawdown</th></tr>
           </thead>
           <tbody>
             {rows.map(({ a, e }) => {
-              const r = a.risk_pct ?? 0;
+              const r = riskOf(a);
               const w = e ? weekly(e, capital * r) : null;
               const pw = paperWeekly(a);
               return (
                 <tr key={a.id} className="border-t border-ink-800">
                   <td className="py-1.5"><Name a={a} /></td>
                   <td className="text-xs text-slate-400">{e ? `${e.avgR >= 0 ? "+" : ""}${e.avgR.toFixed(3)}R × ${e.tradesPerWeek.toFixed(1)}/wk (${e.trades} trades)` : "not validated yet"}</td>
-                  <td className="text-right tabular-nums">{pct(r, 2)} · {money(capital * r)}</td>
+                  <td className="text-right tabular-nums">
+                    <span className="inline-flex items-center gap-1">
+                      <input type="number" min={0.05} max={10} step={0.25} value={Number((r * 100).toFixed(2))} aria-label={`What-if risk per trade for ${a.name}, percent`}
+                        onChange={(ev) => { const n = Number(ev.target.value); if (Number.isFinite(n) && n > 0 && n <= 10) setRisk(a.id, n / 100); }}
+                        className={`w-16 rounded-md border bg-ink-900 px-1.5 py-0.5 text-right text-sm ${a.id in risks ? "border-gold-500/60 text-gold-200" : "border-ink-700 text-slate-100"}`} />%
+                      <span className="text-xs text-slate-400">· {money(capital * r)}</span>
+                    </span>
+                    {a.id in risks && <div className="text-[10px] text-slate-500">agent: {pct(a.risk_pct ?? 0, 2)}</div>}
+                  </td>
                   <td className={`text-right tabular-nums ${w ? (w.mean >= 0 ? "text-emerald-300" : "text-rose-300") : ""}`}>{w ? money(w.mean) : "—"}</td>
                   <td className="text-right text-xs tabular-nums text-slate-400">{w?.sd ? `${money(w.mean - w.sd)} to ${money(w.mean + w.sd)}` : "—"}</td>
                   <td className="text-right tabular-nums">{w?.lossOdds !== null && w?.lossOdds !== undefined ? pct(w.lossOdds, 0) : "—"}</td>
@@ -97,12 +126,12 @@ export default function ForexPlanner() {
       <div className="overflow-x-auto">
         <table className="w-full min-w-[760px] text-sm">
           <thead className="text-left text-xs text-slate-500">
-            <tr><th className="pb-1">Agent</th><th className="text-right">Risked per trade</th><th className="text-right">Capital at its current risk</th><th className="text-right">Risk needed on {money(capital)}</th><th className="text-right">Drawdown at that risk</th><th>Verdict</th></tr>
+            <tr><th className="pb-1">Agent</th><th className="text-right">Risked per trade</th><th className="text-right">Capital at the risk above</th><th className="text-right">Risk needed on {money(capital)}</th><th className="text-right">Drawdown at that risk</th><th>Verdict</th></tr>
           </thead>
           <tbody>
             {rows.map(({ a, e }) => {
               const need = e && e.trades >= MIN_EVIDENCE ? riskUsdFor(e, goal) : null;
-              const r = a.risk_pct ?? 0;
+              const r = riskOf(a);
               const riskOnCap = need !== null ? need / capital : null;
               const dd = e && riskOnCap !== null ? drawdownAt(e, Math.min(riskOnCap, 0.99)) : null;
               return (
@@ -119,7 +148,7 @@ export default function ForexPlanner() {
             <tr className="border-t-2 border-ink-700">
               <td className="py-2 font-medium text-slate-200">Together ({proven.length ? proven.map((r) => r.a.name).join(", ") : "nobody past research yet"})</td>
               <td className="text-right tabular-nums">{team.riskUsd !== null ? `${money(team.riskUsd)} each` : "—"}</td>
-              <td className="text-right tabular-nums">{team.riskUsd !== null ? money(proven.reduce((s, x) => s + team.riskUsd! / (x.a.risk_pct || 1), 0)) : "—"}</td>
+              <td className="text-right tabular-nums">{team.riskUsd !== null ? money(proven.reduce((s, x) => s + team.riskUsd! / (riskOf(x.a) || 1), 0)) : "—"}</td>
               <td className="text-right tabular-nums">{team.riskUsd !== null ? pct(team.riskUsd / capital, 2) : "—"}</td>
               <td />
               <td className="text-xs text-slate-400">{proven.length ? "Only agents past research count; research backtests are unproven." : "The floor has no proven edge to plan with yet."}</td>
