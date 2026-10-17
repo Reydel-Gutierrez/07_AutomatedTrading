@@ -68,7 +68,7 @@ function OptionsPlan() {
   return (
     <Card title="The floor, as designed">
       <ul className="list-disc space-y-1.5 pl-5 text-sm text-slate-300">
-        <li>Four live seats for option-trading agents, real money only, like the swing desk on L3.</li>
+        <li>Two live offices for option-trading agents, real money only, like the swing offices on L3. Two fit the capital planned (about $5,000); more would split it too thin.</li>
         <li>Agents would be developed in the Academy first (research on history, then paper trading) and take a seat only on your approval.</li>
         <li>This boardroom would show seats filled, each agent's value and return against the S&amp;P 500, and the risk each one carries.</li>
       </ul>
@@ -194,17 +194,17 @@ function Forex() {
   if (!data) return <Loading error={error} />;
   const ac = data.academy;
   const fx = (st: string) => (ac.floors?.[st] ?? []).filter((x) => x.market !== "stocks").length;
-  const chairs = [["Day Chair 1", "Intraday, flat by Friday"], ["Day Chair 2", "Intraday, flat by Friday"], ["Swing Chair 1", "Multi-day, weekend rules"], ["Swing Chair 2", "Multi-day, weekend rules"]];
+  const chairs = [["Day trader's office", "Intraday, flat by Friday"], ["Swing trader's office", "Multi-day, weekend rules"]];
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-        <Card><Stat label="Live chairs filled" value={`${data.live_chairs_filled} of ${data.chairs}`} /></Card>
+        <Card><Stat label="Live offices filled" value={`${data.live_chairs_filled} of ${data.chairs}`} /></Card>
         <Card><Stat label="Live forex trading" value={<span className="text-amber-300">Not authorized</span>} sub="Only you can authorize it" /></Card>
         <Card><Stat label="Academy engine" value={ac.engine_online ? "Online" : "Offline"} /></Card>
         <Card><Stat label="Candidates past research" value={fx("PAPER") + fx("DEMO")} sub={`${fx("RESEARCH")} still in research`} /></Card>
       </div>
-      <Card title="The chairs">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <Card title="The offices">
+        <div className="grid gap-3 sm:grid-cols-2">
           {chairs.map(([n, s]) => (
             <div key={n} className="rounded-xl border border-dashed border-ink-600 p-3">
               <div className="text-sm font-medium text-slate-100">{n}</div>
@@ -213,7 +213,7 @@ function Forex() {
             </div>
           ))}
         </div>
-        <p className="mt-3 text-xs text-slate-500">A chair is filled only after an agent clears the Demo Desk, Graham writes a memo, and you authorize the agent and its capital.</p>
+        <p className="mt-3 text-xs text-slate-500">An office is filled only after an agent clears the Demo Desk, Graham writes a memo, and you authorize the agent and its capital.</p>
       </Card>
       <ForexPlanner />
       <Card title="Academy pipeline (forex)" action={<Link className="text-xs text-gold-400 hover:underline" to="/academy">Open the Academy →</Link>}>

@@ -14,7 +14,7 @@ order.
 | State | `state/equity_academy/academy.db`, `engine.log`, `inbox/` (`EQUITY_STATE_ROOT` overrides) |
 | Market data | the firm's daily bars (`firm.db`, read only). The firm's `equity_academy_bars` job (17:15 New York) fetches the names the engine asks for; a name with under 1,000 stored bars gets ~6.5 years once |
 | HQ | One Academy: stock agents are served by `/api/academy` in the forex agents' own shapes (tagged `market: "stocks"`, `src/firm/api/equity_academy.py`), so the Academy page, agent pages, sit-downs, map figures, boardrooms, sprint reports and Graham's `get_academy` tools treat both classes alike; one line in the 08:00 message |
-| Map | The class lives in **The 537 Academy**: "Stock Swing Class · Research" on Floor 1 and "Stock Swing Class · Paper" on Floor 2, beside the forex rooms (the building was widened for them). L3 Equity Trading is for real-money traders only: the **live swing desk**, where Max holds live seat 1 and seats 2 to 4 wait for graduates the owner approves |
+| Map | The class lives in **The 537 Academy**: "Stock Swing Class · Research" on Floor 1 and "Stock Swing Class · Paper" on Floor 2, beside the forex rooms (the building was widened for them). L3 Equity Trading is for real-money traders only: two **live swing offices**: Max holds office 1 and office 2 waits for a graduate the owner approves |
 
 ## The class
 

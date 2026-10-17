@@ -15,6 +15,7 @@ import { ChatThread, MemoryPanel, ProposalCard, useCioChat } from "../pages/CIO"
 import { DecisionLog, MandateCard, ModeControl, Orders, Positions, ResearchDesk, RunNow } from "../pages/Manager";
 import { type AgentDetail, fmtR, pair, MARKET, marketOf } from "../academy";
 import { AcademyControls, CheckList, EquityLine, Params, Table, ValidationCard } from "../pages/Academy";
+import { ForexRiskCard } from "../components/risk";
 import { Body, Chair, Hands, LOOKS, type Look, Zzz } from "./Character";
 import { traineeDoing, weekOnFloor, dataReadyFor } from "./FirmMap";
 import { poseFor } from "./pose";
@@ -700,6 +701,13 @@ function AcademySeat({ a, d, reload, state, onPanel }: { a: AcademySpaceAgent; d
           <Params version={d.versions[0]} />
         </div>
       ),
+    },
+    {
+      key: "risk", label: "Risk", icon: "⚖",
+      teaser: marketOf(d) === "stocks" ? "fixed while training" : `${pct((d as any).envelope?.risk_pct, 2)} per trade`,
+      body: marketOf(d) === "stocks" ? (
+        <p className="text-sm text-slate-400">{a.name}'s paper record is rebuilt from daily bars with one set of settings, so its size and stops stay fixed while it trains. You set its risk when it takes a live swing seat.</p>
+      ) : <ForexRiskCard agentId={a.id} name={a.name} onDone={reload} />,
     },
     { key: "validation", label: "Validation", icon: "✓", teaser: v?.status ? `${v.status.toLowerCase()}${v.unseen ? ` · unseen ${fmtR(v.unseen.avg_r, 3)}` : ""}` : "pending", body: <ValidationCard report={v?.report} summary={v ?? null} /> },
     {

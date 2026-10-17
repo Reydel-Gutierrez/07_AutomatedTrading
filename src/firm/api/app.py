@@ -13,6 +13,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
+from firm import risk
 from firm.api import academy, equity_academy, views
 from firm.capital_pool import POOL, CapitalPool
 from firm.api.auth import CSRF_COOKIE, SESSION_COOKIE, SESSION_TTL, Sessions
@@ -99,6 +100,16 @@ class DecisionBody(BaseModel):
 
 
 class AcademyCommandBody(BaseModel):
+    note: str = Field(default="", max_length=200)
+
+
+class RiskPolicyBody(BaseModel):
+    departments: dict[str, dict[str, Any]]
+    note: str = Field(default="", max_length=200)
+
+
+class AgentRiskBody(BaseModel):
+    changes: dict[str, Any]
     note: str = Field(default="", max_length=200)
 
 
@@ -226,7 +237,7 @@ def create_app(host: Host) -> FastAPI:
             if scope == "operations":
                 return views.operations_analytics(firm)
             if scope == "forex":
-                return {"academy": academy.analytics_block(), "chairs": 4, "live_chairs_filled": 0}
+                return {"academy": academy.analytics_block(), "chairs": 2, "live_chairs_filled": 0}
             if scope in FLOOR_STAGES:
                 return academy.floor_analytics(FLOOR_STAGES[scope])
         except sqlite3.Error as exc:
@@ -250,8 +261,46 @@ def create_app(host: Host) -> FastAPI:
             raise HTTPException(404, "no report for that day")
         return data
 
+    @app.get("/api/risk")
+    def risk_overview(_: str = Depends(user)) -> dict[str, Any]:
+        return risk.overview(firm)
+
+    @app.put("/api/risk/policy")
+    def risk_policy(body: RiskPolicyBody, who: str = Depends(user)) -> dict[str, Any]:
+        try:
+            changes = risk.check_policy(firm, body.departments)
+        except risk.RiskError as exc:
+            raise HTTPException(422, str(exc)) from None
+        stored = firm.settings.get(risk.KEY) or {}
+        firm.settings.put(risk.KEY, {**stored, **{k: {**(stored.get(k) or {}), **v} for k, v in changes.items()}}, by=who)
+        names = ", ".join(risk.DEPARTMENTS[k]["name"] for k in changes)
+        firm.events.emit("RISK_POLICY_CHANGED", f"Risk policy updated by {who}: {names}" + (f" ({body.note})" if body.note else ""), actor=who, payload={"changes": changes})
+        return {"ok": True}
+
+    @app.post("/api/academy/agents/{agent_id}/risk")
+    def academy_risk(agent_id: str, body: AgentRiskBody, who: str = Depends(user)) -> dict[str, Any]:
+        try:
+            a = academy.agent(agent_id)
+        except sqlite3.Error as exc:
+            raise HTTPException(503, f"Academy data unavailable: {exc}") from None
+        if a is None:
+            raise HTTPException(404, "no such Academy agent")
+        if a.get("market") == "stocks":
+            raise HTTPException(409, "a stock agent's paper record is rebuilt from daily bars with one set of settings, so its risk is fixed while it trains; you set it when it takes a live seat")
+        try:
+            changes = risk.forex_changes(body.changes, a.get("envelope") or {}, risk.policy(firm))
+            academy.send_command(agent_id, "set_risk", by=who, note=body.note, extra={"risk": changes})
+        except (risk.RiskError, ValueError) as exc:
+            raise HTTPException(422, str(exc)) from None
+        except LookupError as exc:
+            raise HTTPException(404, str(exc)) from None
+        firm.events.emit("ACADEMY_COMMAND", f"Academy: {who} set {a['name']}'s risk: " + ", ".join(f"{k} {v:g}" for k, v in changes.items()) + (f" ({body.note})" if body.note else ""), actor=who)
+        return {"ok": True, "queued": True, "changes": changes}
+
     @app.post("/api/academy/agents/{agent_id}/{action}")
     def academy_command(agent_id: str, action: str, body: AcademyCommandBody, who: str = Depends(user)) -> dict[str, Any]:
+        if action == "set_risk":
+            raise HTTPException(422, "change an agent's risk with POST /api/academy/agents/{id}/risk")
         try:
             academy.send_command(agent_id, action, by=who, note=body.note)
         except ValueError as exc:
@@ -373,7 +422,7 @@ def create_app(host: Host) -> FastAPI:
     def set_mandate(manager_id: str, body: MandateBody, who: str = Depends(user)) -> dict[str, Any]:
         if not body.note.strip():
             raise HTTPException(422, "a note explaining the change is required")
-        problems = validate_mandate(manager_id, body.params)
+        problems = validate_mandate(manager_id, body.params) or risk.mandate_problems(firm, manager_id, body.params)
         if problems:
             raise HTTPException(422, "; ".join(problems))
         version = firm.registry.update_mandate(manager_id, body.params, by=who, note=body.note)

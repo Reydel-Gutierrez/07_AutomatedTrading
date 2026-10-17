@@ -158,7 +158,7 @@ export type CioMessage = {
 export type Conversation = { id: number; title: string; created_at: string; updated_at: string; summary?: string | null; messages?: CioMessage[] };
 export type Proposal = {
   id: number;
-  kind: "reallocate" | "mandate_change" | "mode_change" | "deposit_split" | "academy_promotion";
+  kind: "reallocate" | "mandate_change" | "mode_change" | "deposit_split" | "academy_promotion" | "risk_change";
   title: string;
   payload: Record<string, any>;
   rationale: string;

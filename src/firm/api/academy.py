@@ -22,7 +22,7 @@ from typing import Any
 from firm.api import equity_academy as stocks
 from firm.paths import state_root
 
-ACTIONS = {"pause", "resume", "validate", "sprint", "auto_on", "auto_off", "to_demo", "to_research", "retire"}
+ACTIONS = {"pause", "resume", "validate", "sprint", "auto_on", "auto_off", "to_demo", "to_research", "retire", "set_risk"}
 START_CAPITAL = 10_000.0
 # Floor 2 (paper) and Floor 3 (OANDA demo): at least four weeks and enough trades for the result to mean something
 QUALIFY = {"PAPER": {"days": 28, "trades": {"day": 40, "swing": 15}}, "DEMO": {"days": 28, "trades": {"day": 30, "swing": 10}}}
@@ -182,6 +182,8 @@ def _card(conn: sqlite3.Connection, a: sqlite3.Row, engine: dict[str, Any]) -> d
     sprinting = _kv(conn, f"sprint:{a['id']}", {}) or {}
     live = (engine.get("agents") or {}).get(a["id"], {})
     paper_all, paper_cur = _stats(all_trades), _stats(cur_trades)
+    owner = _kv(conn, f"owner_risk:{a['id']}", {}) or {}
+    envelope = {**((json.loads(ver["envelope_json"]) if ver else None) or {}), **owner}
     return {
         "id": a["id"], "name": a["name"], "market": "forex", "style": a["style"], "strategy": a["strategy"], "persona": json.loads(a["persona_json"]),
         "status": a["status"], "status_reason": a["status_reason"], "paused": acct["paused"] if acct else None,
@@ -189,7 +191,7 @@ def _card(conn: sqlite3.Connection, a: sqlite3.Row, engine: dict[str, Any]) -> d
         "sprint": {k: v for k, v in (sprint or {}).items() if k != "summary"} | {"verdict": ((sprint or {}).get("summary") or {}).get("verdict")} if sprint else None,
         "sprinting": sprinting if sprinting.get("running") else None,
         "version": a["current_version"], "version_note": ver["note"] if ver else None, "auto_revise": bool(a["auto_revise"]), "trials": a["trials"],
-        "risk_pct": (json.loads(ver["envelope_json"]) or {}).get("risk_pct") if ver else None,
+        "risk_pct": envelope.get("risk_pct"), "envelope": envelope, "owner_risk": owner,
         "equity": round(equity, 2), "cash": round(acct["cash"], 2) if acct else None, "return_pct": equity / START_CAPITAL - 1, "max_drawdown": dd,
         "open_positions": len(positions), "paper": paper_all, "paper_current_version": paper_cur,
         "validation": val, "activity": live.get("activity"), "last_event": dict(last) if last else None,
@@ -366,7 +368,7 @@ def space_block() -> dict[str, Any]:
         return {"available": False, "error": str(exc)}
 
 
-def send_command(agent_id: str, action: str, *, by: str, note: str = "") -> None:
+def send_command(agent_id: str, action: str, *, by: str, note: str = "", extra: dict[str, Any] | None = None) -> None:
     if stocks.has(agent_id):
         stocks.send_command(agent_id, action, by=by, note=note)
         return
@@ -382,7 +384,7 @@ def send_command(agent_id: str, action: str, *, by: str, note: str = "") -> None
     inbox.mkdir(parents=True, exist_ok=True)
     name = f"{time.time_ns()}-{uuid.uuid4().hex[:6]}"
     tmp = inbox / f".{name}.tmp"
-    tmp.write_text(json.dumps({"agent_id": agent_id, "action": action, "by": by, "note": note[:200]}), encoding="utf-8")
+    tmp.write_text(json.dumps({**(extra or {}), "agent_id": agent_id, "action": action, "by": by, "note": note[:200]}), encoding="utf-8")
     tmp.replace(inbox / f"{name}.json")
 
 

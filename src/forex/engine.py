@@ -58,6 +58,11 @@ SPRINT_HOUR_NY = 1  # nightly research sprints start at 01:00 New York; the repo
 DEMO_SEATS = 2
 
 
+# What the owner may set on an agent's risk envelope, with hard bounds (the firm checks the
+# department's limits before the command is sent).
+OWNER_RISK: dict[str, tuple[float, float]] = {"risk_pct": (0.001, 0.03), "max_positions": (1, 5), "daily_loss": (0.005, 0.10), "drawdown_pause": (0.03, 0.50)}
+
+
 @dataclass
 class Runtime:
     agent_id: str
@@ -428,6 +433,16 @@ class Engine:
             self.enqueue(f"validate:{agent_id}", self._validate_job(agent_id, "owner"))
         elif action == "sprint":
             self.enqueue(f"sprint:{agent_id}", self._sprint_job(agent_id, ny(int(self.clock())).date().isoformat()))
+        elif action == "set_risk":
+            changes = {k: v for k, v in (cmd.get("risk") or {}).items() if k in OWNER_RISK}
+            if not changes or any(not OWNER_RISK[k][0] <= float(v) <= OWNER_RISK[k][1] for k, v in changes.items()):
+                raise ValueError(f"set_risk takes {', '.join(OWNER_RISK)} within their bounds")
+            before = {k: getattr(rt.cfg.envelope, k) for k in changes}
+            self.db.put(f"owner_risk:{agent_id}", {**self.db.owner_risk(agent_id), **{k: int(v) if k == "max_positions" else float(v) for k, v in changes.items()}})
+            self.reload_agent(agent_id)
+            self.db.event(agent_id, "RISK_CHANGED", f"{by} set {rt.name}'s risk: " + ", ".join(f"{k} {before[k]:g} → {getattr(rt.cfg.envelope, k):g}" for k in changes)
+                          + (f" ({cmd.get('note')})" if cmd.get("note") else ""), {"from": before, "to": changes})
+            return
         elif action in ("auto_on", "auto_off"):
             self.db.set_auto_revise(agent_id, action == "auto_on")
         elif action == "to_demo":

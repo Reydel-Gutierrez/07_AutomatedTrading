@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { ManagerRiskCard } from "../components/risk";
 import { useParams } from "react-router-dom";
 import { useLive } from "../App";
 import { api, type BookDetail, type ManagerDetail } from "../api";
@@ -93,7 +94,10 @@ export default function ManagerPage() {
           <Card title="Positions"><Positions b={b} /></Card>
 
           <section className="grid gap-6 lg:grid-cols-2">
-            <MandateCard m={m} onDone={reload} />
+            <div className="space-y-6">
+              <MandateCard m={m} onDone={reload} />
+              <ManagerRiskCard managerId={m.id} />
+            </div>
             <Card title="Decision log">
               <DecisionLog m={m} />
             </Card>
@@ -209,6 +213,7 @@ const ALEX_FIELDS: [string, string, number][] = [
   ["positions", "Positions held", 1],
   ["max_position_pct", "Max per position (%)", 100],
   ["cash_buffer_pct", "Cash buffer (%)", 100],
+  ["sleeve_drawdown_pause", "Pause buying at drawdown (%)", 100],
   ["min_trade_usd", "Minimum trade ($)", 1],
   ["research_daily_limit", "Research notes per day", 1],
 ];
@@ -217,6 +222,8 @@ const MAX_FIELDS: [string, string, number][] = [
   ["max_positions", "Max positions", 1],
   ["position_pct", "Per position (%)", 100],
   ["stop_pct", "Stop below entry (%)", 100],
+  ["sleeve_drawdown_pause", "Pause buying at drawdown (%)", 100],
+  ["daily_loss_pause", "Pause after a day's loss (%)", 100],
   ["max_hold_days", "Max sessions held", 1],
   ["rsi_entry_below", "Enter when RSI(2) below", 1],
   ["min_trade_usd", "Minimum trade ($)", 1],

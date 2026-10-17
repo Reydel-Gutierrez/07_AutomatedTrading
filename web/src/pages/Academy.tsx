@@ -2,6 +2,7 @@
 // OANDA Demo Desk) and stocks (the Stock Swing Class: daily US history, paper beside Max's desk).
 // Every number is read from the two engines' records; nothing here can place a live broker order.
 
+import { ForexRiskCard } from "../components/risk";
 import { type ReactNode, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api";
@@ -347,6 +348,8 @@ function AgentPage({ id }: { id: string }) {
         <Mini label="Avg R / trade" value={fmtR(a.paper.avg_r)} />
         <Mini label="Open positions" value={a.open_positions} />
       </section>
+
+      {mk === "forex" && a.stage !== "RETIRED" && <ForexRiskCard agentId={a.id} name={a.name} onDone={() => setBump((b) => b + 1)} />}
 
       <div className="grid gap-5 lg:grid-cols-2">
         <Card title="Paper equity ($10,000 start)"><EquityLine points={a.equity_series} color={a.persona.color} empty={MARKET[mk].marks} /></Card>

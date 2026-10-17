@@ -7,6 +7,8 @@ Kinds
   deposit_split   {split: {manager: fraction}}
   academy_promotion {agent_id}  a Floor 2 (paper) Academy agent takes an OANDA Demo Desk seat
                   (practice account, fake money). Never a live chair: that is the owner's own decision.
+  risk_change     {agent_id, changes: {risk_pct|max_positions|daily_loss|drawdown_pause}}  a forex
+                  agent's risk, inside the Forex Division's limits. Department limits are the owner's alone.
 """
 
 from __future__ import annotations
@@ -25,7 +27,7 @@ from firm.money import D, cents
 if TYPE_CHECKING:
     from firm.core import Firm
 
-KINDS = ("reallocate", "mandate_change", "mode_change", "deposit_split", "academy_promotion")
+KINDS = ("reallocate", "mandate_change", "mode_change", "deposit_split", "academy_promotion", "risk_change")
 PROPOSABLE_MODES = ("PAUSED", "SIM", "INACTIVE")
 TTL = timedelta(days=7)
 
@@ -53,6 +55,20 @@ class Proposals:
             if not check["allowed"]:
                 raise ProposalError(f"cannot propose a Demo Desk seat: {check['reason']}")
             return {"agent_id": agent_id, "agent": check["agent"], "days_on_paper": check["days_on_paper"], "return_pct": check["return_pct"], "to": "DEMO"}
+        if kind == "risk_change":
+            from firm import risk
+            from firm.api import academy
+
+            agent_id = str(payload.get("agent_id", "")).lower()
+            a = academy.agent(agent_id)
+            if a is None or a.get("market") != "forex":
+                raise ProposalError("risk_change is for forex Academy agents; for Tim, Alex or Max propose a mandate_change")
+            try:
+                changes = risk.forex_changes(payload.get("changes") or {}, a.get("envelope") or {}, risk.policy(f))
+            except risk.RiskError as exc:
+                raise ProposalError(str(exc)) from None
+            env = a.get("envelope") or {}
+            return {"agent_id": agent_id, "agent": a["name"], "changes": changes, "diff": {k: {"from": env.get(k), "to": v} for k, v in changes.items()}}
         if kind == "reallocate":
             moves = payload.get("moves") or []
             if not moves:
@@ -83,7 +99,9 @@ class Proposals:
                 raise ProposalError("mandate_change needs a non-empty 'changes' object")
             version, current = f.registry.mandate(manager_id)
             new = {**current, **changes}
-            problems = validate_mandate(manager_id, new)
+            from firm import risk
+
+            problems = validate_mandate(manager_id, new) or risk.mandate_problems(f, manager_id, new)
             if problems:
                 raise ProposalError("; ".join(problems))
             diff = {k: {"from": current.get(k), "to": new.get(k)} for k in changes if current.get(k) != new.get(k)}
@@ -186,7 +204,7 @@ def apply(firm: "Firm", proposal: dict[str, Any], *, by: str, note: str) -> dict
     """The only code that turns a proposal into a change. Reached solely via owner approval."""
     kind, payload = proposal["kind"], proposal["payload"]
     label = f"proposal #{proposal['id']}: {proposal['title']}"
-    current = Proposals(firm).validate(kind, payload if kind != "mandate_change" else {"manager_id": payload["manager_id"], "changes": payload["changes"]})
+    current = Proposals(firm).validate(kind, {"manager_id": payload["manager_id"], "changes": payload["changes"]} if kind == "mandate_change" else {"agent_id": payload["agent_id"], "changes": payload["changes"]} if kind == "risk_change" else payload)
     if kind == "reallocate":
         for mv in current["moves"]:
             amount = D(mv["amount"])
@@ -205,6 +223,11 @@ def apply(firm: "Firm", proposal: dict[str, Any], *, by: str, note: str) -> dict
     if kind == "mode_change":
         firm.registry.set_mode(payload["manager_id"], current["mode"], by=by, note=label)
         return {"mode": current["mode"]}
+    if kind == "risk_change":
+        from firm.api import academy
+
+        academy.send_command(current["agent_id"], "set_risk", by=by, note=label + (f" ({note})" if note else ""), extra={"risk": current["changes"]})
+        return {"agent_id": current["agent_id"], "changes": current["changes"]}
     if kind == "academy_promotion":
         from firm.api import academy
 

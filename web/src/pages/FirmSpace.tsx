@@ -426,8 +426,10 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
       const fresh = prices.length > 0 && now / 1000 - Math.max(...prices.map((p) => p.time)) < 900;
       return [`FX market by schedule: ${fxMarketOpen(now) ? "open" : "closed"} (Sunday 5 PM to Friday 5 PM New York).`, !ac?.available ? "The Forex engine is not running." : prices.length ? `${prices.length} OANDA rates on the board${fresh ? ", live" : ", from before the close"}.` : "Waiting for OANDA prices."];
     }
-    case "day-1": case "day-2": case "swing-1": case "swing-2":
+    case "day-1": case "swing-1":
       return ["Open. No agent has been promoted to live forex trading."];
+    case "trading-2":
+      return ["Open. No Stock Swing Class graduate has been given a live seat."];
     case "lobby":
       return overview ? [`Firm capital ${money(overview.firm.nav)}.`, ...overview.managers.map((m) => `${m.name}: ${m.mode.toLowerCase()}${m.status !== "OK" && m.status ? ` · ${m.status.toLowerCase()}` : ""}`)] : ["Loading…"];
     case "records":
@@ -443,8 +445,8 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
     }
     case "research":
       return ["Unoccupied."];
-    case "options-desk": case "options-board":
-      return ["Not open: 0 of 4 seats, no option agents yet."];
+    case "options-1": case "options-2": case "options-board":
+      return ["Not open: 0 of 2 offices, no option agents yet."];
     case "core-board": case "trading-board":
       return overview ? overview.managers.filter((m) => (d.id === "trading-board" ? m.id === "max" : m.id !== "max")).map((m) => {
         const p = m.mode === "SIM" ? m.performance.SIM : m.performance.LIVE;
@@ -452,7 +454,7 @@ function deptFacts(d: Dept, space: Space, states: Record<AgentId, AgentState>, e
       }) : ["Loading…"];
     case "forex-board": {
       const n = (st: string) => (ac?.agents ?? []).filter((a) => a.stage === st).length;
-      return ["0 of 4 live chairs filled. Live forex trading is not authorized.", ac?.available ? `Academy pipeline: ${n("DEMO")} on the Demo Desk, ${n("PAPER")} paper trading, ${n("RESEARCH")} in research.` : "The Forex engine is not running."];
+      return ["0 of 2 live offices filled. Live forex trading is not authorized.", ac?.available ? `Academy pipeline: ${n("DEMO")} on the Demo Desk, ${n("PAPER")} paper trading, ${n("RESEARCH")} in research.` : "The Forex engine is not running."];
     }
     case "ops-board": {
       const t = space.today;

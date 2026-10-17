@@ -272,3 +272,24 @@ def test_owner_floor_commands(world, monkeypatch):
     assert eng.db.agent("atlas")["stage"] == "RETIRED" and "atlas" not in eng.agents
     assert eng.db.agent("mira")["stage"] == "RESEARCH"
     assert eng.db.q("SELECT count(*) AS n FROM stage_transitions")[0]["n"] >= 5
+
+
+def test_owner_risk_sizes_trades_without_a_new_version(world, monkeypatch):
+    eng, clock, client, inbox = world
+    monkeypatch.setattr("forex.engine.validate", lambda *a, **k: {"status": "PASSED", "passed": True, "score": 1.0, "checks": []})
+    eng.start()
+    v = eng.agents["kestrel"].version
+    (inbox / "1.json").write_text(json.dumps({"agent_id": "kestrel", "action": "set_risk", "by": "reydel", "note": "proven", "risk": {"risk_pct": 0.01, "max_positions": 3}}))
+    eng.tick()
+    rt = eng.agents["kestrel"]
+    assert rt.version == v and rt.cfg.envelope.risk_pct == 0.01 and rt.cfg.envelope.max_positions == 3
+    assert rt.executor.env.risk_pct == 0.01  # the executor sizes new trades with it
+    assert eng.db.version("kestrel")[2].risk_pct == 0.01  # survives a restart, on every version
+    ev = eng.db.q("SELECT * FROM events WHERE type = 'RISK_CHANGED'")
+    assert len(ev) == 1 and "0.005 → 0.01" in ev[0]["summary"]
+    # out of bounds or unknown fields are refused and change nothing
+    (inbox / "2.json").write_text(json.dumps({"agent_id": "kestrel", "action": "set_risk", "risk": {"risk_pct": 0.2}}))
+    (inbox / "3.json").write_text(json.dumps({"agent_id": "kestrel", "action": "set_risk", "risk": {"style": "swing"}}))
+    eng.tick()
+    assert eng.agents["kestrel"].cfg.envelope.risk_pct == 0.01 and eng.agents["kestrel"].cfg.envelope.style == "day"
+    assert eng.db.q("SELECT count(*) AS n FROM events WHERE type = 'COMMAND_REJECTED'")[0]["n"] == 2

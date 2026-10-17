@@ -44,6 +44,7 @@ SPECS = [
     ToolSpec("get_performance", "Daily marks and time-weighted return vs SPY for the firm ('_firm') or a manager, in the LIVE or SIM book.", _obj({"bucket": {"type": "string"}, "book": {"type": "string", "enum": ["LIVE", "SIM"]}}, ["bucket"])),
     ToolSpec("get_capital", "Unallocated cash, each manager's cash and free cash, deposit split, items awaiting the owner's review, recent capital flows.", _obj({})),
     ToolSpec("get_risk_controls", "Kill switch, reconcile hold, drawdown brake and its scope, firm limits, and each sleeve's current drawdown.", _obj({})),
+    ToolSpec("get_risk_policy", "The owner's risk policy: each department's planned capital, expected yearly return range, benchmark, drawdown limit, and risk-per-trade ceiling, plus every agent's current risk settings, return, and drawdown.", _obj({})),
     ToolSpec("get_quotes", "Current Robinhood quotes (bid/ask/last/previous close) for up to 10 symbols. Read-only.", _obj({"symbols": {"type": "array", "items": {"type": "string"}}}, ["symbols"])),
     ToolSpec("get_price_history", "Stored daily closes for a symbol (VTI, VXUS, BND, SPY are always kept).", _obj({"symbol": {"type": "string"}, "days": {"type": "integer"}}, ["symbol"])),
     ToolSpec(
@@ -81,7 +82,8 @@ SPECS = [
         "kinds: reallocate {moves:[{from,to,amount}]} with 'firm' meaning unallocated; mandate_change {manager_id, changes:{key:value}}; "
         "mode_change {manager_id, mode: PAUSED|SIM|INACTIVE} (never LIVE); deposit_split {split:{manager: fraction}}; "
         "academy_promotion {agent_id} gives a Floor 2 Academy agent an OANDA Demo Desk seat (practice account, fake money) "
-        "once it has 2+ profitable weeks on paper (see demo_desk_proposal in get_academy_agent).",
+        "once it has 2+ profitable weeks on paper (see demo_desk_proposal in get_academy_agent); "
+        "risk_change {agent_id, changes:{risk_pct|max_positions|daily_loss|drawdown_pause}} for a forex Academy agent, inside the department limits in get_risk_policy.",
         _obj(
             {
                 "kind": {"type": "string", "enum": list(PROPOSAL_KINDS)},
@@ -211,6 +213,11 @@ class CIOTools:
         }
         out["drawdowns"]["_firm"] = {"LIVE": self.firm.performance.drawdown(self.firm.performance.marks("LIVE", "_firm"))}
         return out
+
+    def t_get_risk_policy(self) -> dict[str, Any]:
+        from firm import risk
+
+        return risk.overview(self.firm)
 
     def t_get_quotes(self, symbols: list[str]) -> dict[str, Any]:
         wanted = [str(s).upper() for s in symbols][:10]

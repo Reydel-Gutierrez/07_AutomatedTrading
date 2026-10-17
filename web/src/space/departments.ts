@@ -8,9 +8,9 @@ export type FloorId = "exec" | "core" | "options" | "trading" | "forex" | "lobby
 export type DeptId =
   | "cio" | "treasury"
   | "tim" | "alex" | "core-board"
-  | "options-desk" | "options-board"
-  | "max" | "trading-board"
-  | "market-room" | "day-1" | "day-2" | "swing-1" | "swing-2" | "forex-board"
+  | "options-1" | "options-2" | "options-board"
+  | "max" | "trading-2" | "trading-board"
+  | "market-room" | "day-1" | "swing-1" | "forex-board"
   | "lobby" | "records" | "operations" | "ops-board"
   | "lab" | "studio" | "stock-research" | "stock-hall" | "research-board" | "research" | "alumni" | "demo-desk" | "demo-board" | "hall" | "hall-board";
 
@@ -58,9 +58,9 @@ const FH = 290; // floor height (including its slab)
 export const FLOORS: Floor[] = [
   { id: "exec", building: "HQ Tower", level: "L6", name: "Executive", division: "Executive level", rect: [TOWER.x0, 200, TW, FH] },
   { id: "core", building: "HQ Tower", level: "L5", name: "Core Investments", division: "Core Investments Division · Robinhood · long-term US stocks & ETFs", rect: [TOWER.x0, 490, TW, FH] },
-  { id: "options", building: "HQ Tower", level: "L4", name: "Options Trading", division: "Options Trading · live option traders only (real money) · design only, not open", rect: [TOWER.x0, 780, TW, FH] },
-  { id: "trading", building: "HQ Tower", level: "L3", name: "Equity Trading", division: "Equity Trading · Robinhood · live swing traders only (real money)", rect: [TOWER.x0, 1070, TW, FH] },
-  { id: "forex", building: "HQ Tower", level: "L2", name: "Forex Division", division: "Forex Division · OANDA · four live chairs", rect: [TOWER.x0, 1360, TW, FH] },
+  { id: "options", building: "HQ Tower", level: "L4", name: "Options Trading", division: "Options Trading · two live offices (real money) · design only, not open", rect: [TOWER.x0, 780, TW, FH] },
+  { id: "trading", building: "HQ Tower", level: "L3", name: "Equity Trading", division: "Equity Trading · Robinhood · two live swing offices (real money)", rect: [TOWER.x0, 1070, TW, FH] },
+  { id: "forex", building: "HQ Tower", level: "L2", name: "Forex Division", division: "Forex Division · OANDA · two live offices: one day trader, one swing trader", rect: [TOWER.x0, 1360, TW, FH] },
   { id: "lobby", building: "HQ Tower", level: "L1", name: "Lobby & Operations", division: "Ground floor · headquarters, records, operations", rect: [TOWER.x0, 1650, TW, FH] },
   { id: "academy-demo", building: "The 537 Academy", level: "A3", name: "Demo Desk", division: "Academy Floor 3 · real orders on an OANDA practice account", rect: [ACADEMY.x0, 1070, AW, FH] },
   { id: "academy-hall", building: "The 537 Academy", level: "A2", name: "Paper Trading", division: "Academy Floor 2 · paper trading: forex on live OANDA prices, stocks on new daily bars", rect: [ACADEMY.x0, 1360, AW, FH] },
@@ -88,7 +88,7 @@ const chair = (id: DeptId, name: string, style: "day" | "swing", x: number): Dep
   id,
   name,
   floor: "forex",
-  rect: row("forex", x, 180),
+  rect: row("forex", x, 360),
   purpose:
     style === "day"
       ? "A live chair for an intraday forex agent: positions opened and closed within the trading day, flat by Friday's close. The agent trades its own OANDA sub-account."
@@ -115,18 +115,20 @@ export const DEPTS: Dept[] = [
   manager("tim", "Tim", "Core Investment Manager: a diversified long-term ETF portfolio, new cash invested toward targets, rebalanced on drift.", 120, "core", 540),
   manager("alex", "Alex", "Strategic Growth Manager: systematic momentum stock selection, each candidate checked by an AI research desk.", 660, "core", 540),
   boardroom("core-board", "Core Boardroom", "core", BOARD_X.hq, "core", "Core Investments at a glance: Tim's and Alex's value, return against the S&P 500 over the same days, and mode."),
-  // L4 Options Trading: designed, not open (no agents, no options code, no broker options access yet)
-  { id: "options-desk", name: "Options desk", floor: "options", rect: row("options", 120, 1080), purpose: "Live seats for option-trading agents: real money only, like the swing desk below. Agents would train in the Academy first and take a seat only on your approval.", later: "Design only. Nothing is built: no option agents, no options data or pricing, and the Robinhood account has no options trading set up. It opens when you decide to build it.", folders: [] },
+  // L4 Options Trading: designed, not open (no agents, no options code, no broker options access yet).
+  // Two offices: at the capital planned for options (about $5,000) more seats would split it too thin.
+  { id: "options-1", name: "Options office 1", floor: "options", rect: row("options", 120, 540), purpose: "A live office for an option-trading agent: real money only. Agents would train in the Academy first and take the office only on your approval.", later: "Design only. Nothing is built: no option agents, no options data or pricing, and the Robinhood account has no options trading set up. It opens when you decide to build it.", folders: [{ label: "Risk policy", path: "/risk", note: "The Options department's limits" }] },
+  { id: "options-2", name: "Options office 2", floor: "options", rect: row("options", 660, 540), purpose: "A second live options office, for a strategy unlike the first one's so the two do not lose together.", later: "Design only, like office 1. Worth filling only once the department has the capital for two agents.", folders: [{ label: "Risk policy", path: "/risk", note: "The Options department's limits" }] },
   boardroom("options-board", "Options Boardroom", "options", BOARD_X.hq, "options", "Options Trading at a glance, once the floor opens: seats filled, each agent's value and return against the S&P 500, and the risk it carries."),
   // L3 Equity Trading: short-term money
-  { ...manager("max", "Max", "The live swing desk: real-money swing traders only. Max holds seat 1 (trend-pullback swing trades with per-trade stops, a cooldown after a stop, and at most two names per correlated group). The other seats are for Stock Swing Class graduates, given only by you.", 120, "trading", 1080), name: "Live swing desk" },
+  manager("max", "Max", "Live swing office 1: trend-pullback swing trades with per-trade stops, a cooldown after a stop, and at most two names per correlated group. Real money only.", 120, "trading", 540),
+  { id: "trading-2", name: "Swing office 2", floor: "trading", rect: row("trading", 660, 540), purpose: "The second live swing office, for a Stock Swing Class graduate you approve. Real money only.", later: "Open. A graduate takes it only on your decision, after about four good weeks of paper trading.", folders: [{ label: "The 537 Academy", path: "/academy", note: "The Stock Swing Class, floor by floor" }, { label: "Risk policy", path: "/risk", note: "Equity Trading's limits" }] },
   boardroom("trading-board", "Trading Boardroom", "trading", BOARD_X.hq, "trading", "Equity Trading at a glance: the swing desk's value, return against the S&P 500 over the same days, and mode."),
   // L2 Forex
   { id: "market-room", name: "Market room", floor: "forex", rect: row("forex", 120, 360), purpose: "Live OANDA rates, the Tokyo, London, and New York sessions, and the desk heads' workstations for the day and swing desks.", folders: [{ label: "The 537 Academy", path: "/academy", note: "Rates, agents, and validation evidence" }] },
-  chair("day-1", "Day Chair 1", "day", 480),
-  chair("day-2", "Day Chair 2", "day", 660),
-  chair("swing-1", "Swing Chair 1", "swing", 840),
-  chair("swing-2", "Swing Chair 2", "swing", 1020),
+  // Two live offices: at the capital planned for forex (about $10,000) more chairs would split it too thin.
+  chair("day-1", "Day trader's office", "day", 480),
+  chair("swing-1", "Swing trader's office", "swing", 840),
   boardroom("forex-board", "Forex Boardroom", "forex", BOARD_X.hq, "forex", "The Forex Division: live chairs filled, the FX market, and the Academy pipeline of candidates for a chair."),
   // L1 Lobby & Operations
   { id: "lobby", name: "Lobby", floor: "lobby", rect: row("lobby", 120, 440), purpose: "The front door: the firm at a glance, its capital, its managers, and today's activity.", folders: [{ label: "Headquarters", path: "/", note: "The firm dashboard" }] },
@@ -156,6 +158,7 @@ export const deptOf = (person: string) => DEPTS.find((d) => d.people?.includes(p
 export const FOLDER_TITLES: [RegExp, string][] = [
   [/^\/$/, "Headquarters"],
   [/^\/capital$/, "Capital"],
+  [/^\/risk$/, "Risk policy"],
   [/^\/activity$/, "Activity"],
   [/^\/system$/, "System"],
   [/^\/analytics$/, "Firm analytics"],

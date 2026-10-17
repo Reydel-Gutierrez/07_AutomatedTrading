@@ -145,7 +145,12 @@ class AcademyDB:
         row = self.one("SELECT * FROM versions WHERE agent_id = ? AND version = ?", (agent_id, v))
         if row is None:
             raise KeyError(f"{agent_id} v{v}")
-        return v, json.loads(row["params_json"]), RiskEnvelope.from_dict(json.loads(row["envelope_json"]))
+        return v, json.loads(row["params_json"]), RiskEnvelope.from_dict({**json.loads(row["envelope_json"]), **self.owner_risk(agent_id)})
+
+    def owner_risk(self, agent_id: str) -> dict[str, Any]:
+        """The owner's risk settings for this agent, applied on top of every version's envelope.
+        Risk sizes trades; it never changes a signal, so a change keeps the agent's version and evidence."""
+        return self.get(f"owner_risk:{agent_id}", {}) or {}
 
     def add_version(self, agent_id: str, params: Mapping[str, Any], envelope: RiskEnvelope, *, note: str, by: str, validation_status: str = "PENDING") -> int:
         cur = self.agent(agent_id)["current_version"]

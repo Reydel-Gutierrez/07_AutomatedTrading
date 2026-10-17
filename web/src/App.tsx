@@ -8,6 +8,7 @@ import Analytics from "./pages/Analytics";
 import FloorAnalytics from "./pages/FloorAnalytics";
 import Activity from "./pages/Activity";
 import CapitalPage from "./pages/Capital";
+import RiskPage from "./pages/Risk";
 import { BRAND, Wordmark } from "./brand";
 import FirmSpace from "./pages/FirmSpace";
 import HQ from "./pages/HQ";
@@ -19,7 +20,7 @@ type Live = { events: FirmEvent[]; bump: number; connected: boolean; overview: O
 const LiveContext = createContext<Live>({ events: [], bump: 0, connected: false, overview: null, reloadOverview: () => {} });
 export const useLive = () => useContext(LiveContext);
 
-const NAV: [string, string][] = [["/", "Headquarters"], ["/firm", "The Firm"], ["/academy", "Academy"], ["/capital", "Capital"], ["/activity", "Activity"], ["/system", "System"]];
+const NAV: [string, string][] = [["/", "Headquarters"], ["/firm", "The Firm"], ["/academy", "Academy"], ["/capital", "Capital"], ["/risk", "Risk"], ["/activity", "Activity"], ["/system", "System"]];
 
 function useDocumentTitle() {
   const { pathname } = useLocation();
@@ -122,6 +123,7 @@ function pageRoutes() {
     <Route key="anscope" path="/analytics/:scope" element={<FloorAnalytics />} />,
     <Route key="cio" path="/cio" element={<Navigate to="/firm/cio" replace />} />,
     <Route key="cap" path="/capital" element={<CapitalPage />} />,
+    <Route key="risk" path="/risk" element={<RiskPage />} />,
     <Route key="act" path="/activity" element={<Activity />} />,
     <Route key="sys" path="/system" element={<SystemPage />} />,
   ];
