@@ -128,7 +128,10 @@ cmd_test() {
     [[ $loaded == "$(realpath "$dir")"/* ]] || die "tests would import $loaded instead of the release"
   done
   env -u AGENTIC_RUNTIME_MODE -u DASHBOARD_ENVIRONMENT -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
-    "$VENV_PY" -m pytest -q -p no:cacheprovider
+    "$VENV_PY" -m pytest -q -p no:cacheprovider --basetemp "$dir/.pytest-tmp" || { local rc=$?; rm -rf "$dir/.pytest-tmp"; return "$rc"; }
+  # Test temp files stay on disk next to the release and are removed: /tmp is RAM on the Pi,
+  # and pytest otherwise keeps its last runs there (hundreds of MB after a few deploys).
+  rm -rf "$dir/.pytest-tmp"
 }
 
 cmd_smoke() {
