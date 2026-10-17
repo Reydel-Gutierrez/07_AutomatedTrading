@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import random
 import sqlite3
+import time
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
@@ -164,7 +165,7 @@ def test_engine_sprints_then_paper_replays_from_the_promotion_day(setup):
 
 def test_one_academy_serves_both_classes(setup, tmp_path, monkeypatch):
     """Stock agents come through the Academy's own API in its shapes, tagged market=stocks."""
-    eng, _ = setup
+    eng, now = setup
     monkeypatch.setenv("FOREX_STATE_ROOT", str(tmp_path / "no-forex"))  # only the stock class exists here
     eng.start()
     eng.load_data()
@@ -172,6 +173,7 @@ def test_one_academy_serves_both_classes(setup, tmp_path, monkeypatch):
     eng.db.set_stage("rook", "PAPER", by="test", reason="test")
     eng.db.write("UPDATE agents SET stage_since = ? WHERE id = 'rook'", (f"{eng.panel.dates[-30]}T05:30:00+00:00",))
     eng.paper("rook")
+    now[0] = time.time()  # HQ judges the engine online by the wall clock, not the test's fixed one
     eng.heartbeat()
     from firm.api import academy
 
